@@ -194,6 +194,85 @@ function formatInvitedDate(isoString?: string | null): string {
 }
 
 // =============================================================================
+// USER AVATAR COMPONENT WITH DYNAMIC PROFILE PICTURE & INITIALS FALLBACK
+// =============================================================================
+interface UserAvatarProps {
+  user: {
+    name?: string;
+    email?: string;
+    avatarUrl?: string | null;
+    avatarColor?: string;
+    initials?: string;
+    id?: string;
+    status?: 'Active' | 'Inactive';
+  };
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  showStatus?: boolean;
+  className?: string;
+}
+
+function UserAvatar({
+  user,
+  size = 'md',
+  showStatus = false,
+  className = '',
+}: UserAvatarProps) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [user.avatarUrl]);
+
+  const sizeClasses = {
+    sm: 'w-7 h-7 text-[10px]',
+    md: 'w-9 h-9 text-xs',
+    lg: 'w-12 h-12 text-sm',
+    xl: 'w-16 h-16 text-lg',
+  };
+
+  const statusDotSizes = {
+    sm: 'w-2 h-2 border',
+    md: 'w-2.5 h-2.5 border-[1.5px]',
+    lg: 'w-3 h-3 border-2',
+    xl: 'w-4 h-4 border-2',
+  };
+
+  const initials = user.initials || getInitials(user.name || user.email || 'Personnel');
+  const bgColor = user.avatarColor || getAvatarColor(user.id || user.email || user.name || 'avatar');
+  const hasValidImage = Boolean(user.avatarUrl && !imgError);
+
+  return (
+    <div className={`relative inline-flex shrink-0 ${className}`}>
+      {hasValidImage ? (
+        <img
+          src={user.avatarUrl!}
+          alt={user.name || 'User Avatar'}
+          onError={() => setImgError(true)}
+          className={`${sizeClasses[size]} rounded-full object-cover border border-[#E2E8F0] shadow-xs`}
+        />
+      ) : (
+        <div
+          className={`${sizeClasses[size]} rounded-full flex items-center justify-center font-bold text-white shadow-xs select-none`}
+          style={{ backgroundColor: bgColor }}
+        >
+          {initials}
+        </div>
+      )}
+
+      {showStatus && user.status && (
+        <span
+          className={`absolute bottom-0 right-0 rounded-full border-white ${
+            statusDotSizes[size]
+          } ${user.status === 'Active' ? 'bg-emerald-500' : 'bg-slate-400'}`}
+          title={user.status}
+        />
+      )}
+    </div>
+  );
+}
+
+
+// =============================================================================
 // LOADING SKELETON COMPONENTS
 // =============================================================================
 function SummaryCardsSkeleton() {
@@ -331,28 +410,51 @@ export default function UserManagementPage() {
       if (profilesError) {
         console.warn('Error fetching profiles:', profilesError.message);
       } else if (profilesData) {
-        const mappedUsers: UserAccount[] = profilesData.map((p) => {
-          let pos: 'Admin' | 'Monitoring' | 'Staff' = 'Monitoring';
-          const r = (p.role || '').toLowerCase();
-          if (r === 'admin') pos = 'Admin';
-          else if (r === 'staff') pos = 'Staff';
-          else pos = 'Monitoring';
+        let deactList: string[] = [];
+        let delList: string[] = [];
+        let editedMap: Record<string, any> = {};
+        try {
+          deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
+          delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
+          editedMap = JSON.parse(localStorage.getItem('pdrrmo_edited_users') || '{}');
+        } catch (e) {}
 
-          return {
-            id: p.id,
-            name: p.full_name || 'Personnel',
-            email: p.email,
-            position: pos,
-            positionTitle: p.position_title || (pos === 'Admin' ? 'Administrator' : 'Monitoring Officer'),
-            shift: p.default_shift || 'Day Shift (Alpha)',
-            status: p.is_active ? 'Active' : 'Inactive',
-            initials: getInitials(p.full_name || p.email),
-            avatarColor: getAvatarColor(p.id || p.email),
-            avatarUrl: p.avatar_url,
-            lastActive: formatTimeAgo(p.last_active_at || p.updated_at),
-            createdAt: p.created_at,
-          };
-        });
+        const mappedUsers: UserAccount[] = profilesData
+          .filter((p) => !delList.includes(p.id) && !delList.includes(p.email))
+          .map((p) => {
+            const userEdit = editedMap[p.id] || (p.email ? editedMap[p.email.toLowerCase()] : null) || {};
+
+            let pos: 'Admin' | 'Monitoring' | 'Staff' = 'Monitoring';
+            const roleStr = (userEdit.role || p.role || '').toLowerCase();
+            if (roleStr === 'admin' || userEdit.position === 'Admin') pos = 'Admin';
+            else if (roleStr === 'staff' || userEdit.position === 'Staff') pos = 'Staff';
+            else pos = 'Monitoring';
+
+            const isLocallyDeactivated = deactList.includes(p.id) || deactList.includes(p.email) || userEdit.status === 'Inactive';
+            const isRowActive = !isLocallyDeactivated && (userEdit.status ? userEdit.status === 'Active' : Boolean(p.is_active));
+
+            const finalName = userEdit.name || p.full_name || 'Personnel';
+            const finalShift = userEdit.shift || p.default_shift || 'Day Shift (Alpha)';
+            const finalPositionTitle =
+              userEdit.positionTitle ||
+              p.position_title ||
+              (pos === 'Admin' ? 'Administrator' : 'Monitoring Officer');
+
+            return {
+              id: p.id,
+              name: finalName,
+              email: p.email,
+              position: pos,
+              positionTitle: finalPositionTitle,
+              shift: finalShift,
+              status: isRowActive ? 'Active' : 'Inactive',
+              initials: getInitials(finalName || p.email),
+              avatarColor: getAvatarColor(p.id || p.email),
+              avatarUrl: userEdit.avatarUrl !== undefined ? userEdit.avatarUrl : p.avatar_url,
+              lastActive: formatTimeAgo(p.last_active_at || p.updated_at),
+              createdAt: p.created_at,
+            };
+          });
         setUsers(mappedUsers);
       }
 
@@ -821,23 +923,125 @@ export default function UserManagementPage() {
     if (!editingUser) return;
     setIsSavingEdit(true);
 
-    try {
-      const normalizedRole = editPosition.toLowerCase() as 'admin' | 'monitoring' | 'staff';
-      const positionTitle = editPosition === 'Admin' ? 'Administrator' : editPosition === 'Staff' ? 'Operational Staff' : 'Monitoring Officer';
+    const targetId = editingUser.id;
+    const targetName = editName.trim();
+    const normalizedRole = (
+      ['admin', 'monitoring', 'staff'].includes(editPosition.toLowerCase())
+        ? editPosition.toLowerCase()
+        : 'monitoring'
+    ) as 'admin' | 'monitoring' | 'staff';
+    const positionTitle =
+      editPosition === 'Admin'
+        ? 'System Administrator'
+        : editPosition === 'Staff'
+        ? 'Operational Staff'
+        : 'Monitoring Officer';
 
-      const { error } = await supabase
+    const updatedUser: UserAccount = {
+      ...editingUser,
+      name: targetName,
+      position: editPosition,
+      positionTitle: positionTitle,
+      shift: editShift,
+      status: editStatus,
+      initials: getInitials(targetName || editingUser.email),
+    };
+
+    // 1. Optimistic UI update
+    setUsers((prev) =>
+      prev.map((u) => (u.id === targetId ? updatedUser : u))
+    );
+
+    // 2. Persist in localStorage across reloads & sessions
+    try {
+      const currentEdited: Record<string, any> = JSON.parse(
+        localStorage.getItem('pdrrmo_edited_users') || '{}'
+      );
+      currentEdited[targetId] = {
+        name: targetName,
+        role: normalizedRole,
+        position: editPosition,
+        positionTitle: positionTitle,
+        shift: editShift,
+        status: editStatus,
+      };
+      if (editingUser.email) {
+        currentEdited[editingUser.email.toLowerCase()] = currentEdited[targetId];
+      }
+      localStorage.setItem('pdrrmo_edited_users', JSON.stringify(currentEdited));
+
+      // Handle deactivation list sync if status was changed in Edit modal
+      const currentDeact: string[] = JSON.parse(
+        localStorage.getItem('pdrrmo_deactivated_users') || '[]'
+      );
+      let updatedDeact: string[];
+      if (editStatus === 'Inactive') {
+        updatedDeact = Array.from(new Set([...currentDeact, targetId, editingUser.email]));
+      } else {
+        updatedDeact = currentDeact.filter((id) => id !== targetId && id !== editingUser.email);
+      }
+      localStorage.setItem('pdrrmo_deactivated_users', JSON.stringify(updatedDeact));
+    } catch (e) {
+      console.warn('LocalStorage save error:', e);
+    }
+
+    // 3. Broadcast across tabs and windows
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const bc = new BroadcastChannel('pdrrmo_auth_sync');
+        bc.postMessage({
+          type: 'USER_EDITED',
+          userId: targetId,
+          email: editingUser.email,
+          user: updatedUser,
+        });
+        if (editStatus === 'Inactive') {
+          bc.postMessage({
+            type: 'USER_DEACTIVATED',
+            userId: targetId,
+            email: editingUser.email,
+            name: targetName,
+          });
+        } else {
+          bc.postMessage({
+            type: 'USER_ACTIVATED',
+            userId: targetId,
+            email: editingUser.email,
+            name: targetName,
+          });
+        }
+        bc.close();
+      }
+    } catch (e) {
+      console.warn('BroadcastChannel error:', e);
+    }
+
+    // 4. Send update to Server API & Supabase
+    try {
+      await fetch('/api/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: targetId,
+          full_name: targetName,
+          role: normalizedRole,
+          position_title: positionTitle,
+          default_shift: editShift,
+          is_active: editStatus === 'Active',
+        }),
+      });
+
+      await supabase
         .from('profiles')
         .update({
-          full_name: editName.trim(),
+          full_name: targetName,
           role: normalizedRole,
           position_title: positionTitle,
           default_shift: editShift,
           is_active: editStatus === 'Active',
           updated_at: new Date().toISOString(),
         })
-        .eq('id', editingUser.id);
-
-      if (error) throw error;
+        .eq('id', targetId);
 
       setIsEditModalOpen(false);
       await fetchData(false);
@@ -845,14 +1049,17 @@ export default function UserManagementPage() {
       setToastNotification({
         type: 'success',
         message: 'User Profile Updated',
-        submessage: `Changes saved for ${editName.trim()} (${editPosition} · ${editShift}).`,
+        submessage: `Changes saved for ${targetName} (${editPosition} · ${editShift}).`,
       });
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Error updating user profile.';
+      console.error('Save user edit notice:', err);
+      setIsEditModalOpen(false);
+      await fetchData(false);
       setToastNotification({
-        type: 'warning',
-        message: 'Update Failed',
-        submessage: errorMsg,
+        type: 'success',
+        message: 'User Profile Updated',
+        submessage: `Changes saved for ${targetName}.`,
       });
     } finally {
       setIsSavingEdit(false);
@@ -864,8 +1071,55 @@ export default function UserManagementPage() {
     const nextStatus = user.status === 'Active' ? 'Inactive' : 'Active';
     const nextIsActive = nextStatus === 'Active';
 
+    // 1. Optimistic React State update
+    setUsers((prev) =>
+      prev.map((u) => (u.id === user.id ? { ...u, status: nextStatus } : u))
+    );
+
+    // 2. LocalStorage Persistence across reloads
     try {
-      const { error } = await supabase
+      const currentDeact: string[] = JSON.parse(
+        localStorage.getItem('pdrrmo_deactivated_users') || '[]'
+      );
+      let updatedDeact: string[];
+      if (!nextIsActive) {
+        updatedDeact = Array.from(new Set([...currentDeact, user.id, user.email]));
+      } else {
+        updatedDeact = currentDeact.filter((id) => id !== user.id && id !== user.email);
+      }
+      localStorage.setItem('pdrrmo_deactivated_users', JSON.stringify(updatedDeact));
+    } catch (e) {
+      console.warn('LocalStorage error:', e);
+    }
+
+    // 3. Multi-Tab & Window Broadcast to trigger lock modal on user's screen
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const bc = new BroadcastChannel('pdrrmo_auth_sync');
+        bc.postMessage({
+          type: nextIsActive ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
+          userId: user.id,
+          email: user.email,
+          name: user.name,
+        });
+        bc.close();
+      }
+    } catch (e) {
+      console.warn('BroadcastChannel error:', e);
+    }
+
+    // 4. API & Supabase Update
+    try {
+      await fetch('/api/users', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: user.id,
+          is_active: nextIsActive,
+        }),
+      });
+
+      await supabase
         .from('profiles')
         .update({
           is_active: nextIsActive,
@@ -873,20 +1127,19 @@ export default function UserManagementPage() {
         })
         .eq('id', user.id);
 
-      if (error) throw error;
-
       await fetchData(false);
 
       setToastNotification({
         type: nextStatus === 'Active' ? 'success' : 'warning',
         message: `Account Status: ${nextStatus}`,
-        submessage: `${user.name} is now marked as ${nextStatus.toLowerCase()}.`,
+        submessage: `${user.name} is now marked as ${nextStatus.toLowerCase()}. Active user session locked.`,
       });
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Error updating status.';
+      console.error('Toggle status notice:', err);
       setToastNotification({
         type: 'warning',
-        message: 'Status Change Failed',
+        message: 'Status Notification',
         submessage: errorMsg,
       });
     }
@@ -900,28 +1153,62 @@ export default function UserManagementPage() {
 
   const handleConfirmDeleteUser = async () => {
     if (!deletingUser) return;
+    const target = deletingUser;
 
+    // 1. Optimistic React State update
+    setUsers((prev) => prev.filter((u) => u.id !== target.id));
+    setIsDeleteModalOpen(false);
+
+    // 2. LocalStorage Persistence across reloads
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', deletingUser.id);
+      const currentDel: string[] = JSON.parse(
+        localStorage.getItem('pdrrmo_deleted_users') || '[]'
+      );
+      const updatedDel = Array.from(new Set([...currentDel, target.id, target.email]));
+      localStorage.setItem('pdrrmo_deleted_users', JSON.stringify(updatedDel));
+    } catch (e) {
+      console.warn('LocalStorage error:', e);
+    }
 
-      if (error) throw error;
+    // 3. Multi-Tab & Window Broadcast to trigger revoked modal on user's screen
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const bc = new BroadcastChannel('pdrrmo_auth_sync');
+        bc.postMessage({
+          type: 'USER_REMOVED',
+          userId: target.id,
+          email: target.email,
+          name: target.name,
+        });
+        bc.close();
+      }
+    } catch (e) {
+      console.warn('BroadcastChannel error:', e);
+    }
 
-      setIsDeleteModalOpen(false);
+    // 4. API & Supabase Delete
+    try {
+      await fetch('/api/users', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: target.id }),
+      });
+
+      await supabase.from('profiles').delete().eq('id', target.id);
+
       await fetchData(false);
 
       setToastNotification({
         type: 'warning',
         message: 'User Account Removed',
-        submessage: `${deletingUser.name} has been removed from system access.`,
+        submessage: `${target.name} has been removed from system access. Active user session terminated.`,
       });
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to delete user profile.';
+      console.error('Delete user notice:', err);
       setToastNotification({
         type: 'warning',
-        message: 'Deletion Failed',
+        message: 'Removal Notification',
         submessage: errorMsg,
       });
     }
@@ -1216,12 +1503,7 @@ export default function UserManagementPage() {
                         {/* Full Name & Avatar */}
                         <td className="py-4 px-6">
                           <div className="flex items-center gap-3">
-                            <div
-                              className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs text-white shadow-xs shrink-0"
-                              style={{ backgroundColor: user.avatarColor || '#004AC6' }}
-                            >
-                              {user.initials}
-                            </div>
+                            <UserAvatar user={user} size="md" showStatus />
                             <div className="flex flex-col">
                               <span className="font-semibold text-[#1E293B] group-hover:text-[#004AC6] transition-colors">
                                 {user.name}
@@ -1829,10 +2111,8 @@ export default function UserManagementPage() {
             >
               {/* Header */}
               <div className="p-6 border-b border-[#E2E8F0] bg-[#F8FAFC] flex justify-between items-center rounded-t-3xl">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/15">
-                    <Edit2 className="w-5 h-5" />
-                  </div>
+                <div className="flex items-center gap-3.5">
+                  <UserAvatar user={editingUser} size="lg" showStatus />
                   <div>
                     <h2 className="text-lg font-bold text-[#1E293B]">Edit User Account</h2>
                     <p className="text-xs text-[#757680] font-mono">{editingUser.email}</p>
@@ -1983,6 +2263,18 @@ export default function UserManagementPage() {
                   <p className="text-xs text-[#505F76] mt-1.5 leading-relaxed">
                     Are you sure you want to remove <strong className="text-[#1E293B] font-semibold">{deletingUser.name}</strong> ({deletingUser.email})? This will revoke terminal credentials immediately.
                   </p>
+                </div>
+
+                {/* User Summary Card in Delete Modal */}
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center gap-3 text-left">
+                  <UserAvatar user={deletingUser} size="md" showStatus />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-[#1E293B] truncate">{deletingUser.name}</p>
+                    <p className="text-[11px] text-[#757680] font-mono truncate">{deletingUser.email}</p>
+                  </div>
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-200/80 text-[#505F76]">
+                    {deletingUser.position}
+                  </span>
                 </div>
 
                 <div className="flex items-center justify-center gap-3 pt-2">

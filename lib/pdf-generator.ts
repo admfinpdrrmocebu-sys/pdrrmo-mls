@@ -41,6 +41,8 @@ export interface DailyLogShiftItem {
   leadOfficer: string;
   leadOfficerRole?: string;
   handoverStatus: string;
+  incidentDetails?: string | null;
+  monitoringBriefing?: string | null;
   roster: Array<{ name: string; role: string; badgeNumber?: string }>;
   standbyVehicles?: Array<{ name: string; count: number }>;
   signatures?: Array<{ name: string; title?: string }>;
@@ -84,24 +86,72 @@ function formatHeaderDate(dateStr: string): string {
 }
 
 /**
+ * Sanitizes and cleans text for standard jsPDF Helvetica font:
+ * 1. Converts HTML block breaks (<p>, <li>, <br>, headings) into spaces or newlines.
+ * 2. Decodes HTML entities (&nbsp;, &amp;, &lt;, &gt;, &quot;, &#39;, &bull;, etc.).
+ * 3. Strips emojis, pictographs, surrogate pairs, and non-Latin-1 characters that cause mojibake.
+ * 4. Normalizes multiple spaces and trims.
+ */
+export function sanitizePdfText(input: string | null | undefined): string {
+  if (!input) return '';
+
+  let text = String(input);
+
+  // 1. Replace block tags and breaks with newlines or spaces
+  text = text
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<li>/gi, '• ')
+    .replace(/<\/h[1-6]>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ');
+
+  // 2. Decode common HTML entities
+  text = text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&bull;/gi, '•')
+    .replace(/&mdash;/gi, '—')
+    .replace(/&ndash;/gi, '–');
+
+  // 3. Remove Unicode emojis & non-printable symbols (which corrupt Helvetica in jsPDF)
+  // jsPDF standard font supports WinAnsi / Latin-1 (0x20 - 0x7E, 0xA0 - 0xFF)
+  text = text
+    .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{2B55}\u{200D}\u{FE0E}\u{FE0F}\u{E0020}-\u{E007F}\u{E0001}\u{1F1E6}-\u{1F1FF}]/gu, '')
+    .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ''); // Surrogate pairs
+
+  // 4. Normalize multiple spaces and clean up lines
+  const lines = text
+    .split('\n')
+    .map((line) => line.replace(/[^\x20-\x7E\xA0-\xFF\u2022\u2013\u2014]/g, '').replace(/\s+/g, ' ').trim())
+    .filter((line) => line.length > 0);
+
+  return lines.join('\n');
+}
+
+/**
  * Draws the official document header with dual logos matching Template-Example-FileFormat-MLS.docx
  */
 function drawDocumentHeader(doc: jsPDF, title: string, pageNumber: number, totalPages: number = 1): number {
   const pageWidth = doc.internal.pageSize.getWidth();
 
-  // Draw Left Logo (Capitol / Province of Cebu Seal)
+  // Draw Left Logo (Capitol / Province of Cebu Seal) - 21x21 mm
   try {
     if (CAPITOL_LOGO_BASE64) {
-      doc.addImage(CAPITOL_LOGO_BASE64, 'PNG', 12.5, 7.5, 23, 23);
+      doc.addImage(CAPITOL_LOGO_BASE64, 'PNG', 14, 8, 21, 21);
     }
   } catch (err) {
     console.warn('Could not draw Capitol logo:', err);
   }
 
-  // Draw Right Logo (PDRRMO Logo)
+  // Draw Right Logo (PDRRMO Logo) - 21x21 mm
   try {
     if (PDRRMO_LOGO_BASE64) {
-      doc.addImage(PDRRMO_LOGO_BASE64, 'PNG', pageWidth - 14 - 20, 9, 20, 20);
+      doc.addImage(PDRRMO_LOGO_BASE64, 'PNG', pageWidth - 14 - 21, 8, 21, 21);
     }
   } catch (err) {
     console.warn('Could not draw PDRRMO logo:', err);
@@ -257,10 +307,32 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
   };
 
   const drawRow = (timeStr: string, descLines: string[], reportType: string, customMinHeight = 0) => {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
+    // Process and wrap description lines
+    const processedLines: { text: string; isBold: boolean; color: [number, number, number] }[] = [];
 
-    const rowHeight = Math.max(customMinHeight, descLines.length * 4.2 + 6);
+    descLines.forEach((rawLine, idx) => {
+      const sanitized = sanitizePdfText(rawLine);
+      if (!sanitized) return;
+
+      const subLines = sanitized.split('\n');
+      subLines.forEach((sub, subIdx) => {
+        doc.setFont('helvetica', idx === 0 && subIdx === 0 ? 'bold' : 'normal');
+        doc.setFontSize(7.5);
+        const wrapped = doc.splitTextToSize(sub, colDescW - 6);
+        const lineArray = Array.isArray(wrapped) ? wrapped : [wrapped];
+        lineArray.forEach((wLine: string) => {
+          processedLines.push({
+            text: wLine,
+            isBold: idx === 0 && subIdx === 0,
+            color: idx === 0 && subIdx === 0 ? [15, 23, 42] : [51, 65, 85],
+          });
+        });
+      });
+    });
+
+    const lineHeight = 4.0;
+    const computedHeight = Math.max(1, processedLines.length) * lineHeight + 6;
+    const rowHeight = Math.max(customMinHeight, Math.max(12, computedHeight));
     checkPageBreak(rowHeight);
 
     // Row borders
@@ -274,37 +346,33 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(timeStr || data.sessionTime || '1600H', col1X + colTimeW / 2, y + 5.5, { align: 'center' });
+    doc.text(sanitizePdfText(timeStr || data.sessionTime || '1600H'), col1X + colTimeW / 2, y + 5.5, { align: 'center' });
 
     // Col 2: Title w/ Description
-    doc.setFont('helvetica', 'normal');
     let lineY = y + 5;
-    descLines.forEach((line, idx) => {
-      if (idx === 0) {
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(15, 23, 42);
-      } else {
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(51, 65, 85);
-      }
-      doc.text(line, col2X + 3, lineY);
-      lineY += 4.2;
+    processedLines.forEach((lineObj) => {
+      doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+      doc.text(lineObj.text, col2X + 3, lineY);
+      lineY += lineHeight;
     });
 
     // Col 3: Attendance / Status
+    const cleanReportType = sanitizePdfText(reportType);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
-    if (reportType === 'Present') {
+    if (cleanReportType === 'Present') {
       doc.setTextColor(22, 101, 52); // Dark Green
-    } else if (reportType === 'Absent') {
+    } else if (cleanReportType === 'Absent') {
       doc.setTextColor(185, 28, 28); // Dark Red
-    } else if (reportType === 'Exempted') {
+    } else if (cleanReportType === 'Exempted') {
       doc.setTextColor(180, 83, 9); // Dark Amber
     } else {
       doc.setTextColor(71, 85, 105);
       doc.setFont('helvetica', 'normal');
     }
-    doc.text(reportType || '—', col3X + colTypeW / 2, y + 5.5, { align: 'center' });
+    doc.text(cleanReportType || '—', col3X + colTypeW / 2, y + 5.5, { align: 'center' });
 
     y += rowHeight;
   };
@@ -318,10 +386,30 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
     officerRole: string,
     signatureImgBase64?: string | null
   ) => {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
+    const processedLines: { text: string; isBold: boolean; color: [number, number, number] }[] = [];
 
-    const textLinesHeight = descLines.length * 4.2 + 4;
+    descLines.forEach((rawLine, idx) => {
+      const sanitized = sanitizePdfText(rawLine);
+      if (!sanitized) return;
+
+      const subLines = sanitized.split('\n');
+      subLines.forEach((sub, subIdx) => {
+        doc.setFont('helvetica', idx === 0 && subIdx === 0 ? 'bold' : 'normal');
+        doc.setFontSize(7.5);
+        const wrapped = doc.splitTextToSize(sub, colDescW - 6);
+        const lineArray = Array.isArray(wrapped) ? wrapped : [wrapped];
+        lineArray.forEach((wLine: string) => {
+          processedLines.push({
+            text: wLine,
+            isBold: idx === 0 && subIdx === 0,
+            color: idx === 0 && subIdx === 0 ? [15, 23, 42] : [51, 65, 85],
+          });
+        });
+      });
+    });
+
+    const lineHeight = 4.0;
+    const textLinesHeight = Math.max(1, processedLines.length) * lineHeight + 4;
     const sigImgHeight = signatureImgBase64 ? 12 : 6;
     const sigTextHeight = 10;
     const rowHeight = Math.max(36, textLinesHeight + sigImgHeight + sigTextHeight + 4);
@@ -339,20 +427,16 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(timeStr || data.sessionTime || '1600H', col1X + colTimeW / 2, y + 5.5, { align: 'center' });
+    doc.text(sanitizePdfText(timeStr || data.sessionTime || '1600H'), col1X + colTimeW / 2, y + 5.5, { align: 'center' });
 
     // Col 2: Title w/ Description
     let lineY = y + 5;
-    descLines.forEach((line, idx) => {
-      if (idx === 0) {
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(15, 23, 42);
-      } else {
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(51, 65, 85);
-      }
-      doc.text(line, col2X + 3, lineY);
-      lineY += 4.2;
+    processedLines.forEach((lineObj) => {
+      doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+      doc.text(lineObj.text, col2X + 3, lineY);
+      lineY += lineHeight;
     });
 
     lineY += 1;
@@ -380,30 +464,31 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(officerName || 'Duty Operations Officer', col2X + 3, lineY);
+    doc.text(sanitizePdfText(officerName || 'Duty Operations Officer'), col2X + 3, lineY);
     lineY += 3.2;
 
     // Officer Role / Title
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
     doc.setTextColor(100, 116, 139);
-    doc.text(officerRole || 'Duty Operations Officer', col2X + 3, lineY);
+    doc.text(sanitizePdfText(officerRole || 'Duty Operations Officer'), col2X + 3, lineY);
 
     // Col 3: Attendance (Only rendered if an attendance status is specified)
-    if (reportType && reportType !== '—') {
+    const cleanReportType = sanitizePdfText(reportType);
+    if (cleanReportType && cleanReportType !== '—') {
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(7.5);
-      if (reportType === 'Present') {
+      if (cleanReportType === 'Present') {
         doc.setTextColor(22, 101, 52); // Dark Green
-      } else if (reportType === 'Absent') {
+      } else if (cleanReportType === 'Absent') {
         doc.setTextColor(185, 28, 28); // Dark Red
-      } else if (reportType === 'Exempted') {
+      } else if (cleanReportType === 'Exempted') {
         doc.setTextColor(180, 83, 9); // Dark Amber
       } else {
         doc.setTextColor(71, 85, 105);
         doc.setFont('helvetica', 'normal');
       }
-      doc.text(reportType, col3X + colTypeW / 2, y + 5.5, { align: 'center' });
+      doc.text(cleanReportType, col3X + colTypeW / 2, y + 5.5, { align: 'center' });
     }
 
     y += rowHeight;
@@ -528,10 +613,31 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
   };
 
   const drawRow = (timeStr: string, descLines: string[], reportType: string, customMinHeight = 0) => {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
+    const processedLines: { text: string; isBold: boolean; color: [number, number, number] }[] = [];
 
-    const rowHeight = Math.max(customMinHeight, descLines.length * 4.2 + 6);
+    descLines.forEach((rawLine, idx) => {
+      const sanitized = sanitizePdfText(rawLine);
+      if (!sanitized) return;
+
+      const subLines = sanitized.split('\n');
+      subLines.forEach((sub, subIdx) => {
+        doc.setFont('helvetica', idx === 0 && subIdx === 0 ? 'bold' : 'normal');
+        doc.setFontSize(7.5);
+        const wrapped = doc.splitTextToSize(sub, colDescW - 6);
+        const lineArray = Array.isArray(wrapped) ? wrapped : [wrapped];
+        lineArray.forEach((wLine: string) => {
+          processedLines.push({
+            text: wLine,
+            isBold: idx === 0 && subIdx === 0,
+            color: idx === 0 && subIdx === 0 ? [15, 23, 42] : [51, 65, 85],
+          });
+        });
+      });
+    });
+
+    const lineHeight = 4.0;
+    const computedHeight = Math.max(1, processedLines.length) * lineHeight + 6;
+    const rowHeight = Math.max(customMinHeight, Math.max(12, computedHeight));
     checkPageBreak(rowHeight);
 
     doc.setDrawColor(148, 163, 184);
@@ -543,26 +649,22 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(timeStr || '1200H', col1X + colTimeW / 2, y + 5.5, { align: 'center' });
+    doc.text(sanitizePdfText(timeStr || '1200H'), col1X + colTimeW / 2, y + 5.5, { align: 'center' });
 
-    doc.setFont('helvetica', 'normal');
     let lineY = y + 5;
-    descLines.forEach((line, idx) => {
-      if (idx === 0) {
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(15, 23, 42);
-      } else {
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(51, 65, 85);
-      }
-      doc.text(line, col2X + 3, lineY);
-      lineY += 4.2;
+    processedLines.forEach((lineObj) => {
+      doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+      doc.text(lineObj.text, col2X + 3, lineY);
+      lineY += lineHeight;
     });
 
+    const cleanReportType = sanitizePdfText(reportType);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(reportType || 'Info', col3X + colTypeW / 2, y + 5.5, { align: 'center' });
+    doc.text(cleanReportType || 'Info', col3X + colTypeW / 2, y + 5.5, { align: 'center' });
 
     y += rowHeight;
   };
@@ -576,10 +678,30 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
     officerRole: string,
     signatureImgBase64?: string | null
   ) => {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
+    const processedLines: { text: string; isBold: boolean; color: [number, number, number] }[] = [];
 
-    const textLinesHeight = descLines.length * 4.2 + 4;
+    descLines.forEach((rawLine, idx) => {
+      const sanitized = sanitizePdfText(rawLine);
+      if (!sanitized) return;
+
+      const subLines = sanitized.split('\n');
+      subLines.forEach((sub, subIdx) => {
+        doc.setFont('helvetica', idx === 0 && subIdx === 0 ? 'bold' : 'normal');
+        doc.setFontSize(7.5);
+        const wrapped = doc.splitTextToSize(sub, colDescW - 6);
+        const lineArray = Array.isArray(wrapped) ? wrapped : [wrapped];
+        lineArray.forEach((wLine: string) => {
+          processedLines.push({
+            text: wLine,
+            isBold: idx === 0 && subIdx === 0,
+            color: idx === 0 && subIdx === 0 ? [15, 23, 42] : [51, 65, 85],
+          });
+        });
+      });
+    });
+
+    const lineHeight = 4.0;
+    const textLinesHeight = Math.max(1, processedLines.length) * lineHeight + 4;
     const sigImgHeight = signatureImgBase64 ? 12 : 6;
     const sigTextHeight = 10;
     const rowHeight = Math.max(36, textLinesHeight + sigImgHeight + sigTextHeight + 4);
@@ -595,19 +717,15 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(timeStr || '1200H', col1X + colTimeW / 2, y + 5.5, { align: 'center' });
+    doc.text(sanitizePdfText(timeStr || '1200H'), col1X + colTimeW / 2, y + 5.5, { align: 'center' });
 
     let lineY = y + 5;
-    descLines.forEach((line, idx) => {
-      if (idx === 0) {
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(15, 23, 42);
-      } else {
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(51, 65, 85);
-      }
-      doc.text(line, col2X + 3, lineY);
-      lineY += 4.2;
+    processedLines.forEach((lineObj) => {
+      doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+      doc.text(lineObj.text, col2X + 3, lineY);
+      lineY += lineHeight;
     });
 
     lineY += 1;
@@ -635,19 +753,20 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(officerName || 'Lead Operations Officer', col2X + 3, lineY);
+    doc.text(sanitizePdfText(officerName || 'Lead Operations Officer'), col2X + 3, lineY);
     lineY += 3.2;
 
     // Officer Title
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
     doc.setTextColor(100, 116, 139);
-    doc.text(officerRole || 'Lead Operations Officer', col2X + 3, lineY);
+    doc.text(sanitizePdfText(officerRole || 'Lead Operations Officer'), col2X + 3, lineY);
 
+    const cleanReportType = sanitizePdfText(reportType);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(reportType || 'Info', col3X + colTypeW / 2, y + 5.5, { align: 'center' });
+    doc.text(cleanReportType || 'Info', col3X + colTypeW / 2, y + 5.5, { align: 'center' });
 
     y += rowHeight;
   };
@@ -657,10 +776,13 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
 
   // Start of duty row (Only operating user signature, no second signature)
   const firstShift = data.shifts && data.shifts[0];
-  const startDesc = [
+  const startDesc: string[] = [
     `Start of Monitoring Duty, ${firstShift ? firstShift.leadOfficer : (data.finalOfficer || 'Duty Officer')}`,
     'Standby Vehicles: Pick up - 1, Ambulance - 1, Demo Items - 5',
   ];
+  if (firstShift?.monitoringBriefing) {
+    startDesc.push(`Monitoring Details & Briefing: ${firstShift.monitoringBriefing}`);
+  }
   drawSignatureRow(
     firstShift?.startTime || '0800H',
     startDesc,
@@ -674,7 +796,7 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
   (data.logs || []).forEach((log) => {
     const logDesc = [
       log.title || 'Operational Event',
-      (log.description || '').replace(/<[^>]+>/g, '').slice(0, 240),
+      log.description || '',
     ];
     drawRow(log.time || '1200H', logDesc, log.status || 'Info');
   });

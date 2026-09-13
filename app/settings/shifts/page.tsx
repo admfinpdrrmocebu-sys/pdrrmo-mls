@@ -23,6 +23,10 @@ import {
   Shield,
   Filter,
   Layers,
+  Edit2,
+  Crown,
+  UserPlus,
+  AlertCircle,
 } from 'lucide-react';
 import {
   format,
@@ -108,6 +112,13 @@ export interface DayDutySchedule {
   dateKey: string;
   shifts: AssignedShiftGroup[];
   restDayPersonnel: OfficerAssignment[];
+}
+
+export interface EditDayAssignment {
+  profileId: string;
+  shiftScheduleId: string | null;
+  assignmentType: 'duty' | 'rest';
+  isLead: boolean;
 }
 
 function getInitials(name: string): string {
@@ -196,6 +207,15 @@ export default function ShiftScheduleCalendarPage() {
   // Print & XLSX Modal State
   const [isPrintXLSXModalOpen, setIsPrintXLSXModalOpen] = useState(false);
 
+  // ===========================================================================
+  // EDIT DAY SHIFT ROSTER MODAL STATE
+  // ===========================================================================
+  const [isEditDayModalOpen, setIsEditDayModalOpen] = useState(false);
+  const [editingDayDate, setEditingDayDate] = useState<Date | null>(null);
+  const [editingDayAssignments, setEditingDayAssignments] = useState<EditDayAssignment[]>([]);
+  const [isSavingDay, setIsSavingDay] = useState(false);
+  const [selectedAddProfileId, setSelectedAddProfileId] = useState<{ [shiftKey: string]: string }>({});
+
   // Toast Notification State
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -246,18 +266,41 @@ export default function ShiftScheduleCalendarPage() {
       }
 
       if (profilesData && profilesData.length > 0) {
+        let deactList: string[] = [];
+        let delList: string[] = [];
+        let editedMap: Record<string, any> = {};
+        try {
+          deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
+          delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
+          editedMap = JSON.parse(localStorage.getItem('pdrrmo_edited_users') || '{}');
+        } catch (e) {}
+
         const mappedProfiles: OfficerAssignment[] = profilesData
-          .filter((p) => p.is_active !== false)
-          .map((p) => ({
-            id: p.id,
-            name: p.full_name || 'Monitoring Responder',
-            role: p.position_title || p.role || 'Duty Responder',
-            userRole: p.role?.toLowerCase() || 'staff',
-            badgeNumber: `OPC-${p.id.slice(0, 4).toUpperCase()}`,
-            avatarInitials: getInitials(p.full_name || 'OP'),
-            defaultShift: p.default_shift || '',
-            avatarUrl: p.avatar_url,
-          }));
+          .filter((p) => {
+            const isDel = delList.includes(p.id) || (p.email && delList.includes(p.email));
+            const isDeact = deactList.includes(p.id) || (p.email && deactList.includes(p.email));
+            const userEdit = editedMap[p.id] || (p.email ? editedMap[p.email.toLowerCase()] : null);
+            const isEditDeact = userEdit?.status === 'Inactive';
+            return !isDel && !isDeact && !isEditDeact && p.is_active !== false;
+          })
+          .map((p) => {
+            const userEdit = editedMap[p.id] || (p.email ? editedMap[p.email.toLowerCase()] : null) || {};
+            const finalName = userEdit.name || p.full_name || 'Monitoring Responder';
+            const finalRole = userEdit.positionTitle || p.position_title || p.role || 'Duty Responder';
+            const finalUserRole = (userEdit.role || p.role || 'staff').toLowerCase();
+            const finalShift = userEdit.shift || p.default_shift || '';
+
+            return {
+              id: p.id,
+              name: finalName,
+              role: finalRole,
+              userRole: finalUserRole,
+              badgeNumber: `OPC-${p.id.slice(0, 4).toUpperCase()}`,
+              avatarInitials: getInitials(finalName || 'OP'),
+              defaultShift: finalShift,
+              avatarUrl: userEdit.avatarUrl !== undefined ? userEdit.avatarUrl : p.avatar_url,
+            };
+          });
         setProfiles(mappedProfiles);
       } else {
         setProfiles([]);
@@ -632,6 +675,173 @@ export default function ShiftScheduleCalendarPage() {
   const handleJumpToToday = () => {
     setCurrentMonth(new Date());
     showToast('Jumped to current month view');
+  };
+
+  // ===========================================================================
+  // EDIT DAY SHIFT ROSTER HANDLERS (SUPABASE INTEGRATION)
+  // ===========================================================================
+  const handleOpenEditDay = (daySchedule: DayDutySchedule) => {
+    const dateKey = daySchedule.dateKey;
+    setEditingDayDate(daySchedule.date);
+
+    // Map existing assignments for this date
+    const currentForDate = dbAssignments.filter((a) => a.duty_date === dateKey);
+    const initialAssignments: EditDayAssignment[] = currentForDate.map((a) => ({
+      profileId: a.profile_id,
+      shiftScheduleId: a.shift_schedule_id || null,
+      assignmentType: a.assignment_type as 'duty' | 'rest',
+      isLead: !!a.is_lead,
+    }));
+
+    setEditingDayAssignments(initialAssignments);
+    setSelectedAddProfileId({});
+    setIsEditDayModalOpen(true);
+  };
+
+  const handleAddOfficerToShift = (shiftScheduleId: string, profileId: string) => {
+    if (!profileId) return;
+    setEditingDayAssignments((prev) => {
+      const filtered = prev.filter((a) => a.profileId !== profileId);
+      return [
+        ...filtered,
+        {
+          profileId,
+          shiftScheduleId,
+          assignmentType: 'duty',
+          isLead: false,
+        },
+      ];
+    });
+    setSelectedAddProfileId((prev) => ({ ...prev, [shiftScheduleId]: '' }));
+  };
+
+  const handleAddOfficerToRest = (profileId: string) => {
+    if (!profileId) return;
+    setEditingDayAssignments((prev) => {
+      const filtered = prev.filter((a) => a.profileId !== profileId);
+      return [
+        ...filtered,
+        {
+          profileId,
+          shiftScheduleId: null,
+          assignmentType: 'rest',
+          isLead: false,
+        },
+      ];
+    });
+    setSelectedAddProfileId((prev) => ({ ...prev, rest: '' }));
+  };
+
+  const handleRemoveOfficerFromDay = (profileId: string) => {
+    setEditingDayAssignments((prev) => prev.filter((a) => a.profileId !== profileId));
+  };
+
+
+
+  const handleSaveDaySchedule = async () => {
+    if (!editingDayDate) return;
+    const dateKey = format(editingDayDate, 'yyyy-MM-dd');
+
+    try {
+      setIsSavingDay(true);
+
+      // 1. Delete previous assignments for this date
+      const { error: deleteError } = await supabase
+        .from('duty_roster_assignments')
+        .delete()
+        .eq('duty_date', dateKey);
+
+      if (deleteError) {
+        console.warn('Delete error notice:', deleteError.message);
+      }
+
+      // 2. Insert updated assignments
+      if (editingDayAssignments.length > 0) {
+        const recordsToInsert = editingDayAssignments.map((a) => ({
+          profile_id: a.profileId,
+          shift_schedule_id: a.assignmentType === 'duty' ? a.shiftScheduleId : null,
+          duty_date: dateKey,
+          assignment_type: a.assignmentType,
+          is_lead: a.isLead,
+          created_by: user?.id || null,
+        }));
+
+        const { error: insertError } = await supabase
+          .from('duty_roster_assignments')
+          .insert(recordsToInsert);
+
+        if (insertError) {
+          throw new Error(insertError.message);
+        }
+      }
+
+      showToast(`Roster for ${format(editingDayDate, 'MMMM d, yyyy')} updated successfully.`);
+      await fetchRosterData();
+      setIsEditDayModalOpen(false);
+      setSelectedDaySchedule(null);
+
+      // Broadcast update across tabs
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_shift_sync');
+          bc.postMessage({ type: 'shift_state_updated', timestamp: Date.now() });
+          bc.close();
+        } catch (e) {}
+        localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
+      }
+    } catch (err: any) {
+      console.error('Error saving day schedule:', err);
+      showToast(`Error saving schedule: ${err.message || 'Database error'}`);
+    } finally {
+      setIsSavingDay(false);
+    }
+  };
+
+  const handleClearDaySchedule = async () => {
+    if (!editingDayDate) return;
+    const dateKey = format(editingDayDate, 'yyyy-MM-dd');
+
+    if (
+      !confirm(
+        `Are you sure you want to clear all shift and rest assignments for ${format(
+          editingDayDate,
+          'MMMM d, yyyy'
+        )}?`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setIsSavingDay(true);
+      const { error } = await supabase
+        .from('duty_roster_assignments')
+        .delete()
+        .eq('duty_date', dateKey);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      showToast(`All assignments cleared for ${format(editingDayDate, 'MMMM d, yyyy')}.`);
+      await fetchRosterData();
+      setIsEditDayModalOpen(false);
+      setSelectedDaySchedule(null);
+
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_shift_sync');
+          bc.postMessage({ type: 'shift_state_updated', timestamp: Date.now() });
+          bc.close();
+        } catch (e) {}
+        localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
+      }
+    } catch (err: any) {
+      console.error('Error clearing day assignments:', err);
+      showToast(`Failed to clear assignments: ${err.message}`);
+    } finally {
+      setIsSavingDay(false);
+    }
   };
 
   // ===========================================================================
@@ -1331,9 +1541,22 @@ export default function ShiftScheduleCalendarPage() {
                           })}
                         </div>
 
-                        {/* Footer Hint on Hover */}
-                        <div className="mt-1 text-right text-[10px] text-[#004AC6] font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
-                          View details →
+                        {/* Footer Controls on Hover */}
+                        <div className="mt-1 flex items-center justify-between text-[10px] text-[#004AC6] font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
+                          {!isSettingsViewOnly ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenEditDay(schedule);
+                              }}
+                              className="flex items-center gap-0.5 text-[#004AC6] hover:underline cursor-pointer font-bold"
+                            >
+                              <Edit2 className="w-2.5 h-2.5" />
+                              <span>Edit</span>
+                            </button>
+                          ) : <span />}
+                          <span className="text-[#505F76] font-medium">Details →</span>
                         </div>
                       </div>
                     );
@@ -1583,7 +1806,19 @@ export default function ShiftScheduleCalendarPage() {
               </div>
 
               {/* Modal Footer */}
-              <div className="px-6 py-4 border-t border-[#E2E8F0] bg-[#F8FAFC] flex justify-end shrink-0">
+              <div className="px-6 py-4 border-t border-[#E2E8F0] bg-[#F8FAFC] flex justify-between items-center shrink-0">
+                {!isSettingsViewOnly ? (
+                  <SecondaryButton
+                    size="md"
+                    pill
+                    onClick={() => handleOpenEditDay(selectedDaySchedule)}
+                    leftIcon={<Edit2 className="w-3.5 h-3.5 text-[#004AC6]" />}
+                  >
+                    Edit Day Roster
+                  </SecondaryButton>
+                ) : (
+                  <div />
+                )}
                 <PrimaryButton
                   size="md"
                   pill
@@ -1591,6 +1826,340 @@ export default function ShiftScheduleCalendarPage() {
                 >
                   Close
                 </PrimaryButton>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ========================================================================= */}
+      {/* 4.5 MODAL: EDIT DAY SHIFT ROSTER SCHEDULE (100% DYNAMIC EDIT FEATURE) */}
+      {/* ========================================================================= */}
+      <AnimatePresence>
+        {isEditDayModalOpen && editingDayDate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isSavingDay && setIsEditDayModalOpen(false)}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+
+            {/* Modal Dialog */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ duration: 0.2 }}
+              className="relative bg-white border border-[#E2E8F0] rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden z-10 flex flex-col max-h-[90vh]"
+            >
+              {/* Header */}
+              <div className="px-6 py-5 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/20 shrink-0">
+                    <Edit2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base sm:text-lg font-bold text-[#1E293B]">
+                      Edit Shift Roster — {format(editingDayDate, 'EEEE, MMMM d, yyyy')}
+                    </h3>
+                    <p className="text-xs text-[#757680] mt-0.5">
+                      Assign, reassign, or remove personnel and manage shift duty rosters for this date
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isSavingDay}
+                  onClick={() => setIsEditDayModalOpen(false)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/60 transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Body: Editable Shifts & Rest Day */}
+              <div className="p-6 space-y-6 overflow-y-auto flex-1">
+                {/* 1. Shift Schedule Groups */}
+                <div className="space-y-4">
+                  <h4 className="text-xs font-bold text-[#505F76] uppercase tracking-wider">
+                    Shift Roster Rotations ({shiftSchedules.length} Timetables)
+                  </h4>
+
+                  {shiftSchedules.map((sched) => {
+                    const shiftColor = sched.color || '#004AC6';
+                    // Officers currently assigned to this shift in the edit state
+                    const assignedToThisShift = editingDayAssignments.filter(
+                      (a) => a.assignmentType === 'duty' && a.shiftScheduleId === sched.id
+                    );
+
+                    const currentSelectedAdd = selectedAddProfileId[sched.id] || '';
+
+                    return (
+                      <div
+                        key={sched.id}
+                        style={{
+                          backgroundColor: `${shiftColor}08`,
+                          borderColor: `${shiftColor}30`,
+                        }}
+                        className="p-4 rounded-2xl border space-y-3"
+                      >
+                        {/* Shift Title Bar */}
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0"
+                              style={{ backgroundColor: shiftColor }}
+                            />
+                            <h5 className="text-sm font-bold text-[#1E293B]">{sched.name}</h5>
+                            <span className="text-[11px] text-[#505F76] font-mono">
+                              ({sched.time})
+                            </span>
+                            {sched.targetRole && sched.targetRole !== 'ALL' && (
+                              <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-white text-slate-700 border border-slate-200">
+                                {sched.targetRole}
+                              </span>
+                            )}
+                          </div>
+
+                          <span
+                            style={{ color: shiftColor, borderColor: `${shiftColor}30` }}
+                            className="text-xs font-bold bg-white px-2.5 py-0.5 rounded-full border shadow-2xs"
+                          >
+                            {assignedToThisShift.length} Personnel
+                          </span>
+                        </div>
+
+                        {/* Assigned Officers List */}
+                        <div className="space-y-2">
+                          {assignedToThisShift.length > 0 ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {assignedToThisShift.map((assignment) => {
+                                const officer = profiles.find((p) => p.id === assignment.profileId);
+                                const badge = getRoleBadge(officer?.userRole);
+                                const officerName = officer?.name || 'Duty Responder';
+                                const officerRole = officer?.role || 'Responder';
+
+                                return (
+                                  <div
+                                    key={assignment.profileId}
+                                    className="p-2.5 rounded-xl border border-slate-200 bg-white flex items-center justify-between gap-2 shadow-2xs transition-all"
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <div className="w-7 h-7 rounded-full bg-[#004AC6] text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+                                        {officer?.avatarInitials || 'OP'}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5">
+                                          <p className="text-xs font-bold text-[#1E293B] truncate">
+                                            {officerName}
+                                          </p>
+                                          <span className={`text-[8px] font-semibold px-1 py-0.2 rounded border ${badge.badgeClass}`}>
+                                            {badge.label}
+                                          </span>
+                                        </div>
+                                        <p className="text-[10px] text-[#757680] truncate">
+                                          {officerRole}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      {/* Remove Officer from Shift */}
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleRemoveOfficerFromDay(assignment.profileId)
+                                        }
+                                        className="w-7 h-7 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors flex items-center justify-center cursor-pointer"
+                                        title="Remove officer from this day"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="p-3 text-center text-xs text-slate-400 bg-white/50 rounded-xl border border-dashed border-slate-200">
+                              No personnel assigned to {sched.name} yet.
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Quick Add Personnel into this Shift */}
+                        <div className="pt-2 border-t border-slate-200/60 flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                          <select
+                            value={currentSelectedAdd}
+                            onChange={(e) =>
+                              setSelectedAddProfileId((prev) => ({
+                                ...prev,
+                                [sched.id]: e.target.value,
+                              }))
+                            }
+                            className="bg-white border border-[#CBD5E1] rounded-xl py-1.5 px-3 text-xs text-[#1E293B] focus:outline-none focus:border-[#004AC6] flex-1 min-w-[200px]"
+                          >
+                            <option value="">-- Select Personnel to Add --</option>
+                            {profiles.map((p) => {
+                              const isAlreadyInDay = editingDayAssignments.some(
+                                (a) => a.profileId === p.id
+                              );
+                              return (
+                                <option key={p.id} value={p.id}>
+                                  {p.name} ({p.role}) {isAlreadyInDay ? '· Already in Roster' : ''}
+                                </option>
+                              );
+                            })}
+                          </select>
+
+                          <button
+                            type="button"
+                            disabled={!currentSelectedAdd}
+                            onClick={() =>
+                              handleAddOfficerToShift(sched.id, currentSelectedAdd)
+                            }
+                            className="px-3 py-1.5 bg-[#004AC6] hover:bg-[#003ca3] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer shadow-2xs"
+                          >
+                            <UserPlus className="w-3.5 h-3.5" />
+                            <span>Add Officer</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 2. Rest Day / Off-Duty Section */}
+                <div className="p-4 rounded-2xl bg-amber-50/60 border border-amber-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CalendarX className="w-4 h-4 text-amber-700" />
+                      <h4 className="text-sm font-bold text-amber-900">
+                        Rest Day / Off-Duty Personnel
+                      </h4>
+                    </div>
+                    <span className="text-xs font-bold text-amber-800 bg-white px-2.5 py-0.5 rounded-full border border-amber-200">
+                      {
+                        editingDayAssignments.filter((a) => a.assignmentType === 'rest')
+                          .length
+                      }{' '}
+                      Personnel
+                    </span>
+                  </div>
+
+                  {/* Rest Personnel Tags */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {editingDayAssignments.filter((a) => a.assignmentType === 'rest').length >
+                    0 ? (
+                      editingDayAssignments
+                        .filter((a) => a.assignmentType === 'rest')
+                        .map((assignment) => {
+                          const officer = profiles.find((p) => p.id === assignment.profileId);
+                          return (
+                            <span
+                              key={assignment.profileId}
+                              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-amber-200 text-xs font-bold text-slate-800 shadow-2xs"
+                            >
+                              <span>{officer?.name || 'Officer'}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleRemoveOfficerFromDay(assignment.profileId)
+                                }
+                                className="text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                                title="Remove from rest day"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </span>
+                          );
+                        })
+                    ) : (
+                      <div className="text-xs text-amber-800/80 italic py-1">
+                        No personnel scheduled for rest day on this date.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Add Officer to Rest Day */}
+                  <div className="pt-2 border-t border-amber-200 flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                    <select
+                      value={selectedAddProfileId['rest'] || ''}
+                      onChange={(e) =>
+                        setSelectedAddProfileId((prev) => ({
+                          ...prev,
+                          rest: e.target.value,
+                        }))
+                      }
+                      className="bg-white border border-amber-300 rounded-xl py-1.5 px-3 text-xs text-[#1E293B] focus:outline-none focus:border-amber-600 flex-1 min-w-[200px]"
+                    >
+                      <option value="">-- Add Officer to Rest Day --</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.role})
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      disabled={!selectedAddProfileId['rest']}
+                      onClick={() =>
+                        handleAddOfficerToRest(selectedAddProfileId['rest'])
+                      }
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer shadow-2xs"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>Set as Rest Day</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-4 border-t border-[#E2E8F0] bg-[#F8FAFC] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+                <button
+                  type="button"
+                  disabled={isSavingDay || editingDayAssignments.length === 0}
+                  onClick={handleClearDaySchedule}
+                  className="text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 px-3 py-2 rounded-xl transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear All for this Date</span>
+                </button>
+
+                <div className="flex items-center gap-2.5 justify-end">
+                  <SecondaryButton
+                    type="button"
+                    size="md"
+                    pill
+                    disabled={isSavingDay}
+                    onClick={() => setIsEditDayModalOpen(false)}
+                  >
+                    Cancel
+                  </SecondaryButton>
+
+                  <PrimaryButton
+                    type="button"
+                    size="md"
+                    pill
+                    disabled={isSavingDay}
+                    onClick={handleSaveDaySchedule}
+                    leftIcon={
+                      isSavingDay ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Check className="w-4 h-4" />
+                      )
+                    }
+                  >
+                    {isSavingDay ? 'Saving Changes...' : 'Save Day Changes'}
+                  </PrimaryButton>
+                </div>
               </div>
             </motion.div>
           </div>

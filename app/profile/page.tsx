@@ -14,6 +14,7 @@ import {
   PenTool,
   Camera,
   Trash2,
+  LogOut,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
@@ -111,7 +112,7 @@ async function compressImage(
 
 export default function ProfilePage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const { profile, user, refreshProfile } = useAuth();
+  const { profile, user, refreshProfile, signOut } = useAuth();
 
   // Officer Profile State
   const [fullName, setFullName] = useState('Alex Thompson');
@@ -443,6 +444,16 @@ export default function ProfilePage() {
                     <h2 className="text-lg font-bold text-[#1E293B]">{fullName}</h2>
                     <p className="text-xs text-[#004AC6] font-semibold">{position}</p>
                     <p className="text-xs text-[#505F76] mt-0.5">{division}</p>
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={signOut}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100/80 rounded-full border border-rose-200/80 shadow-2xs transition-all cursor-pointer group"
+                      >
+                        <LogOut className="w-3.5 h-3.5 text-rose-500 group-hover:translate-x-0.5 transition-transform" />
+                        <span>Sign Out</span>
+                      </button>
+                    </div>
                   </div>
 
                   {/* Photo Actions */}

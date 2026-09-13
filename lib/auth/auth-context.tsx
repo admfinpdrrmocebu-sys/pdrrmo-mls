@@ -15,6 +15,8 @@ import {
   canAccessScreen,
   canWriteScreen,
 } from './rbac';
+import { ShieldAlert, LogOut, Lock, UserX, AlertTriangle } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 
 export interface UserProfile {
   id: string;
@@ -40,6 +42,8 @@ export interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;
+  isAccountDeactivated: boolean;
+  isAccountRemoved: boolean;
   // RBAC Properties
   roles: RoleDefinition[];
   currentRole: RoleDefinition | null;
@@ -63,6 +67,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [roles, setRoles] = useState<RoleDefinition[]>(defaultBuiltInRoles);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Lockout Modal States
+  const [isAccountDeactivated, setIsAccountDeactivated] = useState(false);
+  const [isAccountRemoved, setIsAccountRemoved] = useState(false);
+
   // 1. Fetch Dynamic Access Roles from Supabase
   const fetchRoles = useCallback(async () => {
     try {
@@ -84,7 +92,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }));
         setRoles(mappedRoles);
       } else {
-        // Fallback to default built-in roles
         setRoles(defaultBuiltInRoles);
       }
     } catch (err) {
@@ -96,6 +103,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // 2. Fetch full user profile from public.profiles table
   const fetchProfile = useCallback(async (currentUser: User) => {
     try {
+      // Check local deactivation / deletion storage
+      let deactList: string[] = [];
+      let delList: string[] = [];
+      try {
+        deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
+        delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
+      } catch (e) {}
+
+      if (delList.includes(currentUser.id) || (currentUser.email && delList.includes(currentUser.email))) {
+        setIsAccountRemoved(true);
+      } else if (deactList.includes(currentUser.id) || (currentUser.email && deactList.includes(currentUser.email))) {
+        setIsAccountDeactivated(true);
+      }
+
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
@@ -106,8 +127,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Could not fetch user profile from profiles table:', error.message);
       }
 
+      let editedMap: Record<string, any> = {};
+      try {
+        editedMap = JSON.parse(localStorage.getItem('pdrrmo_edited_users') || '{}');
+      } catch (e) {}
+      const myEdit = editedMap[currentUser.id] || (currentUser.email ? editedMap[currentUser.email.toLowerCase()] : null);
+
       if (data) {
-        setProfile(data as UserProfile);
+        const fullProf: UserProfile = {
+          ...data,
+          full_name: myEdit?.name || data.full_name,
+          position_title: myEdit?.positionTitle || data.position_title,
+          role: myEdit?.role || data.role,
+          default_shift: myEdit?.shift || data.default_shift,
+          is_active: myEdit?.status ? myEdit.status === 'Active' : data.is_active,
+        };
+
+        setProfile(fullProf);
+        if (fullProf.is_active === false || deactList.includes(currentUser.id) || (currentUser.email && deactList.includes(currentUser.email))) {
+          setIsAccountDeactivated(true);
+        } else {
+          setIsAccountDeactivated(false);
+        }
       } else {
         // Fallback to metadata if profile row is pending creation
         const meta = currentUser.user_metadata || {};
@@ -211,6 +252,94 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [fetchProfile, fetchRoles]);
 
+  // 4. Real-time Multi-Tab Broadcast & Supabase Profile Realtime Listener
+  useEffect(() => {
+    let authChannel: BroadcastChannel | null = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      authChannel = new BroadcastChannel('pdrrmo_auth_sync');
+      authChannel.onmessage = (event) => {
+        const data = event.data;
+        if (!data || !user) return;
+        const isTargetUser =
+          data.userId === user.id ||
+          (user.email && data.email && data.email.toLowerCase() === user.email.toLowerCase());
+
+        if (isTargetUser) {
+          if (data.type === 'USER_DEACTIVATED') {
+            setIsAccountDeactivated(true);
+          } else if (data.type === 'USER_ACTIVATED') {
+            setIsAccountDeactivated(false);
+          } else if (data.type === 'USER_REMOVED') {
+            setIsAccountRemoved(true);
+          } else if (data.type === 'USER_EDITED' && data.user) {
+            setProfile((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    full_name: data.user.name || prev.full_name,
+                    position_title: data.user.positionTitle || prev.position_title,
+                    role: (data.user.position || prev.role).toLowerCase(),
+                    default_shift: data.user.shift || prev.default_shift,
+                    is_active: data.user.status === 'Active',
+                  }
+                : prev
+            );
+            if (data.user.status === 'Inactive') {
+              setIsAccountDeactivated(true);
+            } else if (data.user.status === 'Active') {
+              setIsAccountDeactivated(false);
+            }
+          }
+        }
+      };
+    }
+
+    // Realtime Postgres changes on profiles for this specific user
+    const profileStatusChannel = supabase
+      .channel('auth-profile-status-sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        (payload: any) => {
+          if (!user) return;
+          if (payload.eventType === 'UPDATE' && payload.new && payload.new.id === user.id) {
+            if (payload.new.is_active === false) {
+              setIsAccountDeactivated(true);
+            } else if (payload.new.is_active === true) {
+              setIsAccountDeactivated(false);
+            }
+          } else if (payload.eventType === 'DELETE' && payload.old && payload.old.id === user.id) {
+            setIsAccountRemoved(true);
+          }
+        }
+      )
+      .subscribe();
+
+    // Check storage on focus & visibility
+    const checkStorageStatus = () => {
+      if (!user) return;
+      try {
+        const deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
+        const delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
+        if (delList.includes(user.id) || (user.email && delList.includes(user.email))) {
+          setIsAccountRemoved(true);
+        } else if (deactList.includes(user.id) || (user.email && deactList.includes(user.email))) {
+          setIsAccountDeactivated(true);
+        }
+      } catch (e) {}
+    };
+
+    window.addEventListener('focus', checkStorageStatus);
+    window.addEventListener('storage', checkStorageStatus);
+
+    return () => {
+      authChannel?.close();
+      supabase.removeChannel(profileStatusChannel);
+      window.removeEventListener('focus', checkStorageStatus);
+      window.removeEventListener('storage', checkStorageStatus);
+    };
+  }, [user]);
+
   const signOut = async () => {
     try {
       setIsLoading(true);
@@ -218,9 +347,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       setProfile(null);
       setSession(null);
+      setIsAccountDeactivated(false);
+      setIsAccountRemoved(false);
       window.location.href = '/login';
     } catch (err) {
       console.error('Error signing out:', err);
+      window.location.href = '/login';
     } finally {
       setIsLoading(false);
     }
@@ -228,7 +360,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isAuthenticated = !!user;
 
-  // 4. Calculate Current Role & Permissions for Active Officer
+  // 5. Calculate Current Role & Permissions for Active Officer
   const currentRole = useMemo(() => {
     if (!profile && !user) return null;
     return matchUserRole(profile?.role, profile?.position_title, roles);
@@ -250,7 +382,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return currentRole?.permissions || [];
   }, [isAdmin, currentRole]);
 
-  // 5. RBAC Helper Functions
+  // 6. RBAC Helper Functions
   const getPermissionLevel = useCallback(
     (screenOrRoute: string): PermissionLevel => {
       if (isAdmin) return 'Full Access';
@@ -299,6 +431,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         isAuthenticated,
         isAdmin,
+        isAccountDeactivated,
+        isAccountRemoved,
         roles,
         currentRole,
         permissions,
@@ -312,6 +446,123 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
+
+      {/* ===================================================================== */}
+      {/* ACCOUNT DEACTIVATED / ACCESS REVOKED MODAL */}
+      {/* ===================================================================== */}
+      <AnimatePresence>
+        {(isAccountDeactivated || isAccountRemoved) && (
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-950/85 backdrop-blur-md select-none"
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden z-10"
+            >
+              {/* Top Accent Strip */}
+              <div
+                className={`h-2.5 w-full ${
+                  isAccountRemoved
+                    ? 'bg-gradient-to-r from-rose-600 via-red-500 to-rose-700'
+                    : 'bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600'
+                }`}
+              />
+
+              <div className="p-7 text-center space-y-5">
+                {/* Pulsing Icon */}
+                <div className="relative mx-auto w-16 h-16">
+                  <div
+                    className={`absolute inset-0 rounded-full animate-ping opacity-25 ${
+                      isAccountRemoved ? 'bg-rose-500' : 'bg-amber-500'
+                    }`}
+                  />
+                  <div
+                    className={`relative w-16 h-16 rounded-full flex items-center justify-center border-2 ${
+                      isAccountRemoved
+                        ? 'bg-rose-50 text-rose-600 border-rose-200'
+                        : 'bg-amber-50 text-amber-600 border-amber-200'
+                    }`}
+                  >
+                    {isAccountRemoved ? (
+                      <UserX className="w-8 h-8" />
+                    ) : (
+                      <Lock className="w-8 h-8" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Title & Subtitle */}
+                <div>
+                  <div
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mb-2 border ${
+                      isAccountRemoved
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    {isAccountRemoved ? 'Access Revoked' : 'Account Deactivated'}
+                  </div>
+                  <h2 className="text-xl font-extrabold text-[#1E293B]">
+                    {isAccountRemoved ? 'System Clearance Revoked' : 'Terminal Access Suspended'}
+                  </h2>
+                  <p className="text-xs text-[#505F76] mt-2 leading-relaxed">
+                    {isAccountRemoved
+                      ? 'Your user profile has been removed from active system personnel. Real-time logging and operations access have been terminated.'
+                      : 'Your officer account has been marked as inactive by the System Administrator. Terminal operations and sync telemetry are currently locked.'}
+                  </p>
+                </div>
+
+                {/* Officer Summary Card */}
+                {profile && (
+                  <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center gap-3 text-left">
+                    <div className="w-10 h-10 rounded-full bg-[#004AC6] text-white font-bold text-xs flex items-center justify-center shrink-0">
+                      {profile.full_name?.slice(0, 2).toUpperCase() || 'MO'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-[#1E293B] truncate">{profile.full_name}</p>
+                      <p className="text-[11px] text-[#757680] font-mono truncate">{profile.email}</p>
+                    </div>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-[#505F76]">
+                      {profile.position_title || profile.role}
+                    </span>
+                  </div>
+                )}
+
+                {/* Footer Action Button */}
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await signOut();
+                      } catch (e) {
+                        window.location.href = '/login';
+                      }
+                    }}
+                    className={`w-full py-3 px-5 rounded-full text-sm font-bold text-white shadow-lg transition-all cursor-pointer inline-flex items-center justify-center gap-2 ${
+                      isAccountRemoved
+                        ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/25'
+                        : 'bg-[#004AC6] hover:bg-[#003da6] shadow-blue-600/25'
+                    }`}
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Sign Out & Return to Login</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </AuthContext.Provider>
   );
 }

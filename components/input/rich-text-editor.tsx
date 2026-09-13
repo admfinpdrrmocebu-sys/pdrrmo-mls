@@ -15,6 +15,14 @@ export interface RichTextEditorProps {
   error?: string;
 }
 
+// Helper to strip emoji icons and non-printable surrogate characters
+export function stripEmojis(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{2B55}\u{200D}\u{FE0E}\u{FE0F}\u{E0020}-\u{E007F}\u{E0001}\u{1F1E6}-\u{1F1FF}]/gu, '')
+    .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '');
+}
+
 export function RichTextEditor({
   label,
   value,
@@ -34,7 +42,7 @@ export function RichTextEditor({
   // Sync value from prop to DOM on initial mount
   useEffect(() => {
     if (editorRef.current && isInitialMount.current) {
-      editorRef.current.innerHTML = value || '';
+      editorRef.current.innerHTML = stripEmojis(value || '');
       checkEmptyState();
       isInitialMount.current = false;
     }
@@ -58,9 +66,21 @@ export function RichTextEditor({
   const handleInput = () => {
     if (!editorRef.current) return;
     const html = editorRef.current.innerHTML;
-    onChange(html);
+    const cleanHtml = stripEmojis(html);
+    if (cleanHtml !== html) {
+      editorRef.current.innerHTML = cleanHtml;
+    }
+    onChange(cleanHtml);
     checkEmptyState();
     updateFormatState();
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    const cleaned = stripEmojis(text);
+    document.execCommand('insertText', false, cleaned);
+    handleInput();
   };
 
   const handleBoldClick = (e: React.MouseEvent) => {
@@ -143,6 +163,7 @@ export function RichTextEditor({
           contentEditable
           suppressContentEditableWarning
           onInput={handleInput}
+          onPaste={handlePaste}
           onKeyUp={updateFormatState}
           onMouseUp={updateFormatState}
           onKeyDown={handleKeyDown}

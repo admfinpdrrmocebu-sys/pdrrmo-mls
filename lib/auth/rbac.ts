@@ -14,7 +14,9 @@ export type ScreenName =
   | 'Roll Call'
   | 'Users'
   | 'Archives'
-  | 'Settings';
+  | 'Settings'
+  | 'Announcements'
+  | 'Shifts';
 
 export type PermissionLevel = 'Full Access' | 'View Only' | 'None';
 
@@ -41,6 +43,8 @@ export const ALL_SCREENS: ScreenName[] = [
   'Users',
   'Archives',
   'Settings',
+  'Announcements',
+  'Shifts',
 ];
 
 /**
@@ -58,8 +62,12 @@ export const routeToScreenMap: Record<string, ScreenName> = {
   '/settings/access': 'Settings',
   '/settings/areas': 'Settings',
   '/settings/logs': 'Settings',
+  '/settings/shifts': 'Settings',
   '/access': 'Settings',
   '/areas': 'Settings',
+  '/announcements': 'Announcements',
+  '/shifts': 'Shifts',
+  '/schedule': 'Shifts',
 };
 
 /**
@@ -81,6 +89,8 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Users', level: 'Full Access' },
       { screen: 'Archives', level: 'Full Access' },
       { screen: 'Settings', level: 'Full Access' },
+      { screen: 'Announcements', level: 'Full Access' },
+      { screen: 'Shifts', level: 'Full Access' },
     ],
   },
   {
@@ -98,6 +108,8 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Users', level: 'None' },
       { screen: 'Archives', level: 'View Only' },
       { screen: 'Settings', level: 'None' },
+      { screen: 'Announcements', level: 'Full Access' },
+      { screen: 'Shifts', level: 'Full Access' },
     ],
   },
   {
@@ -115,6 +127,8 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Users', level: 'None' },
       { screen: 'Archives', level: 'View Only' },
       { screen: 'Settings', level: 'None' },
+      { screen: 'Announcements', level: 'View Only' },
+      { screen: 'Shifts', level: 'View Only' },
     ],
   },
 ];

@@ -18,6 +18,7 @@ import {
   MapPin,
   ArrowRight,
   Lock,
+  Clock,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
@@ -29,6 +30,7 @@ import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
 import { generateRollCallPDF } from '@/lib/pdf-generator';
+import { format } from 'date-fns';
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -54,6 +56,8 @@ export interface RollCallSessionRecord {
   radio_script: string;
   conducted_by?: string | null;
   conducted_by_name?: string;
+  conducted_by_avatar?: string | null;
+  conducted_by_role?: string | null;
   status: 'in_progress' | 'completed' | 'cancelled';
   total_stations: number;
   present_count: number;
@@ -79,6 +83,97 @@ const portDropdownOptions: CustomDropdownOption[] = [
   { value: 'Suspended', label: 'Suspended', dotColor: '#DC2626', badge: 'Closed', badgeColor: 'bg-rose-50 text-rose-700' },
   { value: 'None', label: 'No Port / Inland', dotColor: '#94A3B8', badge: 'N/A', badgeColor: 'bg-slate-100 text-[#505F76]' },
 ];
+
+// Helper to compute initials from full name
+function getInitials(name: string): string {
+  if (!name) return 'MO';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+// Helper to format roll call start time concisely
+function formatRollCallStartTime(session: RollCallSessionRecord | null): string {
+  if (!session) return '';
+  if (session.created_at) {
+    try {
+      const d = new Date(session.created_at);
+      if (!isNaN(d.getTime())) {
+        return format(d, 'h:mm a');
+      }
+    } catch (_) {}
+  }
+  if (session.session_time) {
+    const cleaned = session.session_time.replace(/[^0-9:]/g, '');
+    if (cleaned.includes(':')) {
+      const [h, m] = cleaned.split(':').map(Number);
+      if (!isNaN(h) && !isNaN(m)) {
+        const dummy = new Date();
+        dummy.setHours(h, m, 0, 0);
+        return format(dummy, 'h:mm a');
+      }
+    }
+    return session.session_time;
+  }
+  return 'Recently';
+}
+
+// OfficerAvatar component with profile image & fallback initials
+interface OfficerAvatarProps {
+  officer?: {
+    name?: string;
+    avatarUrl?: string | null;
+    avatarInitials?: string;
+  } | null;
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  fallbackBg?: string;
+  className?: string;
+}
+
+function OfficerAvatar({
+  officer,
+  size = 'md',
+  fallbackBg,
+  className = '',
+}: OfficerAvatarProps) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [officer?.avatarUrl]);
+
+  const sizeClasses = {
+    sm: 'w-8 h-8 text-[10px]',
+    md: 'w-10 h-10 text-xs',
+    lg: 'w-12 h-12 text-sm',
+    xl: 'w-14 h-14 text-base',
+  };
+
+  const hasImage = Boolean(officer?.avatarUrl && !imgError);
+  const initials = officer?.avatarInitials || getInitials(officer?.name || 'MO');
+  const defaultBg = fallbackBg || 'bg-[#004AC6] text-white';
+
+  if (hasImage) {
+    return (
+      <img
+        src={officer!.avatarUrl!}
+        alt={officer?.name || 'Officer Avatar'}
+        onError={() => setImgError(true)}
+        className={`${sizeClasses[size]} rounded-full object-cover border border-[#E2E8F0] shadow-xs shrink-0 ${className}`}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`${sizeClasses[size]} rounded-full font-bold flex items-center justify-center shadow-xs shrink-0 select-none ${defaultBg} ${className}`}
+    >
+      {initials}
+    </div>
+  );
+}
 
 function getMilitaryTime(date: Date = new Date()): string {
   const hours = String(date.getHours()).padStart(2, '0');
@@ -273,16 +368,25 @@ export default function RollCallPage() {
       }
 
       if (sessionData) {
-        // Resolve operator name
+        // Resolve operator name and profile details
         let conductedByName = 'Monitoring Officer';
+        let conductedByAvatar: string | null = null;
+        let conductedByRole: string | null = null;
+
         if (sessionData.conducted_by) {
           const { data: prof } = await supabase
             .from('profiles')
-            .select('full_name')
+            .select('full_name, avatar_url, position_title, role')
             .eq('id', sessionData.conducted_by)
             .maybeSingle();
-          if (prof?.full_name) {
-            conductedByName = prof.full_name;
+          if (prof) {
+            if (prof.full_name) conductedByName = prof.full_name;
+            if (prof.avatar_url) conductedByAvatar = prof.avatar_url;
+            if (prof.position_title) {
+              conductedByRole = prof.position_title;
+            } else if (prof.role === 'admin') {
+              conductedByRole = 'System Administrator';
+            }
           }
         }
 
@@ -294,6 +398,8 @@ export default function RollCallPage() {
           radio_script: sessionData.radio_script || 'Standby for Net Roll Call',
           conducted_by: sessionData.conducted_by || null,
           conducted_by_name: conductedByName,
+          conducted_by_avatar: conductedByAvatar,
+          conducted_by_role: conductedByRole,
           status: sessionData.status,
           total_stations: sessionData.total_stations,
           present_count: sessionData.present_count,
@@ -1052,11 +1158,6 @@ export default function RollCallPage() {
                 <Skeleton variant="rounded" className="h-28 w-full rounded-2xl" />
                 <Skeleton variant="pill" className="h-12 w-full" />
               </div>
-              <div className="bg-white rounded-[1.75rem] border border-[#E2E8F0] p-6 grid grid-cols-3 gap-3">
-                <Skeleton variant="rounded" className="h-14 w-full" />
-                <Skeleton variant="rounded" className="h-14 w-full" />
-                <Skeleton variant="rounded" className="h-14 w-full" />
-              </div>
             </div>
 
             {/* Right Column Table Skeleton */}
@@ -1099,65 +1200,18 @@ export default function RollCallPage() {
           message="You are currently viewing live roll call telemetry in read-only audit mode. Station recording and status toggling are disabled."
         />
 
-        {/* Live Concurrency & Moderator Status Banner */}
-        {isRollCallActive && (
-          <>
-            {isCurrentModerator ? (
-              <div className="p-3.5 bg-emerald-50/90 border border-emerald-200/90 rounded-2xl flex items-center justify-between gap-3 text-xs text-emerald-950 shadow-xs">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0 border border-emerald-200/60">
-                    <ShieldCheck className="w-4 h-4" />
-                  </div>
-                  <div className="truncate">
-                    <span className="font-bold text-emerald-900">Session Moderator: </span>
-                    <span className="text-emerald-800">
-                      You are actively conducting this roll call session. Telemetry inputs are broadcasted live to all stations.
-                    </span>
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[10px] uppercase tracking-wider shrink-0 border border-emerald-200">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>Active Moderator</span>
-                </div>
-              </div>
-            ) : (
-              <div className="p-3.5 bg-blue-50/90 border border-blue-200/90 rounded-2xl flex items-center justify-between gap-3 text-xs text-blue-950 shadow-xs">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-xl bg-blue-100 flex items-center justify-center text-[#004AC6] shrink-0 border border-blue-200/60">
-                    <RadioIcon className="w-4 h-4 animate-pulse" />
-                  </div>
-                  <div className="truncate">
-                    <span className="font-bold text-blue-900">Live Roll Call in Progress: </span>
-                    <span className="text-blue-800">
-                      Conducted by <strong>{activeSession?.conducted_by_name || 'Monitoring Officer'}</strong>. Controls are locked to the active moderator to prevent conflicting entries.
-                    </span>
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-100 text-[#004AC6] font-bold text-[10px] uppercase tracking-wider shrink-0 border border-blue-200">
-                  <Lock className="w-3 h-3" />
-                  <span>Live Read-Only</span>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* ========================================================================= */}
-        {/* HEADER SECTION & LIVE STATUS INDICATOR */}
-        {/* ========================================================================= */}
+        {/* Top Header Title & Subtitle */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#1E293B]">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#1E293B]">
                 Roll Call Operations
-              </h2>
+              </h1>
             </div>
-            <p className="text-sm sm:text-base text-[#505F76] mt-1 font-medium">
-              {isRollCallActive
-                ? `Active Session • Started at ${activeSession?.session_time} by ${activeSession?.conducted_by_name || 'Monitoring Officer'}`
-                : 'Standby for Operational Roll Call • 142.500 MHz Net Radio'}
+            <p className="text-sm sm:text-base text-[#505F76] mt-1 font-medium max-w-2xl">
+              Live station monitoring, VHF net radio telemetry recording, and disaster preparedness checks.
             </p>
           </div>
 
@@ -1172,6 +1226,129 @@ export default function RollCallPage() {
                 Archived Reports
               </SecondaryButton>
             </Link>
+          </div>
+        </div>
+
+        {/* ========================================================================= */}
+        {/* 1. TOP STATS & CURRENT ROLL CALL MODERATOR CARDS */}
+        {/* ========================================================================= */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-6 items-stretch">
+          {/* Card 1: Net Radio Moderator / Conductor Card */}
+          <div className="col-span-1 md:col-span-1 lg:col-span-7 bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm p-5 sm:p-6 flex flex-col justify-between relative overflow-hidden group">
+            <div
+              className={`absolute top-0 right-0 w-32 h-32 rounded-bl-[100px] -mr-6 -mt-6 pointer-events-none transition-transform duration-300 group-hover:scale-110 ${
+                isRollCallActive ? 'bg-emerald-500/5' : 'bg-slate-500/5'
+              }`}
+            />
+
+            <div className="flex items-center justify-between gap-3 mb-4 relative z-10">
+              <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider flex items-center gap-1.5">
+                <RadioIcon className="w-3.5 h-3.5 text-[#004AC6]" />
+                Net Radio Moderator
+              </span>
+              {isRollCallActive ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold shadow-2xs">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600" />
+                  </span>
+                  Roll Call Active
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-[#505F76] border border-slate-200 text-xs font-semibold">
+                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                  Standby Mode
+                </span>
+              )}
+            </div>
+
+            <div className="relative z-10 flex items-center gap-4">
+              {isLoading ? (
+                <div className="flex items-center gap-3.5 w-full">
+                  <Skeleton variant="circular" className="w-12 h-12 shrink-0" />
+                  <div className="space-y-1.5 flex-1">
+                    <Skeleton variant="rounded" className="h-5 w-36" />
+                    <Skeleton variant="rounded" className="h-3.5 w-48" />
+                  </div>
+                </div>
+              ) : isRollCallActive && activeSession ? (
+                <>
+                  <OfficerAvatar
+                    officer={{
+                      name: activeSession.conducted_by_name || 'Monitoring Officer',
+                      avatarUrl: activeSession.conducted_by_avatar,
+                      avatarInitials: getInitials(activeSession.conducted_by_name || ''),
+                    }}
+                    size="lg"
+                    className="ring-2 ring-emerald-500/20 shadow-xs shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-base sm:text-lg font-bold text-[#1E293B] truncate">
+                      {activeSession.conducted_by_name || 'Monitoring Officer'}
+                    </h3>
+                    <div className="flex items-center gap-1.5 text-xs text-[#505F76] font-medium mt-1">
+                      <Clock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>
+                        Started at <strong className="text-[#1E293B] font-semibold">{formatRollCallStartTime(activeSession)}</strong>
+                      </span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center border border-slate-200 shrink-0">
+                    <Clock className="w-5 h-5 text-slate-400" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                      No Active Roll Call Session
+                    </h3>
+                    <p className="text-xs text-[#757680] mt-0.5">
+                      Ready to conduct VHF station check. Click &quot;Start Roll Call&quot; below to begin.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Card 2: Station Telemetry Summary Card */}
+          <div className="col-span-1 md:col-span-1 lg:col-span-5 bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm p-5 sm:p-6 flex flex-col justify-between relative overflow-hidden group">
+            <div className="absolute top-0 right-0 w-28 h-28 bg-[#004AC6]/5 rounded-bl-[100px] -mr-6 -mt-6 pointer-events-none transition-transform duration-300 group-hover:scale-110" />
+
+            <div className="flex justify-between items-start mb-3 relative z-10">
+              <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-[#004AC6]" />
+                Station Telemetry
+              </span>
+            </div>
+
+            <div className="relative z-10 grid grid-cols-3 gap-2 text-center pt-1">
+              <div className="bg-slate-50/80 rounded-2xl py-2 px-1 border border-slate-100">
+                <div className="text-xl sm:text-2xl font-bold text-[#004AC6]">
+                  {totalCount}
+                </div>
+                <div className="text-[10px] font-bold text-[#505F76] uppercase">
+                  LGU
+                </div>
+              </div>
+              <div className="bg-emerald-50/80 rounded-2xl py-2 px-1 border border-emerald-100">
+                <div className="text-xl sm:text-2xl font-bold text-emerald-700">
+                  {isRollCallActive ? presentCount : '--'}
+                </div>
+                <div className="text-[10px] font-bold text-emerald-700 uppercase">
+                  Present
+                </div>
+              </div>
+              <div className="bg-rose-50/80 rounded-2xl py-2 px-1 border border-rose-100">
+                <div className="text-xl sm:text-2xl font-bold text-rose-700">
+                  {isRollCallActive ? absentCount : '--'}
+                </div>
+                <div className="text-[10px] font-bold text-rose-700 uppercase">
+                  Absent
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1361,36 +1538,6 @@ export default function RollCallPage() {
                       : 'Start Roll Call'}
                   </span>
                 </button>
-              </div>
-
-              {/* Live Stats Widget Card */}
-              <div className="bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm p-6 grid grid-cols-3 gap-3 text-center">
-                <div>
-                  <div className="text-2xl sm:text-3xl font-bold text-[#004AC6] mb-0.5">
-                    {totalCount}
-                  </div>
-                  <div className="text-[11px] font-semibold text-[#757680] uppercase tracking-wider">
-                    Total LGUs
-                  </div>
-                </div>
-
-                <div className="border-l border-r border-slate-200">
-                  <div className="text-2xl sm:text-3xl font-bold text-emerald-600 mb-0.5">
-                    {isRollCallActive ? presentCount : '--'}
-                  </div>
-                  <div className="text-[11px] font-semibold text-[#757680] uppercase tracking-wider">
-                    Present
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-2xl sm:text-3xl font-bold text-rose-600 mb-0.5">
-                    {isRollCallActive ? absentCount : '--'}
-                  </div>
-                  <div className="text-[11px] font-semibold text-[#757680] uppercase tracking-wider">
-                    Absent
-                  </div>
-                </div>
               </div>
             </div>
 

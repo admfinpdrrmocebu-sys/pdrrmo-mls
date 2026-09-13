@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
+  Radio,
   FileText,
   Search,
   Filter,
@@ -36,12 +37,13 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
 import { PrimaryButton, SecondaryButton, ToggleButton } from '@/components/button';
-import { CustomDropdown, CustomDropdownOption, CheckboxInput, RichTextEditor } from '@/components/input';
+import { CustomDropdown, CustomDropdownOption, CheckboxInput, RichTextEditor, stripEmojis } from '@/components/input';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
 import { generateDailyLogsPDF } from '@/lib/pdf-generator';
 import { Skeleton } from '@/components/skeleton';
+import { format } from 'date-fns';
 
 // =============================================================================
 // INTERFACES & TYPES
@@ -88,6 +90,8 @@ export interface ActiveShiftRecord {
   status: 'active' | 'completed' | 'cancelled';
   lead_officer_id: string;
   lead_officer_name?: string;
+  lead_officer_avatar?: string | null;
+  lead_officer_role?: string | null;
   start_monitoring_details?: string | null;
   started_at: string;
   personnel: DutyPersonnel[];
@@ -131,6 +135,87 @@ function getInitials(name: string): string {
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
   return name.slice(0, 2).toUpperCase();
+}
+
+// Helper to format shift start time concisely
+function formatShiftStartTime(shift: ActiveShiftRecord | null): string {
+  if (!shift) return '';
+  if (shift.started_at) {
+    try {
+      const d = new Date(shift.started_at);
+      if (!isNaN(d.getTime())) {
+        return format(d, 'h:mm a');
+      }
+    } catch (_) {}
+  }
+  if (shift.start_time) {
+    const cleaned = shift.start_time.replace(/[^0-9:]/g, '');
+    if (cleaned.includes(':')) {
+      const [h, m] = cleaned.split(':').map(Number);
+      if (!isNaN(h) && !isNaN(m)) {
+        const dummy = new Date();
+        dummy.setHours(h, m, 0, 0);
+        return format(dummy, 'h:mm a');
+      }
+    }
+    return shift.start_time;
+  }
+  return 'Recently';
+}
+
+// OfficerAvatar component with profile image & fallback initials
+interface OfficerAvatarProps {
+  officer?: {
+    name?: string;
+    avatarUrl?: string | null;
+    avatarInitials?: string;
+  } | null;
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  fallbackBg?: string;
+  className?: string;
+}
+
+function OfficerAvatar({
+  officer,
+  size = 'md',
+  fallbackBg,
+  className = '',
+}: OfficerAvatarProps) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [officer?.avatarUrl]);
+
+  const sizeClasses = {
+    sm: 'w-8 h-8 text-[10px]',
+    md: 'w-10 h-10 text-xs',
+    lg: 'w-12 h-12 text-sm',
+    xl: 'w-14 h-14 text-base',
+  };
+
+  const hasImage = Boolean(officer?.avatarUrl && !imgError);
+  const initials = officer?.avatarInitials || getInitials(officer?.name || 'OP');
+  const defaultBg = fallbackBg || 'bg-[#004AC6] text-white';
+
+  if (hasImage) {
+    return (
+      <img
+        src={officer!.avatarUrl!}
+        alt={officer?.name || 'Officer Avatar'}
+        onError={() => setImgError(true)}
+        className={`${sizeClasses[size]} rounded-full object-cover border border-[#E2E8F0] shadow-xs shrink-0 ${className}`}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`${sizeClasses[size]} rounded-full font-bold flex items-center justify-center shadow-xs shrink-0 select-none ${defaultBg} ${className}`}
+    >
+      {initials}
+    </div>
+  );
 }
 
 // Helper to format timestamps to 24H military notation: "1430H"
@@ -177,7 +262,6 @@ export default function LogsPage() {
   const [isEndShiftModalOpen, setIsEndShiftModalOpen] = useState(false);
   const [selectedShiftSchedule, setSelectedShiftSchedule] = useState<string>('Day Shift (Alpha)');
   const [selectedPersonnelIds, setSelectedPersonnelIds] = useState<string[]>([]);
-  const [isFinalDailyShift, setIsFinalDailyShift] = useState(false);
   const [isIncidentReportOn, setIsIncidentReportOn] = useState(false);
   const [incidentDetails, setIncidentDetails] = useState('');
   const [shiftToast, setShiftToast] = useState<{ message: string; submessage?: string; type: 'start' | 'end' | 'info' } | null>(null);
@@ -425,7 +509,7 @@ export default function LogsPage() {
           lead_officer_id,
           start_monitoring_details,
           started_at,
-          lead_officer:profiles!shifts_lead_officer_id_fkey(id, full_name, position_title, role)
+          lead_officer:profiles!shifts_lead_officer_id_fkey(id, full_name, position_title, role, avatar_url)
         `)
         .eq('status', 'active')
         .order('started_at', { ascending: false })
@@ -464,15 +548,25 @@ export default function LogsPage() {
               }))
             : [];
 
-        let leadOfficerName = (shiftData.lead_officer as any)?.full_name;
-        if (!leadOfficerName && shiftData.lead_officer_id) {
+        const leadOfficerObj = shiftData.lead_officer as any;
+        let leadOfficerName = leadOfficerObj?.full_name;
+        let leadOfficerAvatar = leadOfficerObj?.avatar_url;
+        let leadOfficerRole = leadOfficerObj?.position_title || (leadOfficerObj?.role === 'admin' ? 'System Administrator' : 'Lead Officer');
+
+        if ((!leadOfficerName || !leadOfficerAvatar) && shiftData.lead_officer_id) {
           const { data: leadProf } = await supabase
             .from('profiles')
-            .select('full_name')
+            .select('full_name, avatar_url, position_title, role')
             .eq('id', shiftData.lead_officer_id)
             .maybeSingle();
-          if (leadProf?.full_name) {
-            leadOfficerName = leadProf.full_name;
+          if (leadProf) {
+            if (leadProf.full_name) leadOfficerName = leadProf.full_name;
+            if (leadProf.avatar_url) leadOfficerAvatar = leadProf.avatar_url;
+            if (leadProf.position_title) {
+              leadOfficerRole = leadProf.position_title;
+            } else if (leadProf.role === 'admin') {
+              leadOfficerRole = 'System Administrator';
+            }
           }
         }
 
@@ -485,6 +579,8 @@ export default function LogsPage() {
           status: shiftData.status,
           lead_officer_id: shiftData.lead_officer_id,
           lead_officer_name: leadOfficerName || 'Lead Officer',
+          lead_officer_avatar: leadOfficerAvatar || null,
+          lead_officer_role: leadOfficerRole || 'Shift Lead',
           start_monitoring_details: shiftData.start_monitoring_details,
           started_at: shiftData.started_at,
           personnel: mappedPersonnel,
@@ -759,9 +855,9 @@ export default function LogsPage() {
 
       const operatorName = profile?.full_name || 'Monitoring Officer';
       const operatorId = profile?.id || user?.id;
-      const titleToSave = formTitle.trim();
-      const reportTypeToSave = formReportType;
-      const descToSave = formDescription.trim();
+      const titleToSave = stripEmojis(formTitle.trim());
+      const reportTypeToSave = stripEmojis(formReportType);
+      const descToSave = stripEmojis(formDescription.trim());
       const dateToSave = formDate;
       const timeToSave = formTime.trim() || getMilitaryTime();
 
@@ -959,8 +1055,9 @@ export default function LogsPage() {
 
       // 3. Insert Start Shift record into public.shift_logs
       const personnelNames = assignedPersonnel.map((p) => `${p.name} (${p.role})`).join(', ');
-      const descriptionContent = startShiftMonitoringDetails.trim()
-        ? `<p><strong>Active personnel assigned on duty:</strong> ${personnelNames}</p><br /><p><strong>Monitoring Details & Briefing:</strong></p>${startShiftMonitoringDetails}`
+      const cleanBriefing = stripEmojis(startShiftMonitoringDetails.trim());
+      const descriptionContent = cleanBriefing
+        ? `<p><strong>Active personnel assigned on duty:</strong> ${personnelNames}</p><br /><p><strong>Monitoring Details & Briefing:</strong></p>${cleanBriefing}`
         : `<p><strong>Active personnel assigned on duty:</strong> ${personnelNames}</p>`;
 
       await supabase.from('shift_logs').insert({
@@ -1011,9 +1108,10 @@ export default function LogsPage() {
           ? activeShift.personnel.map((p) => `${p.name} (${p.role})`).join(', ')
           : availableOfficers.map((p) => `${p.name} (${p.role})`).join(', ');
 
+      const cleanIncidentDetails = stripEmojis(incidentDetails.trim());
       const situationText =
-        isIncidentReportOn && incidentDetails.trim()
-          ? `Incident Report: ${incidentDetails.trim()}`
+        isIncidentReportOn && cleanIncidentDetails
+          ? `Incident Report: ${cleanIncidentDetails}`
           : 'Situation Remain Normal';
 
       // 1. Update active public.shifts record to completed
@@ -1024,7 +1122,7 @@ export default function LogsPage() {
           end_time: timeFormatted,
           ended_at: now.toISOString(),
           end_shift_handover_status: situationText,
-          incident_report_details: isIncidentReportOn ? incidentDetails.trim() : null,
+          incident_report_details: isIncidentReportOn && cleanIncidentDetails ? cleanIncidentDetails : null,
           updated_at: now.toISOString(),
         })
         .eq('id', activeShift.id);
@@ -1050,10 +1148,10 @@ export default function LogsPage() {
         operator_name: leadOfficerName,
       });
 
-      // 3. Consolidated Daily Archiving:
-      // If this is the LAST shift of the operational cycle (or user checked "Finalize Daily Archive"),
-      // combine ALL shifts of the day (Start Shift, Mid Shift, to Last Shift) into one unified official PDF archive!
-      if (isFinalDailyShift) {
+      // 3. Automatic Operational Shift & Daily Archiving:
+      // Ending shift (End of monitoring duty) automatically compiles, generates, hashes, and stores the official PDF archive.
+      let archiveFilename = `PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-DAILY.pdf`;
+      try {
         // Query all shifts from this operational date
         const { data: dayShifts } = await supabase
           .from('shifts')
@@ -1138,11 +1236,12 @@ export default function LogsPage() {
           operator: l.operator_name,
         }));
 
-        const archiveFilename = `PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-DAILY.pdf`;
+        const safeShiftLabel = (activeShift.shift_label || 'SHIFT').replace(/[^a-zA-Z0-9]/g, '-').toUpperCase();
+        archiveFilename = `PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-${safeShiftLabel}.pdf`;
 
         const consolidatedSnapshot = {
           dailyReportDate: dateFormatted,
-          isDailyCombined: true,
+          isDailyCombined: compiledShifts.length > 1,
           totalShiftsCount: compiledShifts.length,
           shifts: compiledShifts,
           logs: allConsolidatedLogs,
@@ -1167,7 +1266,7 @@ export default function LogsPage() {
           }
         }
 
-        // 1. Generate compressed official 24-Hour Daily Operations PDF with operating user signature
+        // 1. Generate compressed official Daily Operations PDF with operating user signature
         const { blob: pdfBlob, sizeBytes: pdfSize } = await generateDailyLogsPDF({
           filename: archiveFilename,
           dailyReportDate: dateFormatted,
@@ -1216,20 +1315,22 @@ export default function LogsPage() {
           lead_officer_id: activeShift.lead_officer_id || leadOfficerId,
           lead_officer_name: leadOfficerName,
           lead_officer_role: leadOfficerRole,
-          shift_label: `24-Hour Daily Operations (${shiftNames || 'Alpha, Bravo, Charlie'})`,
-          shift_hours: `06:00H - ${timeFormatted} (24H Daily Cycle)`,
+          shift_label: activeShift.shift_label || (compiledShifts.length > 1 ? `Daily Operations (${shiftNames})` : 'Operations Shift'),
+          shift_hours: `${activeShift.start_time || '08:00H'} - ${timeFormatted}`,
           item_count: allConsolidatedLogs.length,
           file_size_bytes: pdfSize,
           storage_path: storagePath,
           file_url: fileUrl,
           file_hash: fileHash,
-          summary: `Consolidated 24-Hour Daily Operations Archive combining all ${compiledShifts.length} shifts (${shiftNames}). Total operational logs archived: ${allConsolidatedLogs.length}. Final handover status: ${situationText}.`,
+          summary: `Official Operations Shift Archive for ${activeShift.shift_label || 'Shift'} (${activeShift.start_time || '08:00H'} - ${timeFormatted}). Total operational logs archived: ${allConsolidatedLogs.length}. Handover status: ${situationText}.`,
           status: 'Verified',
           snapshot_data: consolidatedSnapshot,
           created_by: leadOfficerId,
         });
 
         broadcastSync('archives_updated');
+      } catch (archErr) {
+        console.error('Archival process notice:', archErr);
       }
 
       // Refresh states
@@ -1239,12 +1340,8 @@ export default function LogsPage() {
 
       setIsEndShiftModalOpen(false);
       setShiftToast({
-        message: isFinalDailyShift
-          ? '24-Hour Daily Archive Compiled & Saved'
-          : 'End of Monitoring Shift Logged',
-        submessage: isFinalDailyShift
-          ? `All shifts (Start, Mid, Last) combined into PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-DAILY.pdf and uploaded to Archives.`
-          : `Shift completed. Handover status: ${situationText}. Next shift can now start duty.`,
+        message: 'End of Monitoring Duty Logged & Archived',
+        submessage: `Shift completed. Official certified PDF (${archiveFilename}) uploaded to Archives with SHA-256 integrity hash.`,
         type: 'end',
       });
     } catch (err: any) {
@@ -1266,11 +1363,12 @@ export default function LogsPage() {
   // Save New Category to public.report_types
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCategoryName.trim() || isSubmitting) return;
+    const cleanCatName = stripEmojis(newCategoryName.trim());
+    if (!cleanCatName || isSubmitting) return;
 
     try {
       setIsSubmitting(true);
-      const trimmedName = newCategoryName.trim();
+      const trimmedName = cleanCatName;
       const code = `RPT-${trimmedName.slice(0, 3).toUpperCase()}-${Date.now().toString().slice(-4)}`;
 
       const { error } = await supabase.from('report_types').insert({
@@ -1364,63 +1462,130 @@ export default function LogsPage() {
       subtitle="Track, audit, and log real-time telemetry events and shift handovers."
     >
       <div className="space-y-8">
+        {/* Top Header Title & Subtitle */}
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#1E293B]">
+            Operational Log Records
+          </h1>
+          <p className="text-sm sm:text-base text-[#505F76] mt-1 font-medium max-w-2xl">
+            Chronological real-time log stream of disaster events, weather disturbance warnings, and operational shift duties.
+          </p>
+        </div>
+
         {/* ========================================================================= */}
-        {/* 1. TOP STATS BAR */}
+        {/* 1. TOP STATS & CURRENT SHIFT SUPERVISOR CARDS */}
         {/* ========================================================================= */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-stretch">
-          {/* Header Info Banner */}
-          <div className="col-span-1 md:col-span-8 flex flex-col justify-center">
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-6 items-stretch">
+          {/* Shift Supervisor / Started By Card */}
+          <div className="col-span-1 md:col-span-1 lg:col-span-7 bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm p-5 sm:p-6 flex flex-col justify-between relative overflow-hidden group">
+            <div
+              className={`absolute top-0 right-0 w-32 h-32 rounded-bl-[100px] -mr-6 -mt-6 pointer-events-none transition-transform duration-300 group-hover:scale-110 ${
+                isShiftActive ? 'bg-emerald-500/5' : 'bg-slate-500/5'
+              }`}
+            />
+
+            <div className="flex items-center justify-between gap-3 mb-4 relative z-10">
+              <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider flex items-center gap-1.5">
+                <Radio className="w-3.5 h-3.5 text-[#004AC6]" />
+                Current Shift Duty
+              </span>
               {isShiftActive ? (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold shadow-2xs">
                   <span className="relative flex h-2 w-2">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600" />
                   </span>
-                  Started by {activeShift.lead_officer_name || 'Lead Officer'}
+                  Active Shift
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-[#505F76] border border-slate-200 text-xs font-semibold">
-                  <Clock className="w-3.5 h-3.5" />
+                  <Clock className="w-3.5 h-3.5 text-slate-400" />
                   Shift Inactive
                 </span>
               )}
-
-              {/* Schedule Info Badge */}
-              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-50 border border-slate-200/80 px-2 py-0.5 rounded-full">
-                <Info className="w-3 h-3 text-[#004AC6]" />
-                Assigned: <span className="font-semibold text-slate-700">{profile?.default_shift || 'Day Shift (Alpha)'}</span>
-              </span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#1E293B]">
-              Operational Log Records
-            </h1>
-            <p className="text-sm sm:text-base text-[#505F76] mt-1 font-medium max-w-2xl">
-              Chronological real-time log stream of disaster events, weather disturbance warnings, and operational shift duties.
-            </p>
+
+            <div className="relative z-10 flex items-center gap-4">
+              {isLoading ? (
+                <div className="flex items-center gap-3.5 w-full">
+                  <Skeleton variant="circular" className="w-12 h-12 shrink-0" />
+                  <div className="space-y-1.5 flex-1">
+                    <Skeleton variant="rounded" className="h-5 w-36" />
+                    <Skeleton variant="rounded" className="h-3.5 w-48" />
+                  </div>
+                </div>
+              ) : isShiftActive && activeShift ? (
+                <>
+                  <OfficerAvatar
+                    officer={{
+                      name: activeShift.lead_officer_name || 'Lead Officer',
+                      avatarUrl: activeShift.lead_officer_avatar,
+                      avatarInitials: getInitials(activeShift.lead_officer_name || ''),
+                    }}
+                    size="lg"
+                    className="ring-2 ring-emerald-500/20 shadow-xs shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-base sm:text-lg font-bold text-[#1E293B] truncate">
+                        {activeShift.lead_officer_name || 'Lead Officer'}
+                      </h3>
+                      {activeShift.shift_label && (
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200 shadow-2xs shrink-0">
+                          {activeShift.shift_label}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-[#505F76] font-medium mt-1">
+                      <Clock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>
+                        Started at <strong className="text-[#1E293B] font-semibold">{formatShiftStartTime(activeShift)}</strong>
+                      </span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center border border-slate-200 shrink-0">
+                    <Clock className="w-5 h-5 text-slate-400" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                      No Operational Shift Active
+                    </h3>
+                    <p className="text-xs text-[#757680] mt-0.5">
+                      Duty session is currently inactive. Click &quot;Start Shift&quot; below to begin.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Summary Stat Card */}
-          <div className="col-span-1 md:col-span-4 bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm p-6 sm:p-7 flex flex-col justify-between relative overflow-hidden group">
+          <div className="col-span-1 md:col-span-1 lg:col-span-5 bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm p-5 sm:p-6 flex flex-col justify-between relative overflow-hidden group">
             <div className="absolute top-0 right-0 w-28 h-28 bg-[#004AC6]/5 rounded-bl-[100px] -mr-6 -mt-6 pointer-events-none transition-transform duration-300 group-hover:scale-110" />
 
             <div className="flex justify-between items-start mb-3 relative z-10">
-              <span className="text-xs sm:text-sm font-semibold text-[#505F76] uppercase tracking-wide">
+              <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider flex items-center gap-1.5">
+                <BarChart3 className="w-3.5 h-3.5 text-[#004AC6]" />
                 Total Logs Recorded
               </span>
-              <div className="w-9 h-9 rounded-full bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/15">
+              <div className="w-8 h-8 rounded-full bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/15">
                 <BarChart3 className="w-4 h-4" />
               </div>
             </div>
 
-            <div className="relative z-10 flex items-baseline gap-3">
-              {isLoading ? (
-                <Skeleton variant="rounded" className="h-9 w-20" />
-              ) : (
-                <span className="text-3xl sm:text-4xl font-bold tracking-tight text-[#1E293B]">
-                  {logs.length}
-                </span>
-              )}
+            <div className="relative z-10 flex items-baseline justify-between gap-3">
+              <div>
+                {isLoading ? (
+                  <Skeleton variant="rounded" className="h-9 w-20" />
+                ) : (
+                  <span className="text-3xl sm:text-4xl font-bold tracking-tight text-[#1E293B]">
+                    {logs.length}
+                  </span>
+                )}
+              </div>
               <div className="flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200/60 px-2.5 py-0.5 rounded-full text-xs font-semibold">
                 <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
                 <span>Realtime Active</span>
@@ -2102,37 +2267,26 @@ export default function LogsPage() {
                     </div>
                   </div>
 
-                  {/* Section 2: Daily Archive Compilation Toggle */}
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4.5 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-blue-50 text-[#004AC6] flex items-center justify-center border border-blue-100 shrink-0">
-                          <ArchiveIcon className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <h4 className="text-sm font-bold text-[#1E293B]">Consolidated Daily Archive</h4>
-                          <p className="text-xs text-[#757680] mt-0.5">
-                            {isFinalDailyShift
-                              ? 'Final shift of the day: will combine all shifts (Start, Mid, Last) into one certified PDF archive.'
-                              : 'Interim shift: logs handover to database. Full daily archive compiles after the last shift.'}
-                          </p>
-                        </div>
+                  {/* Section 2: Automatic Official Archive Notice */}
+                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4.5 space-y-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-blue-50 text-[#004AC6] flex items-center justify-center border border-blue-100 shrink-0">
+                        <ArchiveIcon className="w-4 h-4" />
                       </div>
-
-                      <ToggleButton
-                        checked={isFinalDailyShift}
-                        onChange={(checked) => setIsFinalDailyShift(checked)}
-                      />
+                      <div>
+                        <h4 className="text-sm font-bold text-[#1E293B]">Automatic Official Archive</h4>
+                        <p className="text-xs text-[#757680] mt-0.5">
+                          Ending this shift automatically compiles, certifies with SHA-256 integrity hash, and stores the official operational PDF in <strong>Archives</strong>.
+                        </p>
+                      </div>
                     </div>
 
-                    {isFinalDailyShift && (
-                      <div className="p-3 bg-blue-50/70 border border-blue-200/80 rounded-xl text-xs text-[#004AC6] flex items-center gap-2">
-                        <Sparkles className="w-4 h-4 shrink-0 text-[#004AC6]" />
-                        <span>
-                          <strong>Final Shift Archival:</strong> All shifts & logs from today will be consolidated, hashed (SHA-256), and uploaded to the <code>archive-documents</code> bucket.
-                        </span>
-                      </div>
-                    )}
+                    <div className="p-2.5 bg-blue-50/70 border border-blue-200/80 rounded-xl text-xs text-[#004AC6] flex items-center gap-2">
+                      <Sparkles className="w-3.5 h-3.5 shrink-0 text-[#004AC6]" />
+                      <span>
+                        <strong>Auto-Archiving Enabled:</strong> Operational shift logs and duty handover details will be automatically archived into the <code>archive-documents</code> bucket.
+                      </span>
+                    </div>
                   </div>
 
                   {/* Section 3: Incident Report Toggle */}
@@ -2189,7 +2343,7 @@ export default function LogsPage() {
                             rows={4}
                             required={isIncidentReportOn}
                             value={incidentDetails}
-                            onChange={(e) => setIncidentDetails(e.target.value)}
+                            onChange={(e) => setIncidentDetails(stripEmojis(e.target.value))}
                             placeholder="Enter details of incidents encountered, dispatch responses, ongoing advisories, or critical notes for the incoming shift..."
                             className="w-full bg-white border border-rose-200 rounded-2xl p-3.5 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-500/15 transition-all resize-none leading-relaxed"
                           />
@@ -2282,7 +2436,7 @@ export default function LogsPage() {
                       type="text"
                       required
                       value={formTitle}
-                      onChange={(e) => setFormTitle(e.target.value)}
+                      onChange={(e) => setFormTitle(stripEmojis(e.target.value))}
                       placeholder="e.g., Seismic Activity: Magnitude 6.2 Detected"
                       className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full py-2.5 px-4 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
                     />
@@ -2345,7 +2499,7 @@ export default function LogsPage() {
                     <textarea
                       rows={4}
                       value={formDescription}
-                      onChange={(e) => setFormDescription(e.target.value)}
+                      onChange={(e) => setFormDescription(stripEmojis(e.target.value))}
                       placeholder="Provide a detailed operational summary of the event..."
                       className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all resize-none"
                     />
@@ -2630,7 +2784,7 @@ export default function LogsPage() {
                     type="text"
                     required
                     value={newCategoryName}
-                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    onChange={(e) => setNewCategoryName(stripEmojis(e.target.value))}
                     placeholder="e.g., Hazardous Chemical Spill"
                     className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full py-2.5 px-4 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
                   />

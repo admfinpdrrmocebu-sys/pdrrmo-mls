@@ -90,6 +90,28 @@ export interface DutyRosterAssignmentRecord {
   updated_at?: string;
 }
 
+export interface ActiveShiftRecord {
+  id: string;
+  shift_label: string;
+  shift_date: string;
+  start_time: string;
+  end_time?: string | null;
+  status: 'active' | 'completed' | 'cancelled';
+  lead_officer_id: string;
+  start_monitoring_details?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+}
+
+export interface ShiftDutyPersonnelRecord {
+  id?: string;
+  shift_id: string;
+  profile_id: string;
+  role_in_shift?: string | null;
+  is_lead: boolean;
+  present_at_end: boolean;
+}
+
 function getInitials(name: string): string {
   if (!name) return 'OP';
   const parts = name.trim().split(/\s+/);
@@ -169,6 +191,64 @@ function getLiveShiftSchedule(schedules: ShiftScheduleItem[]): ShiftScheduleItem
 }
 
 // =============================================================================
+// =============================================================================
+// OFFICER AVATAR COMPONENT WITH REAL PROFILE PICTURE & INITIALS FALLBACK
+// =============================================================================
+interface OfficerAvatarProps {
+  officer?: {
+    name?: string;
+    avatarUrl?: string | null;
+    avatarInitials?: string;
+    userRole?: string;
+  } | null;
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  fallbackBg?: string;
+  className?: string;
+}
+
+function OfficerAvatar({
+  officer,
+  size = 'md',
+  fallbackBg,
+  className = '',
+}: OfficerAvatarProps) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [officer?.avatarUrl]);
+
+  const sizeClasses = {
+    sm: 'w-8 h-8 text-[10px]',
+    md: 'w-10 h-10 text-xs',
+    lg: 'w-12 h-12 text-sm',
+    xl: 'w-14 h-14 text-base',
+  };
+
+  const hasImage = Boolean(officer?.avatarUrl && !imgError);
+  const initials = officer?.avatarInitials || getInitials(officer?.name || 'OP');
+  const defaultBg = fallbackBg || 'bg-[#004AC6] text-white';
+
+  if (hasImage) {
+    return (
+      <img
+        src={officer!.avatarUrl!}
+        alt={officer?.name || 'Officer Avatar'}
+        onError={() => setImgError(true)}
+        className={`${sizeClasses[size]} rounded-full object-cover border border-[#E2E8F0] shadow-xs shrink-0 ${className}`}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`${sizeClasses[size]} rounded-full font-bold flex items-center justify-center shadow-xs shrink-0 select-none ${defaultBg} ${className}`}
+    >
+      {initials}
+    </div>
+  );
+}
+
 // COMPONENT: SHIFT SCHEDULE OPERATIONS SCREEN (100% DYNAMIC DATABASE DATA)
 // =============================================================================
 
@@ -181,17 +261,21 @@ export default function ShiftSchedulePage() {
 
   // Loading & Sync States
   const [isLoading, setIsLoading] = useState(true);
+  const [isSavingAttendance, setIsSavingAttendance] = useState(false);
 
   // Dynamic Database Data
   const [profiles, setProfiles] = useState<OfficerMember[]>([]);
   const [shiftSchedules, setShiftSchedules] = useState<ShiftScheduleItem[]>([]);
   const [dbAssignments, setDbAssignments] = useState<DutyRosterAssignmentRecord[]>([]);
+  const [activeShift, setActiveShift] = useState<ActiveShiftRecord | null>(null);
+  const [shiftDutyPersonnel, setShiftDutyPersonnel] = useState<ShiftDutyPersonnelRecord[]>([]);
 
   // Role Filter State
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('ALL');
 
   // Attendance State (Tracks absent officers for the active shift)
   const [absentOfficerIds, setAbsentOfficerIds] = useState<string[]>([]);
+  const [tempAbsentOfficerIds, setTempAbsentOfficerIds] = useState<string[]>([]);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
 
   // "My Schedule" Calendar State
@@ -206,7 +290,7 @@ export default function ShiftSchedulePage() {
   };
 
   // ===========================================================================
-  // DATA FETCHING (SUPABASE)
+  // DATA FETCHING (SUPABASE 100% DYNAMIC)
   // ===========================================================================
   const fetchShiftData = useCallback(async () => {
     try {
@@ -223,19 +307,42 @@ export default function ShiftSchedulePage() {
       }
 
       if (profilesData && profilesData.length > 0) {
+        let deactList: string[] = [];
+        let delList: string[] = [];
+        let editedMap: Record<string, any> = {};
+        try {
+          deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
+          delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
+          editedMap = JSON.parse(localStorage.getItem('pdrrmo_edited_users') || '{}');
+        } catch (e) {}
+
         const mappedProfiles: OfficerMember[] = profilesData
-          .filter((p) => p.is_active !== false)
-          .map((p) => ({
-            id: p.id,
-            name: p.full_name || 'Duty Officer',
-            role: p.position_title || p.role || 'Duty Responder',
-            userRole: p.role?.toLowerCase() || 'staff',
-            badgeNumber: `OPC-${p.id.slice(0, 4).toUpperCase()}`,
-            avatarInitials: getInitials(p.full_name || 'OP'),
-            avatarUrl: p.avatar_url,
-            station: 'DOC Command Center',
-            defaultShift: p.default_shift || '',
-          }));
+          .filter((p) => {
+            const isDel = delList.includes(p.id) || (p.email && delList.includes(p.email));
+            const isDeact = deactList.includes(p.id) || (p.email && deactList.includes(p.email));
+            const userEdit = editedMap[p.id] || (p.email ? editedMap[p.email.toLowerCase()] : null);
+            const isEditDeact = userEdit?.status === 'Inactive';
+            return !isDel && !isDeact && !isEditDeact && p.is_active !== false;
+          })
+          .map((p) => {
+            const userEdit = editedMap[p.id] || (p.email ? editedMap[p.email.toLowerCase()] : null) || {};
+            const finalName = userEdit.name || p.full_name || 'Duty Officer';
+            const finalRole = userEdit.positionTitle || p.position_title || p.role || 'Duty Responder';
+            const finalUserRole = (userEdit.role || p.role || 'staff').toLowerCase();
+            const finalShift = userEdit.shift || p.default_shift || '';
+
+            return {
+              id: p.id,
+              name: finalName,
+              role: finalRole,
+              userRole: finalUserRole,
+              badgeNumber: `OPC-${p.id.slice(0, 4).toUpperCase()}`,
+              avatarInitials: getInitials(finalName || 'OP'),
+              avatarUrl: userEdit.avatarUrl !== undefined ? userEdit.avatarUrl : p.avatar_url,
+              station: 'DOC Command Center',
+              defaultShift: finalShift,
+            };
+          });
         setProfiles(mappedProfiles);
       } else {
         setProfiles([]);
@@ -285,6 +392,54 @@ export default function ShiftSchedulePage() {
       } else {
         setDbAssignments([]);
       }
+
+      // 4. Fetch Active Operational Shift from public.shifts (status = 'active')
+      const { data: activeShiftData, error: shiftError } = await supabase
+        .from('shifts')
+        .select('*')
+        .eq('status', 'active')
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (shiftError) {
+        console.warn('Active shift query notice:', shiftError.message);
+      }
+
+      if (activeShiftData) {
+        setActiveShift(activeShiftData as ActiveShiftRecord);
+
+        // Fetch linked duty personnel for active shift
+        const { data: personnelData, error: personnelError } = await supabase
+          .from('shift_duty_personnel')
+          .select('*')
+          .eq('shift_id', activeShiftData.id);
+
+        if (personnelError) {
+          console.warn('Shift duty personnel query notice:', personnelError.message);
+        }
+
+        if (personnelData && personnelData.length > 0) {
+          setShiftDutyPersonnel(personnelData as ShiftDutyPersonnelRecord[]);
+          const absentIds = personnelData
+            .filter((p) => p.present_at_end === false)
+            .map((p) => p.profile_id);
+          setAbsentOfficerIds(absentIds);
+        } else {
+          setShiftDutyPersonnel([]);
+          const rosterAbsent = (assignData || [])
+            .filter((a: any) => a.duty_date === todayStr && a.notes && a.notes.toLowerCase().includes('absent'))
+            .map((a: any) => a.profile_id);
+          setAbsentOfficerIds(rosterAbsent);
+        }
+      } else {
+        setActiveShift(null);
+        setShiftDutyPersonnel([]);
+        const rosterAbsent = (assignData || [])
+          .filter((a: any) => a.duty_date === todayStr && a.notes && a.notes.toLowerCase().includes('absent'))
+          .map((a: any) => a.profile_id);
+        setAbsentOfficerIds(rosterAbsent);
+      }
     } catch (err) {
       console.error('Error fetching dynamic shift operations data:', err);
     } finally {
@@ -297,10 +452,24 @@ export default function ShiftSchedulePage() {
     fetchShiftData();
   }, [fetchShiftData]);
 
-  // Realtime subscription for duty_roster_assignments and shift_schedules
+  // Realtime subscription for shifts, shift_duty_personnel, duty_roster_assignments, shift_schedules, profiles
   useEffect(() => {
     const channel = supabase
       .channel('shift_operations_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shifts' },
+        () => {
+          fetchShiftData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shift_duty_personnel' },
+        () => {
+          fetchShiftData();
+        }
+      )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'duty_roster_assignments' },
@@ -324,8 +493,28 @@ export default function ShiftSchedulePage() {
       )
       .subscribe();
 
+    // Cross-tab broadcast & localStorage sync
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'pdrrmo_shift_sync') {
+        fetchShiftData();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('pdrrmo_shift_sync');
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'shift_state_updated') {
+          fetchShiftData();
+        }
+      };
+    } catch (e) {}
+
     return () => {
       supabase.removeChannel(channel);
+      window.removeEventListener('storage', handleStorageChange);
+      if (bc) bc.close();
     };
   }, [fetchShiftData]);
 
@@ -420,15 +609,175 @@ export default function ShiftSchedulePage() {
     return todayRestAssignments.map((a) => getOfficerById(a.profile_id));
   }, [todayRestAssignments, getOfficerById]);
 
-  // Toggle officer attendance
-  const handleSetPresent = (officerId: string) => {
-    setAbsentOfficerIds((prev) => prev.filter((id) => id !== officerId));
-    showToast('Officer marked present for duty');
+  // Open Edit Attendance Modal with cloned current state
+  const handleOpenEditModal = () => {
+    setTempAbsentOfficerIds([...absentOfficerIds]);
+    setIsEditModalOpen(true);
   };
 
-  const handleSetAbsent = (officerId: string) => {
-    setAbsentOfficerIds((prev) => (prev.includes(officerId) ? prev : [...prev, officerId]));
-    showToast('Officer marked absent / on leave');
+  // Toggle officer attendance directly on card (Mark as Present)
+  const handleSetPresent = async (officerId: string) => {
+    const newAbsentIds = absentOfficerIds.filter((id) => id !== officerId);
+    setAbsentOfficerIds(newAbsentIds);
+
+    try {
+      if (activeShift) {
+        await supabase
+          .from('shift_duty_personnel')
+          .update({ present_at_end: true })
+          .eq('shift_id', activeShift.id)
+          .eq('profile_id', officerId);
+      }
+
+      await supabase
+        .from('duty_roster_assignments')
+        .update({ notes: null, updated_at: new Date().toISOString() })
+        .eq('profile_id', officerId)
+        .eq('duty_date', todayKey);
+
+      showToast('Officer marked present for duty');
+
+      // Sync across tabs
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_shift_sync');
+          bc.postMessage({ type: 'shift_state_updated', timestamp: Date.now() });
+          bc.close();
+        } catch (e) {}
+        localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
+      }
+    } catch (err) {
+      console.error('Error updating officer attendance in database:', err);
+    }
+  };
+
+  // Toggle officer attendance directly on card (Mark as Absent)
+  const handleSetAbsent = async (officerId: string) => {
+    const newAbsentIds = absentOfficerIds.includes(officerId)
+      ? absentOfficerIds
+      : [...absentOfficerIds, officerId];
+    setAbsentOfficerIds(newAbsentIds);
+
+    try {
+      if (activeShift) {
+        await supabase
+          .from('shift_duty_personnel')
+          .update({ present_at_end: false })
+          .eq('shift_id', activeShift.id)
+          .eq('profile_id', officerId);
+      }
+
+      await supabase
+        .from('duty_roster_assignments')
+        .update({ notes: 'Reported Absent / Leave', updated_at: new Date().toISOString() })
+        .eq('profile_id', officerId)
+        .eq('duty_date', todayKey);
+
+      showToast('Officer marked absent / on leave');
+
+      // Sync across tabs
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_shift_sync');
+          bc.postMessage({ type: 'shift_state_updated', timestamp: Date.now() });
+          bc.close();
+        } catch (e) {}
+        localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
+      }
+    } catch (err) {
+      console.error('Error updating officer attendance in database:', err);
+    }
+  };
+
+  // Save Modal Attendance Changes to Database
+  const handleSaveAttendanceModal = async (targetAbsentIds: string[]) => {
+    try {
+      setIsSavingAttendance(true);
+      let targetShift = activeShift;
+
+      // 1. If no active operational shift exists in public.shifts, create one
+      if (!targetShift) {
+        const leadOfficer = liveShiftOfficers.find((o) => o.isLead) || liveShiftOfficers[0] || profiles[0];
+        const leadOfficerId = leadOfficer?.id || profile?.id;
+        const now = new Date();
+        const timeFormatted = format(now, 'HH:mm');
+
+        const { data: newShift, error: createShiftErr } = await supabase
+          .from('shifts')
+          .insert({
+            shift_label: liveShiftSchedule?.name || 'Day Shift (Alpha)',
+            shift_date: todayKey,
+            start_time: liveShiftSchedule?.startTime || timeFormatted,
+            end_time: liveShiftSchedule?.endTime || '16:00',
+            status: 'active',
+            lead_officer_id: leadOfficerId,
+            start_monitoring_details: 'Operational attendance recorded via Shift Console',
+            started_at: now.toISOString(),
+          })
+          .select()
+          .single();
+
+        if (createShiftErr || !newShift) {
+          throw new Error(createShiftErr?.message || 'Failed to initialize active shift in database');
+        }
+        targetShift = newShift as ActiveShiftRecord;
+        setActiveShift(newShift as ActiveShiftRecord);
+      }
+
+      // 2. Upsert assigned personnel into public.shift_duty_personnel
+      if (liveShiftOfficers.length > 0 && targetShift) {
+        const dutyPersonnelRows = liveShiftOfficers.map((officer) => ({
+          shift_id: targetShift!.id,
+          profile_id: officer.id,
+          role_in_shift: officer.role || 'Duty Officer',
+          is_lead: !!officer.isLead,
+          present_at_end: !targetAbsentIds.includes(officer.id),
+        }));
+
+        const { error: upsertErr } = await supabase
+          .from('shift_duty_personnel')
+          .upsert(dutyPersonnelRows, { onConflict: 'shift_id,profile_id' });
+
+        if (upsertErr) {
+          console.warn('Notice updating shift duty personnel:', upsertErr.message);
+        }
+      }
+
+      // 3. Update duty_roster_assignments notes for today
+      for (const officer of liveShiftOfficers) {
+        const isAbsent = targetAbsentIds.includes(officer.id);
+        await supabase
+          .from('duty_roster_assignments')
+          .update({
+            notes: isAbsent ? 'Reported Absent / On Leave' : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('profile_id', officer.id)
+          .eq('duty_date', todayKey);
+      }
+
+      // Apply to local state
+      setAbsentOfficerIds(targetAbsentIds);
+      setIsEditModalOpen(false);
+      showToast('Attendance successfully updated and synchronized to database');
+
+      // Sync across tabs
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_shift_sync');
+          bc.postMessage({ type: 'shift_state_updated', timestamp: Date.now() });
+          bc.close();
+        } catch (e) {}
+        localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
+      }
+
+      fetchShiftData();
+    } catch (err: any) {
+      console.error('Error saving attendance to database:', err);
+      showToast(`Error saving attendance: ${err.message || 'Database error'}`);
+    } finally {
+      setIsSavingAttendance(false);
+    }
   };
 
   // Currently logged-in officer profile for My Schedule view
@@ -710,9 +1059,14 @@ export default function ShiftSchedulePage() {
                     <ShieldCheck className="w-5 h-5" />
                   </div>
                   <div>
-                    <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
-                      Present On-Duty Personnel (Right Now)
-                    </h2>
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
+                        Present On-Duty Personnel
+                      </h2>
+                      <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-2xs font-mono">
+                        {isLoading ? '...' : filteredPresentOfficers.length}
+                      </span>
+                    </div>
                     {/* Shift Name Tag placed directly below the title */}
                     <div className="flex items-center gap-2 flex-wrap mt-1">
                       {liveShiftSchedule && (
@@ -757,7 +1111,7 @@ export default function ShiftSchedulePage() {
                       type="button"
                       size="sm"
                       pill
-                      onClick={() => setIsEditModalOpen(true)}
+                      onClick={handleOpenEditModal}
                       leftIcon={<Edit2 className="w-3.5 h-3.5 text-[#004AC6]" />}
                     >
                       Edit Attendance
@@ -779,9 +1133,7 @@ export default function ShiftSchedulePage() {
                         className="p-4 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-xs space-y-3"
                       >
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-[#004AC6] text-white font-bold flex items-center justify-center text-xs shadow-xs shrink-0">
-                            {member.avatarInitials}
-                          </div>
+                          <OfficerAvatar officer={member} size="md" />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5">
                               <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
@@ -849,9 +1201,14 @@ export default function ShiftSchedulePage() {
                       <UserX className="w-4 h-4" />
                     </div>
                     <div>
-                      <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
-                        Absent Personnel Today ({filteredAbsentOfficers.length})
-                      </h3>
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                          Absent Personnel Today
+                        </h3>
+                        <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 shadow-2xs font-mono">
+                          {filteredAbsentOfficers.length}
+                        </span>
+                      </div>
                       <p className="text-xs text-[#757680]">
                         Personnel assigned to duty but reported absent or on leave today
                       </p>
@@ -869,9 +1226,7 @@ export default function ShiftSchedulePage() {
                       className="p-4 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-xs space-y-3"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-rose-600 text-white font-bold flex items-center justify-center text-xs shadow-xs shrink-0">
-                          {person.avatarInitials}
-                        </div>
+                        <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
                         <div className="min-w-0 flex-1">
                           <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
                             {person.name}
@@ -913,9 +1268,14 @@ export default function ShiftSchedulePage() {
                     <Coffee className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
-                      Rest Day Personnel Today ({isLoading ? '...' : todayRestPersonnel.length})
-                    </h3>
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                        Rest Day Personnel Today
+                      </h3>
+                      <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs font-mono">
+                        {isLoading ? '...' : todayRestPersonnel.length}
+                      </span>
+                    </div>
                     <p className="text-xs text-[#757680]">
                       Personnel scheduled for mandatory rest day / scheduled off today
                     </p>
@@ -951,9 +1311,7 @@ export default function ShiftSchedulePage() {
                         key={person.id}
                         className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3"
                       >
-                        <div className="w-9 h-9 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-xs shrink-0">
-                          {person.avatarInitials}
-                        </div>
+                        <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
                         <div className="min-w-0 flex-1">
                           <p className="text-xs font-bold text-[#1E293B] truncate">{person.name}</p>
                           <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
@@ -997,9 +1355,7 @@ export default function ShiftSchedulePage() {
                 </div>
               ) : (
                 <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-full bg-[#004AC6] text-white flex items-center justify-center text-base font-bold shadow-sm shrink-0">
-                    {currentOfficer?.avatarInitials || 'ME'}
-                  </div>
+                  <OfficerAvatar officer={currentOfficer} size="lg" />
                   <div>
                     <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
                       {currentOfficer?.name || 'Personal Schedule'}
@@ -1360,7 +1716,7 @@ export default function ShiftSchedulePage() {
                 </div>
 
                 {liveShiftOfficers.map((officer) => {
-                  const isAbsent = absentOfficerIds.includes(officer.id);
+                  const isAbsent = tempAbsentOfficerIds.includes(officer.id);
                   const badge = getRoleBadge(officer.userRole);
 
                   return (
@@ -1373,13 +1729,11 @@ export default function ShiftSchedulePage() {
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <div
-                          className={`w-10 h-10 rounded-full text-white font-bold flex items-center justify-center text-xs shadow-xs shrink-0 ${
-                            isAbsent ? 'bg-rose-600' : 'bg-[#004AC6]'
-                          }`}
-                        >
-                          {officer.avatarInitials}
-                        </div>
+                        <OfficerAvatar
+                          officer={officer}
+                          size="md"
+                          fallbackBg={isAbsent ? 'bg-rose-600 text-white' : 'bg-[#004AC6] text-white'}
+                        />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
@@ -1404,7 +1758,9 @@ export default function ShiftSchedulePage() {
                       <div className="bg-[#F1F5F9] p-1 rounded-xl flex items-center gap-1 border border-[#E2E8F0] self-end sm:self-auto shrink-0">
                         <button
                           type="button"
-                          onClick={() => handleSetPresent(officer.id)}
+                          onClick={() =>
+                            setTempAbsentOfficerIds((prev) => prev.filter((id) => id !== officer.id))
+                          }
                           className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
                             !isAbsent
                               ? 'bg-emerald-600 text-white shadow-xs'
@@ -1416,7 +1772,11 @@ export default function ShiftSchedulePage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleSetAbsent(officer.id)}
+                          onClick={() =>
+                            setTempAbsentOfficerIds((prev) =>
+                              prev.includes(officer.id) ? prev : [...prev, officer.id]
+                            )
+                          }
                           className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
                             isAbsent
                               ? 'bg-rose-600 text-white shadow-xs'
@@ -1435,15 +1795,17 @@ export default function ShiftSchedulePage() {
               {/* Modal Footer */}
               <div className="px-6 py-4 border-t border-[#E2E8F0] bg-[#F8FAFC] flex justify-between items-center shrink-0">
                 <span className="text-xs text-[#757680]">
-                  {presentOfficers.length} Present · {absentOfficers.length} Absent
+                  {liveShiftOfficers.length - tempAbsentOfficerIds.length} Present · {tempAbsentOfficerIds.length} Absent
                 </span>
                 <PrimaryButton
                   type="button"
                   size="md"
                   pill
-                  onClick={() => setIsEditModalOpen(false)}
+                  disabled={isSavingAttendance}
+                  onClick={() => handleSaveAttendanceModal(tempAbsentOfficerIds)}
+                  leftIcon={isSavingAttendance ? <Loader2 className="w-4 h-4 animate-spin" /> : undefined}
                 >
-                  Save & Apply Attendance
+                  {isSavingAttendance ? 'Saving Attendance...' : 'Save & Apply Attendance'}
                 </PrimaryButton>
               </div>
             </motion.div>

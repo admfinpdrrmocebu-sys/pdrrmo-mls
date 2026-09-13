@@ -36,6 +36,7 @@ import {
   Maximize2,
   Loader2,
   RefreshCw,
+  ExternalLink,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
@@ -47,6 +48,7 @@ import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
 import { decompressPayload } from '@/lib/compression';
 import { generateRollCallPDF, generateDailyLogsPDF } from '@/lib/pdf-generator';
+import { CAPITOL_LOGO_BASE64, PDRRMO_LOGO_BASE64 } from '@/lib/header-logos';
 
 export interface ShiftPersonnelInfo {
   name: string;
@@ -412,6 +414,36 @@ function mapDbArchiveToArchivedFile(row: any): ArchivedFile {
   }
 }
 
+// Formatted Text Parser for Preview Modal Document View
+const renderFormattedDescription = (content: string | undefined | null) => {
+  if (!content) return <span className="text-slate-400 italic">No operational remarks recorded.</span>;
+
+  if (content.includes('<') && content.includes('>')) {
+    return (
+      <div
+        className="text-xs text-slate-800 leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-0.5 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-0.5 [&_ol]:my-1 [&_b]:font-bold [&_strong]:font-bold"
+        dangerouslySetInnerHTML={{ __html: content }}
+      />
+    );
+  }
+
+  const lines = content.split('\n');
+  return (
+    <div className="space-y-0.5 text-xs text-slate-800">
+      {lines.map((line, lineIdx) => {
+        const isBullet = line.trim().startsWith('•');
+        const cleanLine = isBullet ? line.replace(/^\s*•\s*/, '') : line;
+        return (
+          <p key={lineIdx} className={`leading-relaxed ${isBullet ? 'pl-3' : ''}`}>
+            {isBullet && <span className="font-bold text-[#004AC6] mr-1.5">•</span>}
+            {cleanLine}
+          </p>
+        );
+      })}
+    </div>
+  );
+};
+
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
@@ -435,6 +467,7 @@ export default function ArchivesPage() {
 
   // Selected file for Document Preview Modal & Real PDF Embed
   const [selectedFileForPreview, setSelectedFileForPreview] = useState<ArchivedFile | null>(null);
+  const [previewViewMode, setPreviewViewMode] = useState<'document' | 'pdf'>('document');
   const [previewPdfBlobUrl, setPreviewPdfBlobUrl] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -1469,6 +1502,40 @@ export default function ArchivesPage() {
 
                 {/* Right toolbar controls */}
                 <div className="flex items-center gap-2 shrink-0">
+                  {/* View Mode Toggle */}
+                  <div className="flex items-center bg-slate-200/80 p-0.5 rounded-full text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewViewMode('document')}
+                      className={`px-3 py-1 rounded-full transition-all cursor-pointer ${
+                        previewViewMode === 'document' ? 'bg-white text-[#004AC6] shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Document View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewViewMode('pdf')}
+                      className={`px-3 py-1 rounded-full transition-all cursor-pointer ${
+                        previewViewMode === 'pdf' ? 'bg-white text-[#004AC6] shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      PDF Embed
+                    </button>
+                  </div>
+
+                  {previewPdfBlobUrl && (
+                    <a
+                      href={previewPdfBlobUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-[#E2E8F0] bg-white text-xs font-semibold text-[#505F76] hover:bg-[#F1F5F9] hover:text-[#004AC6] transition-all cursor-pointer shadow-2xs"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open PDF</span>
+                    </a>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => handleCopyHash(selectedFileForPreview)}
@@ -1524,20 +1591,260 @@ export default function ArchivesPage() {
               </div>
 
               {/* Document PDF Viewer Container */}
-              <div className="flex-1 bg-slate-100 p-2 sm:p-4 flex items-center justify-center relative overflow-hidden">
+              <div className="flex-1 bg-slate-100 p-2 sm:p-4 flex flex-col items-center relative overflow-y-auto custom-scrollbar">
                 {isPreviewLoading ? (
-                  <div className="flex flex-col items-center justify-center gap-3 text-[#505F76]">
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3 text-[#505F76] my-auto">
                     <Loader2 className="w-8 h-8 animate-spin text-[#004AC6]" />
                     <p className="text-sm font-semibold text-[#1E293B]">Loading official file from storage bucket...</p>
                     <p className="text-xs text-[#757680]">Rendering verified PDF document</p>
                   </div>
                 ) : previewError ? (
-                  <div className="flex flex-col items-center justify-center gap-3 text-rose-600 p-6 bg-white rounded-2xl border border-rose-200 shadow-sm max-w-md text-center">
+                  <div className="my-auto flex flex-col items-center justify-center gap-3 text-rose-600 p-6 bg-white rounded-2xl border border-rose-200 shadow-sm max-w-md text-center">
                     <AlertTriangle className="w-8 h-8 text-rose-500" />
                     <p className="text-sm font-bold text-[#1E293B]">{previewError}</p>
                     <SecondaryButton size="sm" pill onClick={() => handleSelectFileForPreview(selectedFileForPreview)}>
                       Try Again
                     </SecondaryButton>
+                  </div>
+                ) : previewViewMode === 'document' ? (
+                  /* Responsive Official Document Sheet */
+                  <div className="w-full max-w-4xl bg-white rounded-2xl shadow-md border border-[#CBD5E1] p-5 sm:p-8 space-y-5 text-slate-800 my-auto sm:my-2">
+                    {/* Document Header with Dual Logos */}
+                    <div className="flex items-center justify-between gap-2 sm:gap-4 pb-3 border-b-2 border-slate-900">
+                      <div className="w-12 h-12 sm:w-16 sm:h-16 shrink-0 flex items-center justify-center">
+                        {CAPITOL_LOGO_BASE64 ? (
+                          <img src={CAPITOL_LOGO_BASE64} alt="Province of Cebu" className="w-12 h-12 sm:w-16 sm:h-16 object-contain" />
+                        ) : (
+                          <Building2 className="w-10 h-10 text-slate-400" />
+                        )}
+                      </div>
+
+                      <div className="flex-1 text-center space-y-0.5">
+                        <p className="text-[11px] sm:text-xs text-slate-600 font-normal">Republic of the Philippines</p>
+                        <p className="text-[11px] sm:text-xs text-slate-600 font-normal">Province of Cebu</p>
+                        <h2 className="text-xs sm:text-sm font-bold text-slate-950 tracking-tight">
+                          PROVINCIAL DISASTER RISK MANAGEMENT OFFICE
+                        </h2>
+                        <p className="text-[10px] sm:text-[11px] text-slate-500">
+                          (032) 888-2328 LOCAL 2301 or 2302 | Email: pdrrmo.cebu@gmail.com
+                        </p>
+                        <h3 className="text-xs sm:text-sm font-bold text-[#004AC6] pt-1">
+                          {selectedFileForPreview.category === 'roll-call'
+                            ? 'Radio Net Roll Call System'
+                            : 'Monitoring Logs System'}
+                        </h3>
+                      </div>
+
+                      <div className="w-12 h-12 sm:w-16 sm:h-16 shrink-0 flex items-center justify-center">
+                        {PDRRMO_LOGO_BASE64 ? (
+                          <img src={PDRRMO_LOGO_BASE64} alt="PDRRMO" className="w-12 h-12 sm:w-16 sm:h-16 object-contain" />
+                        ) : (
+                          <ShieldCheck className="w-10 h-10 text-[#004AC6]" />
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Date Line */}
+                    <div className="text-xs font-bold text-slate-900">
+                      Date: {formatFileDate(selectedFileForPreview.dailyReportDate || selectedFileForPreview.createdAt)}
+                    </div>
+
+                    {/* Official 3-Column Table */}
+                    <div className="border border-slate-400 rounded-lg overflow-hidden bg-white text-xs">
+                      {/* Table Header */}
+                      <div className="grid grid-cols-12 bg-slate-100 font-bold border-b border-slate-400 text-slate-900 text-center py-2 px-3">
+                        <div className="col-span-2 border-r border-slate-300">Time</div>
+                        <div className="col-span-8 text-left pl-3 border-r border-slate-300">Title w/ Description</div>
+                        <div className="col-span-2">
+                          {selectedFileForPreview.category === 'roll-call' ? 'Attendance' : 'Report Type'}
+                        </div>
+                      </div>
+
+                      {/* Table Content */}
+                      <div className="divide-y divide-slate-300">
+                        {selectedFileForPreview.category === 'roll-call' ? (
+                          <>
+                            {/* 1. Start of Roll Call Entry */}
+                            <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                              <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                {selectedFileForPreview.shiftHours || '1600H'}
+                              </div>
+                              <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                <p className="font-bold text-slate-950">
+                                  Start of Radio Net Roll Call, {selectedFileForPreview.leadOfficer}
+                                </p>
+                                <p className="text-slate-700">
+                                  <strong>Net Frequency:</strong> {selectedFileForPreview.rollCallStats?.frequency || '142.500 MHz Primary VHF Net'}
+                                </p>
+                                <p className="text-slate-700">
+                                  <strong>Radio Script:</strong> {selectedFileForPreview.monitoringBriefing || 'Radio Roll Call Net Protocol'}
+                                </p>
+                                <p className="text-slate-700">
+                                  <strong>Total Designated Stations:</strong> {selectedFileForPreview.rollCallStats?.totalAreas || selectedFileForPreview.itemCount || 8} Stations
+                                </p>
+                                <div className="pt-2 border-t border-slate-200 mt-2">
+                                  <div className="w-40 border-b border-slate-600 mb-1" />
+                                  <p className="font-bold text-slate-900 text-[11px]">{selectedFileForPreview.leadOfficer}</p>
+                                  <p className="text-[10px] text-slate-500">{selectedFileForPreview.leadOfficerRole || 'Duty Operations Officer'}</p>
+                                </div>
+                              </div>
+                              <div className="col-span-2 text-center text-slate-400 font-semibold pt-0.5">—</div>
+                            </div>
+
+                            {/* 2. Stations List */}
+                            {(selectedFileForPreview.rollCallEntries || []).map((stn, idx) => (
+                              <div key={idx} className="grid grid-cols-12 py-2.5 px-3 items-start hover:bg-slate-50">
+                                <div className="col-span-2 text-center font-mono text-slate-800 pt-0.5">
+                                  {stn.timeResponded || selectedFileForPreview.shiftHours || '1600H'}
+                                </div>
+                                <div className="col-span-8 px-3 space-y-1 border-x border-slate-200">
+                                  <p className="font-bold text-slate-950">{stn.municipality || stn.station} Station</p>
+                                  <p className="text-slate-600">
+                                    Weather Condition: <strong>{stn.weatherCondition || 'Fair'}</strong> | Port Status: <strong>{stn.seaPortStatus || 'Operational'}</strong>
+                                  </p>
+                                  <p className="text-slate-500 text-[11px]">
+                                    Operator: {stn.dutyOperator || 'Station Duty Officer'}
+                                  </p>
+                                </div>
+                                <div className="col-span-2 text-center pt-0.5">
+                                  <span
+                                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      stn.status === 'Present'
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                        : stn.status === 'Absent'
+                                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                        : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    }`}
+                                  >
+                                    {stn.status || 'Present'}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* 3. End of Roll Call Entry */}
+                            <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                              <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                1630H
+                              </div>
+                              <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                <p className="font-bold text-slate-950">
+                                  End of Radio Net Roll Call {selectedFileForPreview.leadOfficer}
+                                </p>
+                                <p className="text-slate-700">
+                                  Attendance Breakdown: <strong>{selectedFileForPreview.rollCallStats?.present || 8} Present</strong>, <strong>{selectedFileForPreview.rollCallStats?.absent || 0} Absent</strong>, <strong>{selectedFileForPreview.rollCallStats?.exempted || 0} Exempted</strong>
+                                </p>
+                                <p className="text-slate-700">Situation Remain Normal</p>
+                                <div className="pt-2 border-t border-slate-200 mt-2">
+                                  <div className="w-40 border-b border-slate-600 mb-1" />
+                                  <p className="font-bold text-slate-900 text-[11px]">{selectedFileForPreview.leadOfficer}</p>
+                                  <p className="text-[10px] text-slate-500">{selectedFileForPreview.leadOfficerRole || 'Duty Operations Officer'}</p>
+                                </div>
+                              </div>
+                              <div className="col-span-2 text-center text-slate-400 font-semibold pt-0.5">—</div>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* 1. Start of Monitoring Duty Entry */}
+                            <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                              <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                {getShiftStartTime(selectedFileForPreview)}
+                              </div>
+                              <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                <p className="font-bold text-slate-950">
+                                  Start of Monitoring Duty, {selectedFileForPreview.shifts?.[0]?.leadOfficer || selectedFileForPreview.leadOfficer || 'Duty Officer'}
+                                </p>
+                                <p className="text-slate-700">Standby Vehicles: Pick up - 1, Ambulance - 1, Demo Items - 5</p>
+                                <div className="text-slate-700 text-xs">
+                                  <strong>Active personnel assigned on duty:</strong>{' '}
+                                  {selectedFileForPreview.dutyPersonnelRoster && selectedFileForPreview.dutyPersonnelRoster.length > 0
+                                    ? selectedFileForPreview.dutyPersonnelRoster.map((p) => `${p.name} (${p.role})`).join(', ')
+                                    : selectedFileForPreview.leadOfficer}
+                                </div>
+                                {selectedFileForPreview.monitoringBriefing && (
+                                  <div className="pt-1">
+                                    <span className="font-bold text-slate-900 block mb-0.5">Monitoring Details & Briefing:</span>
+                                    {renderFormattedDescription(selectedFileForPreview.monitoringBriefing)}
+                                  </div>
+                                )}
+                                <div className="pt-2 border-t border-slate-200 mt-2">
+                                  <div className="w-40 border-b border-slate-600 mb-1" />
+                                  <p className="font-bold text-slate-900 text-[11px]">
+                                    {selectedFileForPreview.shifts?.[0]?.leadOfficer || selectedFileForPreview.leadOfficer || 'Lead Operations Officer'}
+                                  </p>
+                                  <p className="text-[10px] text-slate-500">
+                                    {selectedFileForPreview.shifts?.[0]?.leadOfficerRole || selectedFileForPreview.leadOfficerRole || 'Lead Operations Officer'}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="col-span-2 text-center text-slate-500 font-medium pt-0.5">Info</div>
+                            </div>
+
+                            {/* 2. Chronological Log Entries */}
+                            {(selectedFileForPreview.logEntries || []).map((log, idx) => (
+                              <div key={idx} className="grid grid-cols-12 py-2.5 px-3 items-start hover:bg-slate-50">
+                                <div className="col-span-2 text-center font-mono text-slate-800 pt-0.5">
+                                  {log.time || '1200H'}
+                                </div>
+                                <div className="col-span-8 px-3 space-y-1 border-x border-slate-200">
+                                  <p className="font-bold text-slate-950">{log.title}</p>
+                                  <div className="text-slate-700">
+                                    {renderFormattedDescription(log.description)}
+                                  </div>
+                                  {log.operator && (
+                                    <p className="text-[10px] text-slate-400">Operator: {log.operator}</p>
+                                  )}
+                                </div>
+                                <div className="col-span-2 text-center pt-0.5">
+                                  <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                                    {log.reportType || log.status || 'Info'}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* 3. End of Monitoring Duty Entry */}
+                            <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                              <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                {getShiftEndTime(selectedFileForPreview)}
+                              </div>
+                              <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                <p className="font-bold text-slate-950">
+                                  End of Monitoring Duty {selectedFileForPreview.leadOfficer || 'Duty Officer'}
+                                </p>
+                                <p className="text-slate-700">
+                                  24-Hour Operational Cycle: <strong>{selectedFileForPreview.shifts?.length || 1} Shifts Combined</strong>
+                                </p>
+                                <p className="text-slate-700">
+                                  Handover Status: <strong>{selectedFileForPreview.handoverStatus || 'Situation Remain Normal'}</strong>
+                                </p>
+                                {selectedFileForPreview.incidentReportDetails && (
+                                  <p className="text-rose-700 bg-rose-50 p-2 rounded-lg border border-rose-200 text-xs">
+                                    <strong>Incident Notes:</strong> {selectedFileForPreview.incidentReportDetails}
+                                  </p>
+                                )}
+                                <div className="pt-2 border-t border-slate-200 mt-2">
+                                  <div className="w-40 border-b border-slate-600 mb-1" />
+                                  <p className="font-bold text-slate-900 text-[11px]">
+                                    {selectedFileForPreview.leadOfficer || 'Lead Operations Officer'}
+                                  </p>
+                                  <p className="text-[10px] text-slate-500">
+                                    {selectedFileForPreview.leadOfficerRole || 'Lead Operations Officer'}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="col-span-2 text-center text-slate-500 font-medium pt-0.5">Info</div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Security Digest */}
+                    <div className="pt-2 text-[11px] text-slate-400 font-mono">
+                      Official Tamper-Proof Audit Digest (SHA-256): {selectedFileForPreview.hash}
+                    </div>
                   </div>
                 ) : previewPdfBlobUrl ? (
                   <iframe

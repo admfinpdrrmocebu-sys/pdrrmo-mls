@@ -30,6 +30,7 @@ import { PrimaryButton, SecondaryButton } from '@/components/button';
 import { GeneralCard } from '@/components/card';
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/lib/auth';
+import { ViewOnlyNotice } from '@/components/auth';
 
 export interface Announcement {
   id: string;
@@ -152,7 +153,9 @@ function sanitizeHtml(html: string): string {
 }
 
 export default function AnnouncementsPage() {
-  const { user, profile, isAdmin } = useAuth();
+  const { user, profile, isAdmin, isViewOnly, canWrite } = useAuth();
+  const isAnnouncementsViewOnly = isViewOnly('Announcements');
+  const canModifyAnnouncements = canWrite('Announcements');
 
   // Data & Loading States
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -203,11 +206,12 @@ export default function AnnouncementsPage() {
   // Check if current user has permission to edit or delete a specific announcement
   const canUserModify = useCallback(
     (item: Announcement) => {
+      if (!canModifyAnnouncements) return false;
       if (isAdmin) return true;
       const currentId = user?.id || profile?.id;
       return !!currentId && (item.createdById === currentId || item.createdById === user?.id || item.createdById === profile?.id);
     },
-    [isAdmin, user?.id, profile?.id]
+    [isAdmin, canModifyAnnouncements, user?.id, profile?.id]
   );
 
   // 1. Fetch Dynamic Announcements from Supabase
@@ -488,7 +492,11 @@ export default function AnnouncementsPage() {
     getPlainText(formDescription) === '';
 
   return (
-    <AppLayoutShell title="Announcements" subtitle="Official Broadcasts & Bulletins">
+    <AppLayoutShell
+      title="Announcements"
+      subtitle="Official Broadcasts & Bulletins"
+      screen="Announcements"
+    >
       <div className="max-w-5xl mx-auto space-y-6 pb-12">
         {/* ========================================================================= */}
         {/* 1. HEADER & CONTROLS */}
@@ -515,16 +523,24 @@ export default function AnnouncementsPage() {
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-[#004AC6]' : ''}`} />
             </button>
-            <PrimaryButton
-              size="md"
-              pill
-              leftIcon={<Plus className="w-4 h-4" />}
-              onClick={handleOpenCreate}
-            >
-              Post Announcement
-            </PrimaryButton>
+            {canModifyAnnouncements && (
+              <PrimaryButton
+                size="md"
+                pill
+                leftIcon={<Plus className="w-4 h-4" />}
+                onClick={handleOpenCreate}
+              >
+                Post Announcement
+              </PrimaryButton>
+            )}
           </div>
         </div>
+
+        {/* View-Only Clearance Notice */}
+        <ViewOnlyNotice
+          screen="Announcements"
+          message="Posting, editing, and deleting official announcements are restricted under View-Only clearance."
+        />
 
         {/* ========================================================================= */}
         {/* 2. SEARCH BAR */}

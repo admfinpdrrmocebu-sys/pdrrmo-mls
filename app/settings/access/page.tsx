@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   FileText,
   Radio,
+  Megaphone,
   Users,
   Archive,
   Settings as SettingsIcon,
@@ -317,6 +318,8 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Users', level: 'Full Access' },
       { screen: 'Archives', level: 'Full Access' },
       { screen: 'Settings', level: 'Full Access' },
+      { screen: 'Announcements', level: 'Full Access' },
+      { screen: 'Shifts', level: 'Full Access' },
     ],
   },
   {
@@ -334,6 +337,8 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Users', level: 'None' },
       { screen: 'Archives', level: 'View Only' },
       { screen: 'Settings', level: 'None' },
+      { screen: 'Announcements', level: 'Full Access' },
+      { screen: 'Shifts', level: 'Full Access' },
     ],
   },
   {
@@ -351,6 +356,8 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Users', level: 'None' },
       { screen: 'Archives', level: 'View Only' },
       { screen: 'Settings', level: 'None' },
+      { screen: 'Announcements', level: 'View Only' },
+      { screen: 'Shifts', level: 'View Only' },
     ],
   },
 ];
@@ -362,6 +369,8 @@ const screenList = [
   { name: 'Users', icon: Users },
   { name: 'Archives', icon: Archive },
   { name: 'Settings', icon: SettingsIcon },
+  { name: 'Announcements', icon: Megaphone },
+  { name: 'Shifts', icon: Calendar },
 ];
 
 // =============================================================================
@@ -694,6 +703,8 @@ export default function ManageAccessPage() {
       Users: 'None',
       Archives: 'View Only',
       Settings: 'None',
+      Announcements: 'Full Access',
+      Shifts: 'Full Access',
     });
     setIsRoleModalOpen(true);
   };
@@ -710,6 +721,8 @@ export default function ManageAccessPage() {
       Users: 'None',
       Archives: 'None',
       Settings: 'None',
+      Announcements: 'None',
+      Shifts: 'None',
     };
     if (role.permissions && Array.isArray(role.permissions)) {
       role.permissions.forEach((p) => {
