@@ -1,17 +1,17 @@
 -- =============================================================================
--- ALPHA TESTING DATABASE RESET SCRIPT
+-- ALPHA TESTING DATABASE RESET & ADMIN RE-CREATION SCRIPT
 -- =============================================================================
 -- Purpose:
--- 1. Truncate all operational / dynamic application data tables
--- 2. Delete all auth users and profiles EXCEPT admin@pdrrmo.gov.ph
--- 3. Ensure admin@pdrrmo.gov.ph is properly configured with 'admin' role
+-- 1. Truncate all operational / dynamic application data tables (CASCADE)
+-- 2. Delete all existing auth users, identities, and profiles
+-- 3. Create fresh admin user (admin@pdrrmo.gov.ph / admin143)
 -- =============================================================================
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- -----------------------------------------------------------------------------
--- 1. TRUNCATE DYNAMIC & OPERATIONAL TABLES (CASCADE)
+-- 1. TRUNCATE ALL OPERATIONAL TABLES (CASCADE)
 -- -----------------------------------------------------------------------------
 TRUNCATE TABLE 
     public.announcements,
@@ -27,98 +27,81 @@ TRUNCATE TABLE
 CASCADE;
 
 -- -----------------------------------------------------------------------------
--- 2. CLEAN AUTH USERS & IDENTITIES (KEEP ONLY admin@pdrrmo.gov.ph)
+-- 2. PURGE ALL AUTH USERS, IDENTITIES & PROFILES
 -- -----------------------------------------------------------------------------
--- Delete non-admin auth identities
-DELETE FROM auth.identities
-WHERE user_id IN (
-    SELECT id FROM auth.users WHERE LOWER(email) != 'admin@pdrrmo.gov.ph'
-);
-
--- Delete non-admin profiles
-DELETE FROM public.profiles 
-WHERE LOWER(email) != 'admin@pdrrmo.gov.ph';
-
--- Delete non-admin auth users
-DELETE FROM auth.users 
-WHERE LOWER(email) != 'admin@pdrrmo.gov.ph';
+DELETE FROM auth.identities;
+DELETE FROM public.profiles;
+DELETE FROM auth.users;
 
 -- -----------------------------------------------------------------------------
--- 3. ENSURE admin@pdrrmo.gov.ph EXISTS IN AUTH.USERS & PUBLIC.PROFILES
+-- 3. CREATE FRESH ADMIN ACCOUNT (admin@pdrrmo.gov.ph / admin143)
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
-    admin_user_id UUID;
+    admin_user_id UUID := gen_random_uuid();
     admin_email TEXT := 'admin@pdrrmo.gov.ph';
     admin_default_pw TEXT := 'admin143';
     encrypted_pw TEXT := crypt(admin_default_pw, gen_salt('bf'));
 BEGIN
-    -- Check if admin user already exists in auth.users
-    SELECT id INTO admin_user_id FROM auth.users WHERE LOWER(email) = admin_email LIMIT 1;
+    -- Insert into auth.users
+    INSERT INTO auth.users (
+        id,
+        instance_id,
+        email,
+        encrypted_password,
+        email_confirmed_at,
+        raw_app_meta_data,
+        raw_user_meta_data,
+        created_at,
+        updated_at,
+        role,
+        aud,
+        confirmation_token,
+        recovery_token,
+        email_change_token_new,
+        email_change,
+        is_super_admin
+    ) VALUES (
+        admin_user_id,
+        '00000000-0000-0000-0000-000000000000',
+        admin_email,
+        encrypted_pw,
+        now(),
+        '{"provider":"email","providers":["email"]}'::jsonb,
+        '{"full_name":"System Administrator","role":"admin","position":"System Administrator"}'::jsonb,
+        now(),
+        now(),
+        'authenticated',
+        'authenticated',
+        '',
+        '',
+        '',
+        '',
+        false
+    );
 
-    IF admin_user_id IS NULL THEN
-        -- Create new admin user in auth.users
-        admin_user_id := gen_random_uuid();
+    -- Insert into auth.identities
+    INSERT INTO auth.identities (
+        id,
+        user_id,
+        identity_data,
+        provider,
+        provider_id,
+        last_sign_in_at,
+        created_at,
+        updated_at
+    ) VALUES (
+        admin_user_id,
+        admin_user_id,
+        jsonb_build_object('sub', admin_user_id::text, 'email', admin_email),
+        'email',
+        admin_user_id::text,
+        now(),
+        now(),
+        now()
+    );
 
-        INSERT INTO auth.users (
-            id,
-            instance_id,
-            email,
-            encrypted_password,
-            email_confirmed_at,
-            raw_app_meta_data,
-            raw_user_meta_data,
-            created_at,
-            updated_at,
-            role,
-            aud,
-            confirmation_token,
-            recovery_token,
-            email_change_token_new,
-            email_change,
-            is_super_admin
-        ) VALUES (
-            admin_user_id,
-            '00000000-0000-0000-0000-000000000000',
-            admin_email,
-            encrypted_pw,
-            now(),
-            '{"provider":"email","providers":["email"]}'::jsonb,
-            '{"full_name":"System Administrator","role":"admin","position":"System Administrator"}'::jsonb,
-            now(),
-            now(),
-            'authenticated',
-            'authenticated',
-            '',
-            '',
-            '',
-            '',
-            false
-        );
-
-        -- Insert identity
-        INSERT INTO auth.identities (
-            id,
-            user_id,
-            identity_data,
-            provider,
-            provider_id,
-            last_sign_in_at,
-            created_at,
-            updated_at
-        ) VALUES (
-            admin_user_id,
-            admin_user_id,
-            jsonb_build_object('sub', admin_user_id::text, 'email', admin_email),
-            'email',
-            admin_user_id::text,
-            now(),
-            now(),
-            now()
-        );
-    END IF;
-
-    -- Ensure public.profiles has the admin record with cleaned avatar/signature and role = 'admin'
+    -- Insert into public.profiles
     INSERT INTO public.profiles (
         id,
         full_name,
@@ -159,6 +142,7 @@ BEGIN
         is_online = false,
         updated_at = now();
 
+    RAISE NOTICE 'Admin user % successfully created with ID % and password %', admin_email, admin_user_id, admin_default_pw;
 END $$;
 
 -- -----------------------------------------------------------------------------
