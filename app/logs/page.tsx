@@ -105,6 +105,7 @@ export interface ShiftScheduleItem {
   duration: string;
   color?: string;
   is_active: boolean;
+  sort_order?: number;
 }
 
 // =============================================================================
@@ -120,11 +121,10 @@ const fallbackPersonnelList: DutyPersonnel[] = [
   { id: 'p-6', name: 'Maria Santos', role: 'Communications Specialist', avatarInitials: 'MS', badgeNumber: 'OPC-4109', defaultShift: 'Graveyard Shift (Charlie)' },
 ];
 
-
 const fallbackSchedules: ShiftScheduleItem[] = [
-  { id: 'sched-1', name: 'Day Shift (Alpha)', start_time: '06:00', end_time: '14:00', duration: '8 Hours', is_active: true },
-  { id: 'sched-2', name: 'Swing Shift (Bravo)', start_time: '14:00', end_time: '22:00', duration: '8 Hours', is_active: true },
-  { id: 'sched-3', name: 'Graveyard Shift (Charlie)', start_time: '22:00', end_time: '06:00', duration: '8 Hours', is_active: true },
+  { id: 'sched-1', name: 'Day Shift (Alpha)', start_time: '06:00', end_time: '14:00', duration: '8 Hours', is_active: true, sort_order: 1 },
+  { id: 'sched-2', name: 'Swing Shift (Bravo)', start_time: '14:00', end_time: '22:00', duration: '8 Hours', is_active: true, sort_order: 2 },
+  { id: 'sched-3', name: 'Graveyard Shift (Charlie)', start_time: '22:00', end_time: '06:00', duration: '8 Hours', is_active: true, sort_order: 3 },
 ];
 
 // Helper to compute initials from full name
@@ -260,7 +260,6 @@ export default function LogsPage() {
   // Modals & Drawers
   const [isStartShiftModalOpen, setIsStartShiftModalOpen] = useState(false);
   const [isEndShiftModalOpen, setIsEndShiftModalOpen] = useState(false);
-  const [selectedShiftSchedule, setSelectedShiftSchedule] = useState<string>('Day Shift (Alpha)');
   const [selectedPersonnelIds, setSelectedPersonnelIds] = useState<string[]>([]);
   const [isIncidentReportOn, setIsIncidentReportOn] = useState(false);
   const [incidentDetails, setIncidentDetails] = useState('');
@@ -383,14 +382,110 @@ export default function LogsPage() {
   // Derived canAddLogs (Requires active shift, write permissions, and duty/schedule authorization)
   const canAddLogs = isShiftActive && canModifyLogs && canEndCurrentShift;
 
-  // Designated Personnel filtered specifically to the selected shift schedule
+  // Auto-detect designated shift schedule based on user profile or current time
+  const activeShiftScheduleInfo = useMemo(() => {
+    // 1. If user profile has an assigned default_shift, look up matching schedule
+    const userDefault = profile?.default_shift?.trim();
+    if (userDefault) {
+      const match = shiftSchedules.find((s) => s.name.toLowerCase() === userDefault.toLowerCase());
+      if (match) {
+        return {
+          name: match.name,
+          time: `${match.start_time} - ${match.end_time}`,
+          item: match,
+        };
+      }
+      return {
+        name: userDefault,
+        time: '',
+        item: null,
+      };
+    }
+
+    // 2. Otherwise auto-detect current shift by current time
+    const now = new Date();
+    const currentMins = now.getHours() * 60 + now.getMinutes();
+
+    for (const sched of shiftSchedules) {
+      const [sH, sM] = (sched.start_time || '06:00').split(':').map((v) => parseInt(v, 10) || 0);
+      const [eH, eM] = (sched.end_time || '14:00').split(':').map((v) => parseInt(v, 10) || 0);
+      const startMins = sH * 60 + sM;
+      const endMins = eH * 60 + eM;
+
+      if (startMins < endMins) {
+        if (currentMins >= startMins && currentMins < endMins) {
+          return {
+            name: sched.name,
+            time: `${sched.start_time} - ${sched.end_time}`,
+            item: sched,
+          };
+        }
+      } else {
+        if (currentMins >= startMins || currentMins < endMins) {
+          return {
+            name: sched.name,
+            time: `${sched.start_time} - ${sched.end_time}`,
+            item: sched,
+          };
+        }
+      }
+    }
+
+    const fallback = shiftSchedules[0] || fallbackSchedules[0];
+    return {
+      name: fallback.name,
+      time: `${fallback.start_time} - ${fallback.end_time}`,
+      item: fallback,
+    };
+  }, [profile?.default_shift, shiftSchedules]);
+
+  // Designated Personnel filtered specifically to the auto-fetched shift schedule
   const designatedOfficers = useMemo(() => {
-    const shiftTarget = (selectedShiftSchedule || profile?.default_shift || 'Day Shift (Alpha)').trim().toLowerCase();
-    return availableOfficers.filter((officer) => {
+    const shiftTarget = activeShiftScheduleInfo.name.trim().toLowerCase();
+    const filtered = availableOfficers.filter((officer) => {
       const officerShift = (officer.defaultShift || 'Day Shift (Alpha)').trim().toLowerCase();
       return officerShift === shiftTarget;
     });
-  }, [availableOfficers, selectedShiftSchedule, profile?.default_shift]);
+
+    return filtered.length > 0 ? filtered : availableOfficers;
+  }, [availableOfficers, activeShiftScheduleInfo.name]);
+
+  // Shift Schedule Sequence Engine (determines first shift, last shift, and if active shift is the final shift of the sequence)
+  const shiftScheduleSequenceInfo = useMemo(() => {
+    if (shiftSchedules.length === 0) {
+      return {
+        firstShift: fallbackSchedules[0],
+        lastShift: fallbackSchedules[fallbackSchedules.length - 1],
+        isLastShift: true,
+      };
+    }
+
+    const sorted = [...shiftSchedules].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const activeLabel = (activeShift?.shift_label || '').trim().toLowerCase();
+    const isLast = Boolean(last && activeLabel === last.name.trim().toLowerCase());
+
+    return {
+      firstShift: first,
+      lastShift: last,
+      isLastShift: isLast,
+    };
+  }, [activeShift?.shift_label, shiftSchedules]);
+
+  // Determines if the shift schedule being started is the first / lowest sort order shift schedule
+  const isStartingFirstShift = useMemo(() => {
+    if (!activeShiftScheduleInfo.item || !shiftScheduleSequenceInfo.firstShift) return true;
+    const currentSort = activeShiftScheduleInfo.item.sort_order ?? 0;
+    const firstSort = shiftScheduleSequenceInfo.firstShift.sort_order ?? 0;
+    return (
+      activeShiftScheduleInfo.item.id === shiftScheduleSequenceInfo.firstShift.id ||
+      currentSort <= firstSort
+    );
+  }, [activeShiftScheduleInfo.item, shiftScheduleSequenceInfo.firstShift]);
+
+  // Dynamic duty title based on schedule sequence: "Start of monitoring Duty" for first shift sort, "Assume monitoring Duty" for the rest
+  const startShiftDutyTitle = isStartingFirstShift ? 'Start of monitoring Duty' : 'Assume monitoring Duty';
 
   // ===========================================================================
   // 2. DATA FETCHING (SUPABASE & REALTIME)
@@ -456,6 +551,7 @@ export default function LogsPage() {
           duration: s.duration || '8 Hours',
           color: s.color || '#004AC6',
           is_active: s.is_active ?? true,
+          sort_order: s.sort_order ?? 0,
         }));
         setShiftSchedules(mapped);
       } else {
@@ -959,14 +1055,13 @@ export default function LogsPage() {
       // Must be eligible by schedule or admin to start
       if (!scheduleEligibility.isEligible) return;
 
-      // Pre-select current user and officers assigned to designated shift schedule
-      const userShiftName = profile?.default_shift || 'Day Shift (Alpha)';
-      setSelectedShiftSchedule(userShiftName);
-
+      // Auto pre-select all officers designated for this auto-fetched shift schedule
+      const shiftTarget = activeShiftScheduleInfo.name.trim().toLowerCase();
       const matchedOfficers = availableOfficers.filter(
-        (o) => (o.defaultShift || 'Day Shift (Alpha)').trim().toLowerCase() === userShiftName.trim().toLowerCase()
+        (o) => (o.defaultShift || 'Day Shift (Alpha)').trim().toLowerCase() === shiftTarget
       );
-      setSelectedPersonnelIds(matchedOfficers.map((o) => o.id));
+      const initialSelection = matchedOfficers.length > 0 ? matchedOfficers : availableOfficers;
+      setSelectedPersonnelIds(initialSelection.map((o) => o.id));
       setIsStartShiftModalOpen(true);
     } else {
       // Must be designated on duty, lead, or admin to end shift
@@ -976,15 +1071,6 @@ export default function LogsPage() {
       setIncidentDetails('');
       setIsEndShiftModalOpen(true);
     }
-  };
-
-  // Change Shift Schedule in Modal (Admins / Leads can switch shift schedule)
-  const handleSelectShiftSchedule = (schedName: string) => {
-    setSelectedShiftSchedule(schedName);
-    const matched = availableOfficers.filter(
-      (o) => (o.defaultShift || 'Day Shift (Alpha)').trim().toLowerCase() === schedName.trim().toLowerCase()
-    );
-    setSelectedPersonnelIds(matched.map((o) => o.id));
   };
 
   // Toggle Personnel Selection in Start Shift Modal
@@ -1016,7 +1102,7 @@ export default function LogsPage() {
 
       const leadOfficerId = profile?.id || user?.id;
       const leadOfficerName = profile?.full_name || 'Alex Thompson';
-      const shiftLabel = selectedShiftSchedule || profile?.default_shift || 'Day Shift (Alpha)';
+      const shiftLabel = activeShiftScheduleInfo.name;
       const now = new Date();
       const timeFormatted = getMilitaryTime(now);
       const dateFormatted = now.toISOString().split('T')[0];
@@ -1053,16 +1139,18 @@ export default function LogsPage() {
         await supabase.from('shift_duty_personnel').insert(dutyPersonnelRows);
       }
 
-      // 3. Insert Start Shift record into public.shift_logs
+      // 3. Insert Start/Assume Shift record into public.shift_logs
       const personnelNames = assignedPersonnel.map((p) => `${p.name} (${p.role})`).join(', ');
       const cleanBriefing = stripEmojis(startShiftMonitoringDetails.trim());
       const descriptionContent = cleanBriefing
         ? `<p><strong>Active personnel assigned on duty:</strong> ${personnelNames}</p><br /><p><strong>Monitoring Details & Briefing:</strong></p>${cleanBriefing}`
         : `<p><strong>Active personnel assigned on duty:</strong> ${personnelNames}</p>`;
 
+      const shiftTitle = `${startShiftDutyTitle} (List of Personnel asisgned on this shift)`;
+
       await supabase.from('shift_logs').insert({
         shift_id: newShift.id,
-        title: 'Start of monitoring Duty (List of Personnel asisgned on this shift)',
+        title: shiftTitle,
         report_type_name: 'Roll Call Alert',
         log_date: dateFormatted,
         log_time: timeFormatted,
@@ -1079,7 +1167,7 @@ export default function LogsPage() {
 
       setIsStartShiftModalOpen(false);
       setShiftToast({
-        message: 'Start of Monitoring Shift Logged',
+        message: `${startShiftDutyTitle} Logged`,
         submessage: `${assignedPersonnel.length} personnel on duty. "Add Logs" is now enabled in real-time.`,
         type: 'start',
       });
@@ -1149,188 +1237,203 @@ export default function LogsPage() {
       });
 
       // 3. Automatic Operational Shift & Daily Archiving:
-      // Ending shift (End of monitoring duty) automatically compiles, generates, hashes, and stores the official PDF archive.
-      let archiveFilename = `PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-DAILY.pdf`;
-      try {
-        // Query all shifts from this operational date
-        const { data: dayShifts } = await supabase
-          .from('shifts')
-          .select(`
-            id,
-            shift_label,
-            shift_date,
-            start_time,
-            end_time,
-            status,
-            lead_officer_id,
-            end_shift_handover_status,
-            incident_report_details,
-            start_monitoring_details,
-            started_at,
-            ended_at,
-            lead_officer:profiles!shifts_lead_officer_id_fkey(id, full_name, position_title, role)
-          `)
-          .eq('shift_date', activeShift.shift_date || dateFormatted)
-          .order('started_at', { ascending: true });
+      // Automatic Official Archive will be available ONLY on the last number sort of shift_schedule,
+      // which combines all shifts from start sort shift to last sort shift into one consolidated certified PDF.
+      const isFinalShiftOfCycle = shiftScheduleSequenceInfo.isLastShift;
+      let archiveFilename: string | null = null;
 
-        const shiftIds = (dayShifts || []).map((s: any) => s.id);
-        if (!shiftIds.includes(activeShift.id)) shiftIds.push(activeShift.id);
-
-        // Query all duty personnel for all shifts of the day
-        const { data: allDutyPersonnel } = await supabase
-          .from('shift_duty_personnel')
-          .select(`
-            id,
-            shift_id,
-            profile_id,
-            role_in_shift,
-            is_lead,
-            present_at_end,
-            profile:profiles!shift_duty_personnel_profile_id_fkey(id, full_name, position_title, default_shift)
-          `)
-          .in('shift_id', shiftIds);
-
-        // Query all logs recorded across all shifts of the day
-        const { data: dayLogs } = await supabase
-          .from('shift_logs')
-          .select('*')
-          .in('shift_id', shiftIds)
-          .order('log_date', { ascending: true })
-          .order('log_time', { ascending: true });
-
-        // Compile multi-shift summary
-        const compiledShifts = (dayShifts || []).map((s: any) => {
-          const shiftRoster = (allDutyPersonnel || [])
-            .filter((dp: any) => dp.shift_id === s.id)
-            .map((dp: any) => ({
-              name: dp.profile?.full_name || 'Officer',
-              role: dp.role_in_shift || dp.profile?.position_title || 'Monitoring Officer',
-              badgeNumber: `OPC-${(dp.profile_id || '').slice(0, 4).toUpperCase()}`,
-              presentAtEnd: dp.present_at_end !== false,
-            }));
-
-          const shiftLogsList = (dayLogs || []).filter((l: any) => l.shift_id === s.id);
-
-          return {
-            id: s.id,
-            shiftLabel: s.shift_label,
-            startTime: s.start_time,
-            endTime: s.end_time || timeFormatted,
-            leadOfficer: (s.lead_officer as any)?.full_name || leadOfficerName,
-            leadOfficerRole: (s.lead_officer as any)?.position_title || 'Lead Operations Officer',
-            handoverStatus: s.end_shift_handover_status || 'Situation Remain Normal',
-            incidentDetails: s.incident_report_details || null,
-            monitoringBriefing: s.start_monitoring_details || null,
-            roster: shiftRoster,
-            logsCount: shiftLogsList.length,
-          };
-        });
-
-        const allConsolidatedLogs = (dayLogs || []).map((l: any) => ({
-          time: l.log_time,
-          date: l.log_date,
-          status: l.status,
-          title: l.title,
-          reportType: l.report_type_name,
-          description: l.description,
-          operator: l.operator_name,
-        }));
-
-        const safeShiftLabel = (activeShift.shift_label || 'SHIFT').replace(/[^a-zA-Z0-9]/g, '-').toUpperCase();
-        archiveFilename = `PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-${safeShiftLabel}.pdf`;
-
-        const consolidatedSnapshot = {
-          dailyReportDate: dateFormatted,
-          isDailyCombined: compiledShifts.length > 1,
-          totalShiftsCount: compiledShifts.length,
-          shifts: compiledShifts,
-          logs: allConsolidatedLogs,
-          totalLogsArchived: allConsolidatedLogs.length,
-          finalHandoverStatus: situationText,
-          finalOfficer: leadOfficerName,
-          generatedAt: now.toISOString(),
-        };
-
-        // Compute SHA-256 Hash across the consolidated daily record
-        const payloadString = JSON.stringify(consolidatedSnapshot);
-        let fileHash = 'sha256-' + Math.random().toString(36).substring(2, 15);
-        if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
-          try {
-            const enc = new TextEncoder().encode(payloadString);
-            const hashBuf = await window.crypto.subtle.digest('SHA-256', enc);
-            fileHash = Array.from(new Uint8Array(hashBuf))
-              .map((b) => b.toString(16).padStart(2, '0'))
-              .join('');
-          } catch (hErr) {
-            console.warn('Hash generation fallback:', hErr);
-          }
-        }
-
-        // 1. Generate compressed official Daily Operations PDF with operating user signature
-        const { blob: pdfBlob, sizeBytes: pdfSize } = await generateDailyLogsPDF({
-          filename: archiveFilename,
-          dailyReportDate: dateFormatted,
-          totalShiftsCount: compiledShifts.length,
-          finalOfficer: leadOfficerName,
-          finalOfficerRole: leadOfficerRole,
-          finalHandoverStatus: situationText,
-          signatureUrl: profile?.signature_url,
-          shifts: compiledShifts,
-          logs: allConsolidatedLogs,
-          fileHash: fileHash,
-          snapshotPayload: consolidatedSnapshot,
-        });
-
-        console.log(`[Daily Logs] Official PDF generated: ${archiveFilename} (${pdfSize} bytes)`);
-
-        // 2. Upload official PDF to Supabase storage bucket 'archive-documents' (MLS folder)
-        let storagePath = `MLS/${archiveFilename}`;
-        let fileUrl = null;
+      if (isFinalShiftOfCycle) {
         try {
-          const { data: uploadData, error: uploadErr } = await supabase.storage
-            .from('archive-documents')
-            .upload(storagePath, pdfBlob, {
-              contentType: 'application/pdf',
-              upsert: true,
-            });
+          archiveFilename = `PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-DAILY.pdf`;
 
-          if (!uploadErr && uploadData) {
-            storagePath = uploadData.path;
-            const { data: urlData } = supabase.storage.from('archive-documents').getPublicUrl(storagePath);
-            fileUrl = urlData?.publicUrl || null;
-            console.log(`[Daily Logs] Uploaded to storage bucket: ${storagePath}`);
-          } else if (uploadErr) {
-            console.warn('Daily log storage upload notice:', uploadErr.message);
+          // Query all shifts from this operational date
+          const { data: dayShifts } = await supabase
+            .from('shifts')
+            .select(`
+              id,
+              shift_label,
+              shift_date,
+              start_time,
+              end_time,
+              status,
+              lead_officer_id,
+              end_shift_handover_status,
+              incident_report_details,
+              start_monitoring_details,
+              started_at,
+              ended_at,
+              lead_officer:profiles!shifts_lead_officer_id_fkey(id, full_name, position_title, role)
+            `)
+            .eq('shift_date', activeShift.shift_date || dateFormatted)
+            .order('started_at', { ascending: true });
+
+          const shiftIds = (dayShifts || []).map((s: any) => s.id);
+          if (!shiftIds.includes(activeShift.id)) shiftIds.push(activeShift.id);
+
+          // Query all duty personnel for all shifts of the day
+          const { data: allDutyPersonnel } = await supabase
+            .from('shift_duty_personnel')
+            .select(`
+              id,
+              shift_id,
+              profile_id,
+              role_in_shift,
+              is_lead,
+              present_at_end,
+              profile:profiles!shift_duty_personnel_profile_id_fkey(id, full_name, position_title, default_shift)
+            `)
+            .in('shift_id', shiftIds);
+
+          // Query all logs recorded across all shifts of the day
+          const { data: dayLogs } = await supabase
+            .from('shift_logs')
+            .select('*')
+            .in('shift_id', shiftIds)
+            .order('log_date', { ascending: true })
+            .order('log_time', { ascending: true });
+
+          // Compile multi-shift summary sorted by schedule sort_order from start shift to last shift
+          const compiledShifts = (dayShifts || [])
+            .map((s: any) => {
+              const shiftRoster = (allDutyPersonnel || [])
+                .filter((dp: any) => dp.shift_id === s.id)
+                .map((dp: any) => ({
+                  name: dp.profile?.full_name || 'Officer',
+                  role: dp.role_in_shift || dp.profile?.position_title || 'Monitoring Officer',
+                  badgeNumber: `OPC-${(dp.profile_id || '').slice(0, 4).toUpperCase()}`,
+                  presentAtEnd: dp.present_at_end !== false,
+                }));
+
+              const shiftLogsList = (dayLogs || []).filter((l: any) => l.shift_id === s.id);
+
+              const schedMatch = shiftSchedules.find(
+                (sched) => sched.name.toLowerCase() === (s.shift_label || '').toLowerCase()
+              );
+
+              return {
+                id: s.id,
+                shiftLabel: s.shift_label,
+                sortOrder: schedMatch?.sort_order ?? 99,
+                startTime: s.start_time,
+                endTime: s.end_time || timeFormatted,
+                leadOfficer: (s.lead_officer as any)?.full_name || leadOfficerName,
+                leadOfficerRole: (s.lead_officer as any)?.position_title || 'Lead Operations Officer',
+                handoverStatus: s.end_shift_handover_status || 'Situation Remain Normal',
+                incidentDetails: s.incident_report_details || null,
+                monitoringBriefing: s.start_monitoring_details || null,
+                roster: shiftRoster,
+                logsCount: shiftLogsList.length,
+              };
+            })
+            .sort((a, b) => a.sortOrder - b.sortOrder);
+
+          const allConsolidatedLogs = (dayLogs || []).map((l: any) => ({
+            time: l.log_time,
+            date: l.log_date,
+            status: l.status,
+            title: l.title,
+            reportType: l.report_type_name,
+            description: l.description,
+            operator: l.operator_name,
+          }));
+
+          const firstShiftName = shiftScheduleSequenceInfo.firstShift?.name || compiledShifts[0]?.shiftLabel || 'Start Shift';
+          const lastShiftName = shiftScheduleSequenceInfo.lastShift?.name || activeShift.shift_label || 'Final Shift';
+
+          const consolidatedSnapshot = {
+            dailyReportDate: dateFormatted,
+            isDailyCombined: true,
+            totalShiftsCount: compiledShifts.length,
+            firstShift: firstShiftName,
+            lastShift: lastShiftName,
+            shifts: compiledShifts,
+            logs: allConsolidatedLogs,
+            totalLogsArchived: allConsolidatedLogs.length,
+            finalHandoverStatus: situationText,
+            finalOfficer: leadOfficerName,
+            generatedAt: now.toISOString(),
+          };
+
+          // Compute SHA-256 Hash across the consolidated daily record
+          const payloadString = JSON.stringify(consolidatedSnapshot);
+          let fileHash = 'sha256-' + Math.random().toString(36).substring(2, 15);
+          if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
+            try {
+              const enc = new TextEncoder().encode(payloadString);
+              const hashBuf = await window.crypto.subtle.digest('SHA-256', enc);
+              fileHash = Array.from(new Uint8Array(hashBuf))
+                .map((b) => b.toString(16).padStart(2, '0'))
+                .join('');
+            } catch (hErr) {
+              console.warn('Hash generation fallback:', hErr);
+            }
           }
-        } catch (sErr) {
-          console.warn('Could not upload daily log PDF to storage bucket:', sErr);
+
+          // 1. Generate compressed official Daily Operations PDF with operating user signature
+          const { blob: pdfBlob, sizeBytes: pdfSize } = await generateDailyLogsPDF({
+            filename: archiveFilename,
+            dailyReportDate: dateFormatted,
+            totalShiftsCount: compiledShifts.length,
+            finalOfficer: leadOfficerName,
+            finalOfficerRole: leadOfficerRole,
+            finalHandoverStatus: situationText,
+            signatureUrl: profile?.signature_url,
+            shifts: compiledShifts,
+            logs: allConsolidatedLogs,
+            fileHash: fileHash,
+            snapshotPayload: consolidatedSnapshot,
+          });
+
+          console.log(`[Daily Logs] Official Consolidated PDF generated: ${archiveFilename} (${pdfSize} bytes)`);
+
+          // 2. Upload official PDF to Supabase storage bucket 'archive-documents' (MLS folder)
+          let storagePath = `MLS/${archiveFilename}`;
+          let fileUrl = null;
+          try {
+            const { data: uploadData, error: uploadErr } = await supabase.storage
+              .from('archive-documents')
+              .upload(storagePath, pdfBlob, {
+                contentType: 'application/pdf',
+                upsert: true,
+              });
+
+            if (!uploadErr && uploadData) {
+              storagePath = uploadData.path;
+              const { data: urlData } = supabase.storage.from('archive-documents').getPublicUrl(storagePath);
+              fileUrl = urlData?.publicUrl || null;
+              console.log(`[Daily Logs] Uploaded to storage bucket: ${storagePath}`);
+            } else if (uploadErr) {
+              console.warn('Daily log storage upload notice:', uploadErr.message);
+            }
+          } catch (sErr) {
+            console.warn('Could not upload daily log PDF to storage bucket:', sErr);
+          }
+
+          // Insert consolidated record into public.archives
+          await supabase.from('archives').insert({
+            filename: archiveFilename,
+            category: 'log',
+            shift_id: activeShift.id,
+            lead_officer_id: activeShift.lead_officer_id || leadOfficerId,
+            lead_officer_name: leadOfficerName,
+            lead_officer_role: leadOfficerRole,
+            shift_label: `Daily Operations (${firstShiftName} to ${lastShiftName})`,
+            shift_hours: `${compiledShifts[0]?.startTime || '06:00H'} - ${timeFormatted}`,
+            item_count: allConsolidatedLogs.length,
+            file_size_bytes: pdfSize,
+            storage_path: storagePath,
+            file_url: fileUrl,
+            file_hash: fileHash,
+            summary: `Official Consolidated Daily Operations Archive combining shifts from ${firstShiftName} to ${lastShiftName} (${dateFormatted}). Total operational logs archived: ${allConsolidatedLogs.length}. Handover status: ${situationText}.`,
+            status: 'Verified',
+            snapshot_data: consolidatedSnapshot,
+            created_by: leadOfficerId,
+          });
+
+          broadcastSync('archives_updated');
+        } catch (archErr) {
+          console.error('Archival process notice:', archErr);
         }
-
-        // Insert consolidated record into public.archives
-        const shiftNames = compiledShifts.map((s) => s.shiftLabel).join(' · ');
-        await supabase.from('archives').insert({
-          filename: archiveFilename,
-          category: 'log',
-          shift_id: activeShift.id,
-          lead_officer_id: activeShift.lead_officer_id || leadOfficerId,
-          lead_officer_name: leadOfficerName,
-          lead_officer_role: leadOfficerRole,
-          shift_label: activeShift.shift_label || (compiledShifts.length > 1 ? `Daily Operations (${shiftNames})` : 'Operations Shift'),
-          shift_hours: `${activeShift.start_time || '08:00H'} - ${timeFormatted}`,
-          item_count: allConsolidatedLogs.length,
-          file_size_bytes: pdfSize,
-          storage_path: storagePath,
-          file_url: fileUrl,
-          file_hash: fileHash,
-          summary: `Official Operations Shift Archive for ${activeShift.shift_label || 'Shift'} (${activeShift.start_time || '08:00H'} - ${timeFormatted}). Total operational logs archived: ${allConsolidatedLogs.length}. Handover status: ${situationText}.`,
-          status: 'Verified',
-          snapshot_data: consolidatedSnapshot,
-          created_by: leadOfficerId,
-        });
-
-        broadcastSync('archives_updated');
-      } catch (archErr) {
-        console.error('Archival process notice:', archErr);
       }
 
       // Refresh states
@@ -1339,11 +1442,20 @@ export default function LogsPage() {
       broadcastSync('shift_logs_updated');
 
       setIsEndShiftModalOpen(false);
-      setShiftToast({
-        message: 'End of Monitoring Duty Logged & Archived',
-        submessage: `Shift completed. Official certified PDF (${archiveFilename}) uploaded to Archives with SHA-256 integrity hash.`,
-        type: 'end',
-      });
+
+      if (isFinalShiftOfCycle && archiveFilename) {
+        setShiftToast({
+          message: 'Daily Cycle Completed & Consolidated Archive Created',
+          submessage: `All shifts from ${shiftScheduleSequenceInfo.firstShift?.name || 'Start Shift'} to ${shiftScheduleSequenceInfo.lastShift?.name || 'Final Shift'} compiled into official certified PDF (${archiveFilename}) with SHA-256 integrity hash.`,
+          type: 'end',
+        });
+      } else {
+        setShiftToast({
+          message: 'Shift Handover Completed',
+          submessage: `${activeShift.shift_label} concluded successfully. Logs preserved for incoming shift duty. Official Daily Archive will compile at completion of ${shiftScheduleSequenceInfo.lastShift?.name || 'Final Shift'}.`,
+          type: 'info',
+        });
+      }
     } catch (err: any) {
       console.error('Error ending shift:', err);
       alert(`Could not complete shift handover: ${err.message || err}`);
@@ -1997,16 +2109,22 @@ export default function LogsPage() {
                     <Users className="w-5 h-5" />
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h2 className="text-base sm:text-lg font-bold text-[#1E293B] leading-tight">
-                        Start of monitoring Duty
+                        {startShiftDutyTitle}
                       </h2>
-                      <span className="text-[11px] font-bold text-[#004AC6] bg-blue-50 border border-[#004AC6]/20 px-2 py-0.5 rounded-full">
-                        {selectedShiftSchedule}
+                      <span className="text-[11px] font-bold text-[#004AC6] bg-blue-50 border border-[#004AC6]/20 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                        <Clock className="w-3 h-3 text-[#004AC6]" />
+                        <span>{activeShiftScheduleInfo.name}</span>
+                        {activeShiftScheduleInfo.time && (
+                          <span className="text-blue-500 font-mono text-[10px]">
+                            ({activeShiftScheduleInfo.time})
+                          </span>
+                        )}
                       </span>
                     </div>
                     <p className="text-xs text-[#757680] mt-0.5">
-                      Checklist of active personnel designated for this shift schedule.
+                      Auto-fetched active personnel designated for {activeShiftScheduleInfo.name}.
                     </p>
                   </div>
                 </div>
@@ -2023,37 +2141,6 @@ export default function LogsPage() {
               {/* Form Content */}
               <form onSubmit={handleConfirmStartShift} className="flex flex-col">
                 <div className="p-6 space-y-5 max-h-[62vh] overflow-y-auto custom-scrollbar">
-                  {/* Shift Selection Pills (for Admins or Shift switching) */}
-                  {shiftSchedules.length > 1 && (
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                        Designated Shift Schedule
-                      </label>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        {shiftSchedules.map((sched) => {
-                          const isSchedActive = selectedShiftSchedule.toLowerCase() === sched.name.toLowerCase();
-                          return (
-                            <button
-                              key={sched.id}
-                              type="button"
-                              onClick={() => handleSelectShiftSchedule(sched.name)}
-                              className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                                isSchedActive
-                                  ? 'bg-blue-50 border-[#004AC6] text-[#004AC6] ring-1 ring-[#004AC6]/20 font-bold'
-                                  : 'bg-white border-[#E2E8F0] text-[#505F76] hover:bg-slate-50 font-medium'
-                              }`}
-                            >
-                              <span className="text-xs block truncate">{sched.name}</span>
-                              <span className="text-[10px] text-slate-400 block mt-0.5 font-mono">
-                                {sched.start_time} - {sched.end_time}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
                   {/* Quick Action Toolbar */}
                   <div className="flex items-center justify-between bg-slate-50 border border-[#E2E8F0] rounded-2xl px-4 py-2.5">
                     <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider">
@@ -2078,13 +2165,13 @@ export default function LogsPage() {
                     </div>
                   </div>
 
-                  {/* Checklist of Personnel - ONLY designated schedule personnel */}
+                  {/* Checklist of Personnel - Auto-fetched designated schedule personnel */}
                   <div className="space-y-2.5">
                     {designatedOfficers.length === 0 ? (
                       <div className="p-6 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
                         <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                         <p className="text-xs font-bold text-slate-600">
-                          No personnel designated for {selectedShiftSchedule}
+                          No personnel designated for {activeShiftScheduleInfo.name}
                         </p>
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           Assign officers to this shift in User Management (/users).
@@ -2166,7 +2253,9 @@ export default function LogsPage() {
                     disabled={selectedPersonnelIds.length === 0 || isSubmitting}
                     leftIcon={isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-white" />}
                   >
-                    {isSubmitting ? 'Starting Shift...' : `Confirm Start Shift (${selectedPersonnelIds.length})`}
+                    {isSubmitting
+                      ? (isStartingFirstShift ? 'Starting Shift...' : 'Assuming Duty...')
+                      : `Confirm ${isStartingFirstShift ? 'Start Shift' : 'Assume Duty'} (${selectedPersonnelIds.length})`}
                   </PrimaryButton>
                 </div>
               </form>
@@ -2267,27 +2356,60 @@ export default function LogsPage() {
                     </div>
                   </div>
 
-                  {/* Section 2: Automatic Official Archive Notice */}
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4.5 space-y-2.5">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-blue-50 text-[#004AC6] flex items-center justify-center border border-blue-100 shrink-0">
-                        <ArchiveIcon className="w-4 h-4" />
+                  {/* Section 2: Shift Handover or Automatic Consolidated Daily Archive Notice */}
+                  {shiftScheduleSequenceInfo.isLastShift ? (
+                    <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4.5 space-y-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-blue-50 text-[#004AC6] flex items-center justify-center border border-blue-100 shrink-0">
+                          <ArchiveIcon className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-bold text-[#1E293B]">Automatic Official Daily Archive</h4>
+                            <span className="text-[10px] font-bold text-[#004AC6] bg-blue-50 border border-[#004AC6]/20 px-2 py-0.5 rounded-full">
+                              Final Shift #{shiftScheduleSequenceInfo.lastShift?.sort_order || shiftSchedules.length}
+                            </span>
+                          </div>
+                          <p className="text-xs text-[#757680] mt-0.5">
+                            This is the final shift of the operational sequence. Ending this shift compiles and consolidates all shifts from <strong>{shiftScheduleSequenceInfo.firstShift?.name || 'Start Shift'}</strong> to <strong>{shiftScheduleSequenceInfo.lastShift?.name || 'Final Shift'}</strong> into a certified Daily Operations PDF stored in <strong>Archives</strong>.
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h4 className="text-sm font-bold text-[#1E293B]">Automatic Official Archive</h4>
-                        <p className="text-xs text-[#757680] mt-0.5">
-                          Ending this shift automatically compiles, certifies with SHA-256 integrity hash, and stores the official operational PDF in <strong>Archives</strong>.
-                        </p>
-                      </div>
-                    </div>
 
-                    <div className="p-2.5 bg-blue-50/70 border border-blue-200/80 rounded-xl text-xs text-[#004AC6] flex items-center gap-2">
-                      <Sparkles className="w-3.5 h-3.5 shrink-0 text-[#004AC6]" />
-                      <span>
-                        <strong>Auto-Archiving Enabled:</strong> Operational shift logs and duty handover details will be automatically archived into the <code>archive-documents</code> bucket.
-                      </span>
+                      <div className="p-2.5 bg-blue-50/70 border border-blue-200/80 rounded-xl text-xs text-[#004AC6] flex items-center gap-2">
+                        <Sparkles className="w-3.5 h-3.5 shrink-0 text-[#004AC6]" />
+                        <span>
+                          <strong>Full Daily Consolidation:</strong> All telemetry logs, duty rosters, and incident records across all shifts will be compiled, hashed with SHA-256, and uploaded to the <code>archive-documents</code> bucket.
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4.5 space-y-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center border border-amber-200 shrink-0">
+                          <Clock className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-bold text-[#1E293B]">Operational Shift Handover</h4>
+                            <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                              Interim Shift
+                            </span>
+                          </div>
+                          <p className="text-xs text-[#757680] mt-0.5">
+                            Shift logs and telemetry will remain active for the incoming shift. The official Daily Archive will be automatically generated upon completion of the final shift (<strong>{shiftScheduleSequenceInfo.lastShift?.name || 'Final Shift'}</strong>).
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-amber-800 flex items-center gap-2">
+                        <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-amber-700" />
+                        <span>
+                          <strong>Handover Mode:</strong> Ending this shift records the handover log and transfers monitoring duty to incoming shift personnel.
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Section 3: Incident Report Toggle */}
                   <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4.5 space-y-4">
@@ -2491,19 +2613,14 @@ export default function LogsPage() {
                     </div>
                   </div>
 
-                  {/* Detailed Description */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                      Detailed Description
-                    </label>
-                    <textarea
-                      rows={4}
-                      value={formDescription}
-                      onChange={(e) => setFormDescription(stripEmojis(e.target.value))}
-                      placeholder="Provide a detailed operational summary of the event..."
-                      className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all resize-none"
-                    />
-                  </div>
+                  {/* Detailed Description with Visual WYSIWYG Rich Text Editor */}
+                  <RichTextEditor
+                    label="Detailed Description"
+                    value={formDescription}
+                    onChange={(html) => setFormDescription(html)}
+                    placeholder="Provide a detailed operational summary of the event..."
+                    minHeight="140px"
+                  />
                 </div>
 
                 {/* Footer Actions */}

@@ -268,27 +268,22 @@ export default function ShiftScheduleCalendarPage() {
       if (profilesData && profilesData.length > 0) {
         let deactList: string[] = [];
         let delList: string[] = [];
-        let editedMap: Record<string, any> = {};
         try {
           deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
           delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
-          editedMap = JSON.parse(localStorage.getItem('pdrrmo_edited_users') || '{}');
         } catch (e) {}
 
         const mappedProfiles: OfficerAssignment[] = profilesData
           .filter((p) => {
             const isDel = delList.includes(p.id) || (p.email && delList.includes(p.email));
             const isDeact = deactList.includes(p.id) || (p.email && deactList.includes(p.email));
-            const userEdit = editedMap[p.id] || (p.email ? editedMap[p.email.toLowerCase()] : null);
-            const isEditDeact = userEdit?.status === 'Inactive';
-            return !isDel && !isDeact && !isEditDeact && p.is_active !== false;
+            return !isDel && !isDeact && p.is_active !== false;
           })
           .map((p) => {
-            const userEdit = editedMap[p.id] || (p.email ? editedMap[p.email.toLowerCase()] : null) || {};
-            const finalName = userEdit.name || p.full_name || 'Monitoring Responder';
-            const finalRole = userEdit.positionTitle || p.position_title || p.role || 'Duty Responder';
-            const finalUserRole = (userEdit.role || p.role || 'staff').toLowerCase();
-            const finalShift = userEdit.shift || p.default_shift || '';
+            const finalName = p.full_name || 'Monitoring Responder';
+            const finalRole = p.position_title || p.role || 'Duty Responder';
+            const finalUserRole = (p.role || 'staff').toLowerCase();
+            const finalShift = p.default_shift || '';
 
             return {
               id: p.id,
@@ -298,7 +293,7 @@ export default function ShiftScheduleCalendarPage() {
               badgeNumber: `OPC-${p.id.slice(0, 4).toUpperCase()}`,
               avatarInitials: getInitials(finalName || 'OP'),
               defaultShift: finalShift,
-              avatarUrl: userEdit.avatarUrl !== undefined ? userEdit.avatarUrl : p.avatar_url,
+              avatarUrl: p.avatar_url,
             };
           });
         setProfiles(mappedProfiles);

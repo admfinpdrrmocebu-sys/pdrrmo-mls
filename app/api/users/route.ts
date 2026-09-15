@@ -1,5 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+
+async function getSupabaseClient() {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (serviceRoleKey && supabaseUrl) {
+    return createSupabaseClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return await createClient();
+}
 
 /**
  * PATCH /api/users
@@ -13,8 +25,6 @@ export async function PATCH(request: NextRequest) {
     if (!id) {
       return NextResponse.json({ error: 'User ID is required.' }, { status: 400 });
     }
-
-    const supabase = await createClient();
 
     // Normalize role enum to 'admin' | 'monitoring' | 'staff'
     let normalizedRole: 'admin' | 'monitoring' | 'staff' = 'monitoring';
@@ -44,18 +54,21 @@ export async function PATCH(request: NextRequest) {
     if (default_shift !== undefined) updatePayload.default_shift = default_shift;
     if (is_active !== undefined) updatePayload.is_active = Boolean(is_active);
 
-    // 1. Try standard Supabase update
-    const { data, error } = await supabase
+    const client = await getSupabaseClient();
+
+    // 2. Try standard Supabase update
+    const { data, error } = await client
       .from('profiles')
       .update(updatePayload)
       .eq('id', id)
       .select()
       .maybeSingle();
 
-    if (error) {
-      console.warn('Direct profile update error, trying RPC admin_update_user_profile:', error.message);
+    // If update returned an error OR returned null (which means RLS silently filtered out all rows)
+    if (error || !data) {
+      console.warn('Direct profile update did not update row, trying RPC admin_update_user_profile:', error?.message);
       // Fallback to RPC if direct update hit RLS
-      const { data: rpcData, error: rpcErr } = await supabase.rpc('admin_update_user_profile', {
+      const { data: rpcData, error: rpcErr } = await client.rpc('admin_update_user_profile', {
         p_user_id: id,
         p_full_name: full_name?.trim() || null,
         p_role: normalizedRole,
@@ -64,20 +77,24 @@ export async function PATCH(request: NextRequest) {
         p_is_active: is_active !== undefined ? Boolean(is_active) : null,
       });
 
-      if (rpcErr) {
-        console.error('RPC admin_update_user_profile failed:', rpcErr.message);
-        throw new Error(error.message || rpcErr.message);
+      if (rpcErr || !rpcData || rpcData.length === 0) {
+        const errorMsg =
+          rpcErr?.message ||
+          error?.message ||
+          'Row Level Security (RLS) on public.profiles prevented updating this user. Please execute the policy update in Supabase SQL Editor.';
+        console.error('All profile update methods failed:', errorMsg);
+        return NextResponse.json({ error: errorMsg, rlsBlocked: true }, { status: 403 });
       }
 
       return NextResponse.json({
         success: true,
-        user: rpcData?.[0] || { id, ...updatePayload },
+        user: rpcData?.[0],
       });
     }
 
     return NextResponse.json({
       success: true,
-      user: data || { id, ...updatePayload },
+      user: data,
     });
   } catch (error: unknown) {
     const errorMsg = error instanceof Error ? error.message : 'Failed to update user profile.';
@@ -111,7 +128,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'User ID is required for deletion.' }, { status: 400 });
     }
 
-    const supabase = await createClient();
+    const supabase = await getSupabaseClient();
 
     // 1. Try RPC delete first (cleans foreign keys atomically)
     const { data: rpcData, error: rpcErr } = await supabase.rpc('admin_delete_user_profile', {

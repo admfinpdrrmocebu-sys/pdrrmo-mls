@@ -37,14 +37,14 @@ export function RichTextEditor({
   const [isBoldActive, setIsBoldActive] = useState(false);
   const [isListActive, setIsListActive] = useState(false);
   const [isEmpty, setIsEmpty] = useState(false);
-  const isInitialMount = useRef(true);
-
-  // Sync value from prop to DOM on initial mount
+  // Sync value from prop to DOM whenever value changes externally
   useEffect(() => {
-    if (editorRef.current && isInitialMount.current) {
-      editorRef.current.innerHTML = stripEmojis(value || '');
-      checkEmptyState();
-      isInitialMount.current = false;
+    if (editorRef.current) {
+      const cleanVal = stripEmojis(value || '');
+      if (editorRef.current.innerHTML !== cleanVal && document.activeElement !== editorRef.current) {
+        editorRef.current.innerHTML = cleanVal;
+        checkEmptyState();
+      }
     }
   }, [value]);
 

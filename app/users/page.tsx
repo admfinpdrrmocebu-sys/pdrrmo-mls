@@ -45,7 +45,7 @@ export interface UserAccount {
   id: string;
   name: string;
   email: string;
-  position: 'Admin' | 'Monitoring' | 'Staff';
+  position: string;
   positionTitle?: string;
   shift?: string;
   status: 'Active' | 'Inactive';
@@ -59,7 +59,7 @@ export interface UserAccount {
 export interface PendingInvitation {
   id: string;
   email: string;
-  position: 'Admin' | 'Monitoring' | 'Staff';
+  position: string;
   positionTitle?: string;
   shift?: string;
   token?: string;
@@ -125,7 +125,7 @@ const defaultShiftScheduleOptions: CustomDropdownOption[] = [
   },
 ];
 
-const positionFilterOptions: CustomDropdownOption[] = [
+const defaultPositionFilterOptions: CustomDropdownOption[] = [
   { value: 'ALL', label: 'All Positions' },
   { value: 'Admin', label: 'Admin', dotColor: '#004AC6', badge: 'System', badgeColor: 'bg-blue-50 text-[#004AC6]' },
   { value: 'Monitoring', label: 'Monitoring', dotColor: '#0284C7', badge: 'Operational', badgeColor: 'bg-sky-50 text-sky-700' },
@@ -337,6 +337,7 @@ export default function UserManagementPage() {
   // Dynamic dropdown options from access_roles and shift_schedules
   const [positionOptions, setPositionOptions] = useState<CustomDropdownOption[]>(defaultPositionOptions);
   const [shiftScheduleOptions, setShiftScheduleOptions] = useState<CustomDropdownOption[]>(defaultShiftScheduleOptions);
+  const [positionFilterOptions, setPositionFilterOptions] = useState<CustomDropdownOption[]>(defaultPositionFilterOptions);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -360,7 +361,7 @@ export default function UserManagementPage() {
   // Invite Form State (Multiple Emails & Position & Shift Schedule Dropdowns)
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [currentEmailInput, setCurrentEmailInput] = useState('');
-  const [invitePosition, setInvitePosition] = useState<'Admin' | 'Monitoring' | 'Staff'>('Monitoring');
+  const [invitePosition, setInvitePosition] = useState<string>('Monitoring');
   const [invitePositionTitle, setInvitePositionTitle] = useState('Monitoring Officer');
   const [inviteShift, setInviteShift] = useState<string>('Day Shift (Alpha)');
   const [isSendingInvitations, setIsSendingInvitations] = useState(false);
@@ -368,7 +369,8 @@ export default function UserManagementPage() {
   // Edit Form State
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
-  const [editPosition, setEditPosition] = useState<'Admin' | 'Monitoring' | 'Staff'>('Monitoring');
+  const [editPosition, setEditPosition] = useState<string>('Monitoring');
+  const [editPositionTitle, setEditPositionTitle] = useState('Monitoring Officer');
   const [editShift, setEditShift] = useState<string>('Day Shift (Alpha)');
   const [editStatus, setEditStatus] = useState<'Active' | 'Inactive'>('Active');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -401,110 +403,28 @@ export default function UserManagementPage() {
   const fetchData = useCallback(async (showLoading = true) => {
     if (showLoading) setIsLoading(true);
     try {
-      // 1. Fetch Official Users from public.profiles
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
+      // 1. Concurrently fetch all datasets including dynamic access roles & shift schedules
+      const [profilesRes, invRes, rolesRes, schedulesRes] = await Promise.all([
+        supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+        supabase
+          .from('invitations')
+          .select('*, invited_by_profile:invited_by(full_name, email)')
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false }),
+        supabase.from('access_roles').select('*').order('name', { ascending: true }),
+        supabase.from('shift_schedules').select('*').order('sort_order', { ascending: true }),
+      ]);
 
-      if (profilesError) {
-        console.warn('Error fetching profiles:', profilesError.message);
-      } else if (profilesData) {
-        let deactList: string[] = [];
-        let delList: string[] = [];
-        let editedMap: Record<string, any> = {};
-        try {
-          deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
-          delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
-          editedMap = JSON.parse(localStorage.getItem('pdrrmo_edited_users') || '{}');
-        } catch (e) {}
-
-        const mappedUsers: UserAccount[] = profilesData
-          .filter((p) => !delList.includes(p.id) && !delList.includes(p.email))
-          .map((p) => {
-            const userEdit = editedMap[p.id] || (p.email ? editedMap[p.email.toLowerCase()] : null) || {};
-
-            let pos: 'Admin' | 'Monitoring' | 'Staff' = 'Monitoring';
-            const roleStr = (userEdit.role || p.role || '').toLowerCase();
-            if (roleStr === 'admin' || userEdit.position === 'Admin') pos = 'Admin';
-            else if (roleStr === 'staff' || userEdit.position === 'Staff') pos = 'Staff';
-            else pos = 'Monitoring';
-
-            const isLocallyDeactivated = deactList.includes(p.id) || deactList.includes(p.email) || userEdit.status === 'Inactive';
-            const isRowActive = !isLocallyDeactivated && (userEdit.status ? userEdit.status === 'Active' : Boolean(p.is_active));
-
-            const finalName = userEdit.name || p.full_name || 'Personnel';
-            const finalShift = userEdit.shift || p.default_shift || 'Day Shift (Alpha)';
-            const finalPositionTitle =
-              userEdit.positionTitle ||
-              p.position_title ||
-              (pos === 'Admin' ? 'Administrator' : 'Monitoring Officer');
-
-            return {
-              id: p.id,
-              name: finalName,
-              email: p.email,
-              position: pos,
-              positionTitle: finalPositionTitle,
-              shift: finalShift,
-              status: isRowActive ? 'Active' : 'Inactive',
-              initials: getInitials(finalName || p.email),
-              avatarColor: getAvatarColor(p.id || p.email),
-              avatarUrl: userEdit.avatarUrl !== undefined ? userEdit.avatarUrl : p.avatar_url,
-              lastActive: formatTimeAgo(p.last_active_at || p.updated_at),
-              createdAt: p.created_at,
-            };
-          });
-        setUsers(mappedUsers);
-      }
-
-      // 2. Fetch Pending Invitations from public.invitations
-      const { data: invData, error: invError } = await supabase
-        .from('invitations')
-        .select('*, invited_by_profile:invited_by(full_name, email)')
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false });
-
-      if (invError) {
-        console.warn('Error fetching invitations:', invError.message);
-      } else if (invData) {
-        const mappedInvs: PendingInvitation[] = invData.map((inv) => {
-          let pos: 'Admin' | 'Monitoring' | 'Staff' = 'Monitoring';
-          const r = (inv.role || '').toLowerCase();
-          if (r === 'admin') pos = 'Admin';
-          else if (r === 'staff') pos = 'Staff';
-          else pos = 'Monitoring';
-
-          const inviterName = inv.invited_by_profile?.full_name || 'Administrator';
-
-          return {
-            id: inv.id,
-            email: inv.email,
-            position: pos,
-            positionTitle: inv.position_title || (pos === 'Admin' ? 'Administrator' : 'Monitoring Officer'),
-            shift: inv.default_shift || 'Day Shift (Alpha)',
-            token: inv.token,
-            status: inv.status,
-            invitedAt: formatInvitedDate(inv.created_at),
-            invitedBy: `${inviterName}`,
-            expiresAt: inv.expires_at,
-          };
-        });
-        setPendingInvitations(mappedInvs);
-      }
-
-      // 3. Fetch Access Roles to populate position options
-      const { data: rolesData } = await supabase
-        .from('access_roles')
-        .select('*')
-        .order('name', { ascending: true });
+      // 2. Process Dynamic Access Roles to populate position options
+      const rolesData = rolesRes.data || [];
+      let currentRoleOptions = defaultPositionOptions;
 
       if (rolesData && rolesData.length > 0) {
-        const dynamicRoles: CustomDropdownOption[] = rolesData.map((role) => ({
+        currentRoleOptions = rolesData.map((role: any) => ({
           value: role.name,
           label: role.name,
           description: role.description || `${role.name} Role`,
-          badge: role.badge || 'Operational',
+          badge: role.badge || role.name,
           badgeColor:
             role.badge_type === 'system'
               ? 'bg-blue-50 text-[#004AC6]'
@@ -518,17 +438,101 @@ export default function UserManagementPage() {
               ? '#0284C7'
               : '#505F76',
         }));
-        setPositionOptions(dynamicRoles);
+        setPositionOptions(currentRoleOptions);
+        setPositionFilterOptions([
+          { value: 'ALL', label: 'All Positions' },
+          ...currentRoleOptions,
+        ]);
       }
 
-      // 4. Fetch Shift Schedules
-      const { data: schedulesData } = await supabase
-        .from('shift_schedules')
-        .select('*')
-        .order('sort_order', { ascending: true });
+      // 3. Process Official Users from public.profiles
+      if (profilesRes.error) {
+        console.warn('Error fetching profiles:', profilesRes.error.message);
+      } else if (profilesRes.data) {
+        let deactList: string[] = [];
+        let delList: string[] = [];
+        try {
+          deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
+          delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
+        } catch (e) {}
 
-      if (schedulesData && schedulesData.length > 0) {
-        const dynamicSchedules: CustomDropdownOption[] = schedulesData.map((sch) => ({
+        const mappedUsers: UserAccount[] = profilesRes.data
+          .filter((p: any) => !delList.includes(p.id) && !delList.includes(p.email))
+          .map((p: any) => {
+            const roleStr = (p.role || '').toLowerCase();
+            const titleStr = (p.position_title || '').trim();
+
+            // Match role dynamically from database access_roles
+            const matchedDbRole = rolesData.find(
+              (r: any) =>
+                (titleStr && (r.name.toLowerCase() === titleStr.toLowerCase() || r.code.toLowerCase() === titleStr.toLowerCase())) ||
+                (roleStr && (r.code.toLowerCase() === roleStr || r.name.toLowerCase() === roleStr))
+            );
+
+            const finalPosition = titleStr || matchedDbRole?.name || (roleStr === 'admin' ? 'Admin' : roleStr === 'staff' ? 'Staff' : 'Monitoring');
+            const finalPositionTitle = p.position_title || matchedDbRole?.name || finalPosition;
+
+            const isLocallyDeactivated = deactList.includes(p.id) || deactList.includes(p.email);
+            const isRowActive = !isLocallyDeactivated && Boolean(p.is_active);
+
+            const finalName = p.full_name || 'Personnel';
+            const finalShift = p.default_shift || 'Day Shift (Alpha)';
+
+            return {
+              id: p.id,
+              name: finalName,
+              email: p.email,
+              position: finalPosition,
+              positionTitle: finalPositionTitle,
+              shift: finalShift,
+              status: isRowActive ? 'Active' : 'Inactive',
+              initials: getInitials(finalName || p.email),
+              avatarColor: getAvatarColor(p.id || p.email),
+              avatarUrl: p.avatar_url,
+              lastActive: formatTimeAgo(p.last_active_at || p.updated_at),
+              createdAt: p.created_at,
+            };
+          });
+        setUsers(mappedUsers);
+      }
+
+      // 4. Process Pending Invitations from public.invitations
+      if (invRes.error) {
+        console.warn('Error fetching invitations:', invRes.error.message);
+      } else if (invRes.data) {
+        const mappedInvs: PendingInvitation[] = invRes.data.map((inv: any) => {
+          const invRoleStr = (inv.role || '').toLowerCase();
+          const invTitleStr = (inv.position_title || '').trim();
+
+          const matchedInvRole = rolesData.find(
+            (r: any) =>
+              (invTitleStr && (r.name.toLowerCase() === invTitleStr.toLowerCase() || r.code.toLowerCase() === invTitleStr.toLowerCase())) ||
+              (invRoleStr && (r.code.toLowerCase() === invRoleStr || r.name.toLowerCase() === invRoleStr))
+          );
+
+          const invPos = matchedInvRole?.name || invTitleStr || (invRoleStr === 'admin' ? 'Admin' : invRoleStr === 'staff' ? 'Staff' : 'Monitoring');
+          const invTitle = inv.position_title || matchedInvRole?.name || invPos;
+          const inviterName = inv.invited_by_profile?.full_name || 'Administrator';
+
+          return {
+            id: inv.id,
+            email: inv.email,
+            position: invPos,
+            positionTitle: invTitle,
+            shift: inv.default_shift || 'Day Shift (Alpha)',
+            token: inv.token,
+            status: inv.status,
+            invitedAt: formatInvitedDate(inv.created_at),
+            invitedBy: `${inviterName}`,
+            expiresAt: inv.expires_at,
+          };
+        });
+        setPendingInvitations(mappedInvs);
+      }
+
+      // 5. Process Shift Schedules
+      if (schedulesRes.data && schedulesRes.data.length > 0) {
+        const dynamicSchedules: CustomDropdownOption[] = schedulesRes.data.map((sch: any) => ({
           value: sch.name,
           label: sch.name,
           description: `${sch.start_time} – ${sch.end_time} · ${sch.duration || '8 Hours'}`,
@@ -551,7 +555,7 @@ export default function UserManagementPage() {
     fetchData(true);
   }, [fetchData]);
 
-  // Real-Time Subscriptions for Profiles & Invitations
+  // Real-Time Subscriptions for Profiles, Invitations, Roles & Schedules
   useEffect(() => {
     const channel = supabase
       .channel('user-management-realtime')
@@ -565,6 +569,20 @@ export default function UserManagementPage() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'invitations' },
+        () => {
+          fetchData(false);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'access_roles' },
+        () => {
+          fetchData(false);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shift_schedules' },
         () => {
           fetchData(false);
         }
@@ -583,7 +601,7 @@ export default function UserManagementPage() {
     setToastNotification({
       type: 'info',
       message: 'Data Synchronized',
-      submessage: 'Profiles and active invitations refreshed from database.',
+      submessage: 'Profiles, access roles, and active invitations refreshed from database.',
     });
   };
 
@@ -598,7 +616,9 @@ export default function UserManagementPage() {
         u.position.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (u.positionTitle && u.positionTitle.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesPosition =
-        selectedPositionFilter === 'ALL' || u.position === selectedPositionFilter;
+        selectedPositionFilter === 'ALL' ||
+        u.position.toLowerCase() === selectedPositionFilter.toLowerCase() ||
+        (u.positionTitle && u.positionTitle.toLowerCase() === selectedPositionFilter.toLowerCase());
       return matchesSearch && matchesPosition;
     });
   }, [users, searchQuery, selectedPositionFilter]);
@@ -611,7 +631,9 @@ export default function UserManagementPage() {
         inv.invitedBy.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (inv.positionTitle && inv.positionTitle.toLowerCase().includes(searchQuery.toLowerCase()));
       const matchesPosition =
-        selectedPositionFilter === 'ALL' || inv.position === selectedPositionFilter;
+        selectedPositionFilter === 'ALL' ||
+        inv.position.toLowerCase() === selectedPositionFilter.toLowerCase() ||
+        (inv.positionTitle && inv.positionTitle.toLowerCase() === selectedPositionFilter.toLowerCase());
       return matchesSearch && matchesPosition;
     });
   }, [pendingInvitations, searchQuery, selectedPositionFilter]);
@@ -640,8 +662,10 @@ export default function UserManagementPage() {
   const handleOpenInviteModal = () => {
     setInviteEmails([]);
     setCurrentEmailInput('');
-    setInvitePosition('Monitoring');
-    setInvitePositionTitle('Monitoring Officer');
+    const defaultPos = positionOptions[0]?.value || 'Monitoring';
+    const defaultTitle = positionOptions[0]?.label || 'Monitoring Officer';
+    setInvitePosition(defaultPos);
+    setInvitePositionTitle(defaultTitle);
     setInviteShift(shiftScheduleOptions[0]?.value || 'Day Shift (Alpha)');
     setIsInviteModalOpen(true);
     setActiveMenuId(null);
@@ -694,12 +718,14 @@ export default function UserManagementPage() {
       const inviterName = currentAdminProfile?.full_name || 'Administrator';
       const inviterId = currentAdminProfile?.id || null;
 
-      const normalizedRole = (['admin', 'monitoring', 'staff'].includes(invitePosition.toLowerCase())
-        ? invitePosition.toLowerCase()
+      const normalizedRole = (invitePosition.toLowerCase().includes('admin')
+        ? 'admin'
+        : invitePosition.toLowerCase().includes('staff')
+        ? 'staff'
         : 'monitoring') as 'admin' | 'monitoring' | 'staff';
 
       const positionTitle =
-        invitePositionTitle || (invitePosition === 'Admin' ? 'Administrator' : invitePosition === 'Staff' ? 'Operational Staff' : 'Monitoring Officer');
+        invitePositionTitle || invitePosition || (invitePosition.toLowerCase().includes('admin') ? 'Administrator' : 'Monitoring Officer');
 
       const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
       let wasSimulated = false;
@@ -816,13 +842,19 @@ export default function UserManagementPage() {
 
       if (updateError) throw new Error(updateError.message);
 
+      const invRole = (invitation.position.toLowerCase().includes('admin')
+        ? 'admin'
+        : invitation.position.toLowerCase().includes('staff')
+        ? 'staff'
+        : 'monitoring') as 'admin' | 'monitoring' | 'staff';
+
       // Dispatch email
       const apiRes = await fetch('/api/invitations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: invitation.email,
-          role: invitation.position.toLowerCase(),
+          role: invRole,
           positionTitle: invitation.positionTitle || invitation.position,
           shift: invitation.shift || 'Day Shift (Alpha)',
           inviteUrl,
@@ -911,7 +943,16 @@ export default function UserManagementPage() {
     setEditingUser(user);
     setEditName(user.name);
     setEditEmail(user.email);
-    setEditPosition(user.position);
+    const matchingOption = positionOptions.find(
+      (opt) =>
+        opt.value.toLowerCase() === (user.position || '').toLowerCase() ||
+        opt.label.toLowerCase() === (user.position || '').toLowerCase() ||
+        (user.positionTitle && opt.value.toLowerCase() === user.positionTitle.toLowerCase()) ||
+        (user.positionTitle && opt.label.toLowerCase() === user.positionTitle.toLowerCase())
+    );
+    const selectedPos = matchingOption ? matchingOption.value : (user.position || positionOptions[0]?.value || 'Monitoring');
+    setEditPosition(selectedPos);
+    setEditPositionTitle(user.positionTitle || matchingOption?.label || selectedPos);
     setEditShift(user.shift || shiftScheduleOptions[0]?.value || 'Day Shift (Alpha)');
     setEditStatus(user.status);
     setIsEditModalOpen(true);
@@ -925,141 +966,137 @@ export default function UserManagementPage() {
 
     const targetId = editingUser.id;
     const targetName = editName.trim();
-    const normalizedRole = (
-      ['admin', 'monitoring', 'staff'].includes(editPosition.toLowerCase())
-        ? editPosition.toLowerCase()
-        : 'monitoring'
-    ) as 'admin' | 'monitoring' | 'staff';
-    const positionTitle =
-      editPosition === 'Admin'
-        ? 'System Administrator'
-        : editPosition === 'Staff'
-        ? 'Operational Staff'
-        : 'Monitoring Officer';
+
+    // Look up selected role in positionOptions
+    const selectedOption = positionOptions.find(
+      (opt) =>
+        opt.value.toLowerCase() === editPosition.toLowerCase() ||
+        opt.label.toLowerCase() === editPosition.toLowerCase()
+    );
+    const roleName = selectedOption?.label || editPosition;
+
+    // Normalize PostgreSQL enum role ('admin' | 'monitoring' | 'staff')
+    let normalizedRole: 'admin' | 'monitoring' | 'staff' = 'monitoring';
+    const lowerPos = editPosition.toLowerCase();
+    if (lowerPos.includes('admin')) {
+      normalizedRole = 'admin';
+    } else if (lowerPos.includes('staff')) {
+      normalizedRole = 'staff';
+    } else {
+      normalizedRole = 'monitoring';
+    }
+
+    const finalPositionTitle = editPositionTitle.trim() || roleName;
 
     const updatedUser: UserAccount = {
       ...editingUser,
       name: targetName,
-      position: editPosition,
-      positionTitle: positionTitle,
+      position: roleName,
+      positionTitle: finalPositionTitle,
       shift: editShift,
       status: editStatus,
       initials: getInitials(targetName || editingUser.email),
     };
 
-    // 1. Optimistic UI update
-    setUsers((prev) =>
-      prev.map((u) => (u.id === targetId ? updatedUser : u))
-    );
-
-    // 2. Persist in localStorage across reloads & sessions
+    // 1. Send update to Server API & Supabase
     try {
-      const currentEdited: Record<string, any> = JSON.parse(
-        localStorage.getItem('pdrrmo_edited_users') || '{}'
-      );
-      currentEdited[targetId] = {
-        name: targetName,
-        role: normalizedRole,
-        position: editPosition,
-        positionTitle: positionTitle,
-        shift: editShift,
-        status: editStatus,
-      };
-      if (editingUser.email) {
-        currentEdited[editingUser.email.toLowerCase()] = currentEdited[targetId];
-      }
-      localStorage.setItem('pdrrmo_edited_users', JSON.stringify(currentEdited));
-
-      // Handle deactivation list sync if status was changed in Edit modal
-      const currentDeact: string[] = JSON.parse(
-        localStorage.getItem('pdrrmo_deactivated_users') || '[]'
-      );
-      let updatedDeact: string[];
-      if (editStatus === 'Inactive') {
-        updatedDeact = Array.from(new Set([...currentDeact, targetId, editingUser.email]));
-      } else {
-        updatedDeact = currentDeact.filter((id) => id !== targetId && id !== editingUser.email);
-      }
-      localStorage.setItem('pdrrmo_deactivated_users', JSON.stringify(updatedDeact));
-    } catch (e) {
-      console.warn('LocalStorage save error:', e);
-    }
-
-    // 3. Broadcast across tabs and windows
-    try {
-      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        const bc = new BroadcastChannel('pdrrmo_auth_sync');
-        bc.postMessage({
-          type: 'USER_EDITED',
-          userId: targetId,
-          email: editingUser.email,
-          user: updatedUser,
-        });
-        if (editStatus === 'Inactive') {
-          bc.postMessage({
-            type: 'USER_DEACTIVATED',
-            userId: targetId,
-            email: editingUser.email,
-            name: targetName,
-          });
-        } else {
-          bc.postMessage({
-            type: 'USER_ACTIVATED',
-            userId: targetId,
-            email: editingUser.email,
-            name: targetName,
-          });
-        }
-        bc.close();
-      }
-    } catch (e) {
-      console.warn('BroadcastChannel error:', e);
-    }
-
-    // 4. Send update to Server API & Supabase
-    try {
-      await fetch('/api/users', {
+      const response = await fetch('/api/users', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: targetId,
           full_name: targetName,
           role: normalizedRole,
-          position_title: positionTitle,
+          position_title: finalPositionTitle,
           default_shift: editShift,
           is_active: editStatus === 'Active',
         }),
       });
 
+      const resData = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        if (resData?.rlsBlocked) {
+          throw new Error(
+            'Supabase Row Level Security (RLS) blocked this update. Please run the SQL migration script in supabase/fix_profiles_rls_and_cascade.sql in your Supabase SQL Editor.'
+          );
+        }
+        throw new Error(resData?.error || 'Failed to update user profile in database.');
+      }
+
+      // Direct client update fallback / realtime notification
       await supabase
         .from('profiles')
         .update({
           full_name: targetName,
           role: normalizedRole,
-          position_title: positionTitle,
+          position_title: finalPositionTitle,
           default_shift: editShift,
           is_active: editStatus === 'Active',
           updated_at: new Date().toISOString(),
         })
         .eq('id', targetId);
 
+      // Handle deactivation list sync if status was changed in Edit modal
+      try {
+        const currentDeact: string[] = JSON.parse(
+          localStorage.getItem('pdrrmo_deactivated_users') || '[]'
+        );
+        let updatedDeact: string[];
+        if (editStatus === 'Inactive') {
+          updatedDeact = Array.from(new Set([...currentDeact, targetId, editingUser.email]));
+        } else {
+          updatedDeact = currentDeact.filter((id) => id !== targetId && id !== editingUser.email);
+        }
+        localStorage.setItem('pdrrmo_deactivated_users', JSON.stringify(updatedDeact));
+      } catch (e) {}
+
+      // Broadcast across tabs and windows
+      try {
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          const bc = new BroadcastChannel('pdrrmo_auth_sync');
+          bc.postMessage({
+            type: 'USER_EDITED',
+            userId: targetId,
+            email: editingUser.email,
+            user: updatedUser,
+          });
+          if (editStatus === 'Inactive') {
+            bc.postMessage({
+              type: 'USER_DEACTIVATED',
+              userId: targetId,
+              email: editingUser.email,
+              name: targetName,
+            });
+          } else {
+            bc.postMessage({
+              type: 'USER_ACTIVATED',
+              userId: targetId,
+              email: editingUser.email,
+              name: targetName,
+            });
+          }
+          bc.close();
+        }
+      } catch (e) {}
+
       setIsEditModalOpen(false);
       await fetchData(false);
 
       setToastNotification({
         type: 'success',
         message: 'User Profile Updated',
-        submessage: `Changes saved for ${targetName} (${editPosition} · ${editShift}).`,
+        submessage: `Changes successfully saved for ${targetName} (${roleName} · ${editShift}).`,
       });
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Error updating user profile.';
-      console.error('Save user edit notice:', err);
+      console.error('Save user edit error:', err);
       setIsEditModalOpen(false);
       await fetchData(false);
       setToastNotification({
-        type: 'success',
-        message: 'User Profile Updated',
-        submessage: `Changes saved for ${targetName}.`,
+        type: 'warning',
+        message: 'Database Update Notice',
+        submessage: errorMsg,
       });
     } finally {
       setIsSavingEdit(false);
@@ -1214,32 +1251,38 @@ export default function UserManagementPage() {
     }
   };
 
-  // Helper Badge Colors for Position
-  const getPositionBadge = (position: 'Admin' | 'Monitoring' | 'Staff') => {
-    switch (position) {
-      case 'Admin':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-[#004AC6] text-xs font-bold border border-blue-200/60 shadow-2xs">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#004AC6]" />
-            Admin
-          </span>
-        );
-      case 'Monitoring':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-sky-50 text-sky-700 text-xs font-bold border border-sky-200/60 shadow-2xs">
-            <span className="w-1.5 h-1.5 rounded-full bg-sky-600" />
-            Monitoring
-          </span>
-        );
-      case 'Staff':
-      default:
-        return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-[#505F76] text-xs font-bold border border-slate-200 shadow-2xs">
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
-            Staff
-          </span>
-        );
-    }
+  // Helper Badge Colors for Dynamic Position
+  const getPositionBadge = (position: string) => {
+    const found = positionOptions.find(
+      (opt) =>
+        opt.value.toLowerCase() === (position || '').toLowerCase() ||
+        opt.label.toLowerCase() === (position || '').toLowerCase()
+    );
+
+    const badgeColor =
+      found?.badgeColor ||
+      (position?.toLowerCase().includes('admin')
+        ? 'bg-blue-50 text-[#004AC6]'
+        : position?.toLowerCase().includes('monitoring')
+        ? 'bg-sky-50 text-sky-700'
+        : 'bg-slate-100 text-[#505F76]');
+
+    const dotColor =
+      found?.dotColor ||
+      (position?.toLowerCase().includes('admin')
+        ? '#004AC6'
+        : position?.toLowerCase().includes('monitoring')
+        ? '#0284C7'
+        : '#505F76');
+
+    const label = found?.label || position || found?.badge || 'Staff';
+
+    return (
+      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border border-slate-200/60 shadow-2xs ${badgeColor}`}>
+        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: dotColor }} />
+        {label}
+      </span>
+    );
   };
 
   // Render HTML preview of email in iframe srcDoc
@@ -1250,8 +1293,12 @@ export default function UserManagementPage() {
 
     return generateInvitationEmailHtml({
       email: sampleEmail,
-      role: invitePosition.toLowerCase() as 'admin' | 'monitoring' | 'staff',
-      positionTitle: invitePositionTitle || (invitePosition === 'Admin' ? 'Administrator' : 'Monitoring Officer'),
+      role: (invitePosition.toLowerCase().includes('admin')
+        ? 'admin'
+        : invitePosition.toLowerCase().includes('staff')
+        ? 'staff'
+        : 'monitoring') as 'admin' | 'monitoring' | 'staff',
+      positionTitle: invitePositionTitle || (invitePosition.toLowerCase().includes('admin') ? 'Administrator' : 'Monitoring Officer'),
       shift: inviteShift,
       inviteUrl: `${origin}/register?token=sec-token-preview-8f92a1&email=${encodeURIComponent(sampleEmail)}`,
       invitedBy: inviter,
@@ -1905,8 +1952,9 @@ export default function UserManagementPage() {
                       options={positionOptions}
                       value={invitePosition}
                       onChange={(val) => {
-                        setInvitePosition(val as 'Admin' | 'Monitoring' | 'Staff');
-                        setInvitePositionTitle(val === 'Admin' ? 'Administrator' : val === 'Staff' ? 'Operational Staff' : 'Monitoring Officer');
+                        setInvitePosition(val);
+                        const opt = positionOptions.find((o) => o.value === val || o.label === val);
+                        setInvitePositionTitle(opt?.label || val);
                       }}
                       size="md"
                       pill
@@ -2163,9 +2211,11 @@ export default function UserManagementPage() {
                     label="Position / Role"
                     options={positionOptions}
                     value={editPosition}
-                    onChange={(val) =>
-                      setEditPosition(val as 'Admin' | 'Monitoring' | 'Staff')
-                    }
+                    onChange={(val) => {
+                      setEditPosition(val);
+                      const opt = positionOptions.find((o) => o.value === val || o.label === val);
+                      setEditPositionTitle(opt?.label || val);
+                    }}
                     size="md"
                     pill
                   />

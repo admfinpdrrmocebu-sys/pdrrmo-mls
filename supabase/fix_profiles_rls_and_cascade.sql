@@ -119,5 +119,10 @@ $$;
 GRANT EXECUTE ON FUNCTION public.admin_update_user_profile(UUID, TEXT, TEXT, TEXT, TEXT, BOOLEAN) TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.admin_delete_user_profile(UUID) TO authenticated, anon;
 
--- 7. Ensure Realtime is enabled for profiles
-ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
+-- 7. Ensure Realtime is enabled for profiles (safe idempotent check)
+DO $$ 
+BEGIN 
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
+EXCEPTION 
+    WHEN duplicate_object THEN null;
+END $$;

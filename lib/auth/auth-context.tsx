@@ -127,20 +127,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Could not fetch user profile from profiles table:', error.message);
       }
 
-      let editedMap: Record<string, any> = {};
-      try {
-        editedMap = JSON.parse(localStorage.getItem('pdrrmo_edited_users') || '{}');
-      } catch (e) {}
-      const myEdit = editedMap[currentUser.id] || (currentUser.email ? editedMap[currentUser.email.toLowerCase()] : null);
-
       if (data) {
         const fullProf: UserProfile = {
           ...data,
-          full_name: myEdit?.name || data.full_name,
-          position_title: myEdit?.positionTitle || data.position_title,
-          role: myEdit?.role || data.role,
-          default_shift: myEdit?.shift || data.default_shift,
-          is_active: myEdit?.status ? myEdit.status === 'Active' : data.is_active,
+          full_name: data.full_name,
+          position_title: data.position_title,
+          role: data.role,
+          default_shift: data.default_shift,
+          is_active: data.is_active,
         };
 
         setProfile(fullProf);
