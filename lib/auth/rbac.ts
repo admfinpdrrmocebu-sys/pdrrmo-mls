@@ -223,16 +223,21 @@ export function getPermissionForScreen(
 ): PermissionLevel {
   if (!role) return 'None';
 
-  // Admin always has Full Access across all screens
-  if (role.code.toLowerCase() === 'admin' || role.name.toLowerCase() === 'admin') {
-    return 'Full Access';
-  }
-
+  // Check explicit permissions configured for this role first
   const perm = role.permissions?.find(
     (p) => p.screen.toLowerCase() === screenName.toLowerCase()
   );
 
-  return (perm?.level as PermissionLevel) || 'None';
+  if (perm && perm.level) {
+    return perm.level;
+  }
+
+  // Default fallback for admin if unconfigured
+  if (role.code.toLowerCase() === 'admin' || role.name.toLowerCase() === 'admin') {
+    return 'Full Access';
+  }
+
+  return 'None';
 }
 
 /**

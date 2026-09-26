@@ -71,9 +71,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAccountDeactivated, setIsAccountDeactivated] = useState(false);
   const [isAccountRemoved, setIsAccountRemoved] = useState(false);
 
-  // 1. Fetch Dynamic Access Roles from Supabase
+  // 1. Fetch Dynamic Access Roles from Supabase & LocalStorage cache
   const fetchRoles = useCallback(async () => {
     try {
+      let cachedRoles: RoleDefinition[] = [];
+      try {
+        const local = localStorage.getItem('pdrrmo_custom_roles');
+        if (local) {
+          cachedRoles = JSON.parse(local);
+        }
+      } catch (e) {}
+
       const { data, error } = await supabase
         .from('access_roles')
         .select('*')
@@ -91,11 +99,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isSystem: r.is_system ?? false,
         }));
         setRoles(mappedRoles);
+        try {
+          localStorage.setItem('pdrrmo_custom_roles', JSON.stringify(mappedRoles));
+        } catch (e) {}
+      } else if (cachedRoles.length > 0) {
+        setRoles(cachedRoles);
       } else {
         setRoles(defaultBuiltInRoles);
       }
     } catch (err) {
-      console.warn('Could not load access_roles from Supabase, using defaults:', err);
+      console.warn('Could not load access_roles from Supabase, checking local cache:', err);
+      try {
+        const local = localStorage.getItem('pdrrmo_custom_roles');
+        if (local) {
+          setRoles(JSON.parse(local));
+          return;
+        }
+      } catch (e) {}
       setRoles(defaultBuiltInRoles);
     }
   }, []);
@@ -239,10 +259,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       )
       .subscribe();
 
+    // Multi-tab sync via BroadcastChannel & storage event
+    let rolesBroadcast: BroadcastChannel | null = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        rolesBroadcast = new BroadcastChannel('pdrrmo_roles_sync');
+        rolesBroadcast.onmessage = (event) => {
+          if (event.data?.type === 'ROLES_UPDATED') {
+            fetchRoles();
+          }
+        };
+      } catch (e) {}
+    }
+
+    const handleRoleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'pdrrmo_custom_roles' || e.key === 'pdrrmo_roles_sync') {
+        fetchRoles();
+      }
+    };
+    window.addEventListener('storage', handleRoleStorageChange);
+
     return () => {
       isMounted = false;
       subscription.unsubscribe();
       supabase.removeChannel(rolesChannel);
+      rolesBroadcast?.close();
+      window.removeEventListener('storage', handleRoleStorageChange);
     };
   }, [fetchProfile, fetchRoles]);
 
@@ -370,50 +412,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [profile, currentRole]);
 
   const permissions = useMemo(() => {
-    if (isAdmin) {
-      return defaultBuiltInRoles[0].permissions;
-    }
     return currentRole?.permissions || [];
-  }, [isAdmin, currentRole]);
+  }, [currentRole]);
 
   // 6. RBAC Helper Functions
   const getPermissionLevel = useCallback(
     (screenOrRoute: string): PermissionLevel => {
-      if (isAdmin) return 'Full Access';
       const screenName = normalizeScreenName(screenOrRoute);
       if (!screenName) return 'None';
       return getPermissionForScreen(currentRole, screenName);
     },
-    [isAdmin, currentRole]
+    [currentRole]
   );
 
   const canAccess = useCallback(
     (screenOrRoute: string): boolean => {
-      if (isAdmin) return true;
       const screenName = normalizeScreenName(screenOrRoute);
       if (!screenName) return false;
       return canAccessScreen(currentRole, screenName);
     },
-    [isAdmin, currentRole]
+    [currentRole]
   );
 
   const canWrite = useCallback(
     (screenOrRoute: string): boolean => {
-      if (isAdmin) return true;
       const screenName = normalizeScreenName(screenOrRoute);
       if (!screenName) return false;
       return canWriteScreen(currentRole, screenName);
     },
-    [isAdmin, currentRole]
+    [currentRole]
   );
 
   const isViewOnly = useCallback(
     (screenOrRoute: string): boolean => {
-      if (isAdmin) return false;
       const level = getPermissionLevel(screenOrRoute);
       return level === 'View Only';
     },
-    [isAdmin, getPermissionLevel]
+    [getPermissionLevel]
   );
 
   return (

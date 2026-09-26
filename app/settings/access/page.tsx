@@ -458,8 +458,9 @@ function ShiftsGridSkeleton() {
 // MAIN COMPONENT: MANAGE ACCESS & SCHEDULES PAGE
 // =============================================================================
 export default function ManageAccessPage() {
-  const { isViewOnly } = useAuth();
-  const isAccessViewOnly = isViewOnly('Settings');
+  const { canWrite, isViewOnly, refreshRoles } = useAuth();
+  const canModifySettings = canWrite('Settings');
+  const isAccessViewOnly = isViewOnly('Settings') || !canModifySettings;
 
   // Active Tab State: 'roles' | 'shifts'
   const [activeTab, setActiveTab] = useState<'roles' | 'shifts'>('roles');
@@ -497,6 +498,7 @@ export default function ManageAccessPage() {
   const [endShiftTime, setEndShiftTime] = useState('16:00');
   const [targetRole, setTargetRole] = useState<string>('monitoring');
   const [sortOrder, setSortOrder] = useState<number>(1);
+  const [isDefaultSchedule, setIsDefaultSchedule] = useState<boolean>(false);
 
   // Confirmation Delete Modals
   const [deleteConfirmRole, setDeleteConfirmRole] = useState<RoleItem | null>(null);
@@ -527,7 +529,7 @@ export default function ManageAccessPage() {
       ]);
 
       // Process Roles
-      if (!rolesRes.error && rolesRes.data) {
+      if (!rolesRes.error && rolesRes.data && rolesRes.data.length > 0) {
         const mappedRoles: RoleItem[] = rolesRes.data.map((r: any) => ({
           id: r.id,
           code: r.code,
@@ -539,9 +541,20 @@ export default function ManageAccessPage() {
           permissions: Array.isArray(r.permissions) ? r.permissions : [],
         }));
         setRoles(mappedRoles);
-      } else if (rolesRes.error) {
-        console.warn('Could not fetch access_roles from Supabase:', rolesRes.error.message);
-        setRoles([]);
+        try {
+          localStorage.setItem('pdrrmo_custom_roles', JSON.stringify(mappedRoles));
+        } catch (e) {}
+      } else {
+        try {
+          const local = localStorage.getItem('pdrrmo_custom_roles');
+          if (local) {
+            setRoles(JSON.parse(local));
+          } else {
+            setRoles(defaultRoles);
+          }
+        } catch (e) {
+          setRoles(defaultRoles);
+        }
       }
 
       // Process Shift Schedules
@@ -693,6 +706,10 @@ export default function ManageAccessPage() {
   // ROLE HANDLERS
   // ---------------------------------------------------------------------------
   const handleOpenAddRoleModal = () => {
+    if (isAccessViewOnly) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     setEditingRoleId(null);
     setRoleName('');
     setRoleDescription('');
@@ -710,6 +727,10 @@ export default function ManageAccessPage() {
   };
 
   const handleOpenEditRoleModal = (role: RoleItem) => {
+    if (isAccessViewOnly) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     setEditingRoleId(role.id);
     setRoleName(role.name);
     setRoleDescription(role.description);
@@ -739,6 +760,10 @@ export default function ManageAccessPage() {
 
   const handleSaveRole = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAccessViewOnly) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     if (!roleName.trim()) return;
 
     try {
@@ -748,7 +773,12 @@ export default function ManageAccessPage() {
         level,
       }));
 
+      let updatedRolesList: RoleItem[] = [];
+
       if (editingRoleId) {
+        const existingRole = roles.find((r) => r.id === editingRoleId);
+        const code = existingRole?.code || roleName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+
         // Try updating in Supabase
         const { error } = await supabase
           .from('access_roles')
@@ -758,24 +788,23 @@ export default function ManageAccessPage() {
             permissions: permArray,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', editingRoleId);
+          .or(`id.eq.${editingRoleId},code.eq.${code}`);
 
         if (error) {
-          console.warn('Could not update role in database (table pending migration), updating locally:', error.message);
+          console.warn('Notice updating role in database:', error.message);
         }
 
-        setRoles((prev) =>
-          prev.map((r) =>
-            r.id === editingRoleId
-              ? {
-                  ...r,
-                  name: roleName.trim(),
-                  description: roleDescription.trim() || r.description,
-                  permissions: permArray,
-                }
-              : r
-          )
+        updatedRolesList = roles.map((r) =>
+          r.id === editingRoleId || r.code === code
+            ? {
+                ...r,
+                name: roleName.trim(),
+                description: roleDescription.trim() || r.description,
+                permissions: permArray,
+              }
+            : r
         );
+        setRoles(updatedRolesList);
         showToast(`Role "${roleName.trim()}" updated successfully.`);
       } else {
         const code = roleName.toLowerCase().replace(/[^a-z0-9]/g, '-');
@@ -796,7 +825,7 @@ export default function ManageAccessPage() {
           .maybeSingle();
 
         if (error) {
-          console.warn('Could not insert role into database, updating locally:', error.message);
+          console.warn('Notice inserting role into database:', error.message);
         }
 
         const newRole: RoleItem = {
@@ -810,9 +839,28 @@ export default function ManageAccessPage() {
           isSystem: false,
         };
 
-        setRoles((prev) => [...prev, newRole]);
+        updatedRolesList = [...roles, newRole];
+        setRoles(updatedRolesList);
         showToast(`Role "${newRole.name}" created successfully.`);
       }
+
+      // 1. Save to local storage for instant multi-tab sync
+      try {
+        localStorage.setItem('pdrrmo_custom_roles', JSON.stringify(updatedRolesList));
+      } catch (e) {}
+
+      // 2. Broadcast across all active tabs and screens
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_roles_sync');
+          bc.postMessage({ type: 'ROLES_UPDATED', roles: updatedRolesList, timestamp: Date.now() });
+          bc.close();
+        } catch (e) {}
+        localStorage.setItem('pdrrmo_roles_sync', Date.now().toString());
+      }
+
+      // 3. Refresh active role definitions in auth context
+      await refreshRoles();
 
       setIsRoleModalOpen(false);
     } catch (err) {
@@ -824,6 +872,10 @@ export default function ManageAccessPage() {
   };
 
   const handleConfirmDeleteRole = async () => {
+    if (isAccessViewOnly) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     if (!deleteConfirmRole) return;
     const { id, name, isSystem } = deleteConfirmRole;
 
@@ -835,12 +887,28 @@ export default function ManageAccessPage() {
 
     try {
       setIsSubmitting(true);
-      const { error } = await supabase.from('access_roles').delete().eq('id', id);
+      const { error } = await supabase.from('access_roles').delete().or(`id.eq.${id},code.eq.${deleteConfirmRole.code}`);
       if (error) {
-        console.warn('Could not delete role in database, updating locally:', error.message);
+        console.warn('Notice deleting role in database:', error.message);
       }
 
-      setRoles((prev) => prev.filter((r) => r.id !== id));
+      const updatedRolesList = roles.filter((r) => r.id !== id && r.code !== deleteConfirmRole.code);
+      setRoles(updatedRolesList);
+
+      try {
+        localStorage.setItem('pdrrmo_custom_roles', JSON.stringify(updatedRolesList));
+      } catch (e) {}
+
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_roles_sync');
+          bc.postMessage({ type: 'ROLES_UPDATED', roles: updatedRolesList, timestamp: Date.now() });
+          bc.close();
+        } catch (e) {}
+        localStorage.setItem('pdrrmo_roles_sync', Date.now().toString());
+      }
+
+      await refreshRoles();
       showToast(`Role "${name}" deleted.`);
     } catch (err) {
       console.error('Error deleting role:', err);
@@ -855,6 +923,10 @@ export default function ManageAccessPage() {
   // SHIFT SCHEDULE HANDLERS (PER-ROLE SORT ORDER, EDITABLE ORDER & DUPLICATE CHECK)
   // ---------------------------------------------------------------------------
   const handleOpenAddShiftModal = (presetRole?: string) => {
+    if (isAccessViewOnly) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     setEditingShiftId(null);
     setShiftName('');
     setStartShiftTime('08:00');
@@ -870,36 +942,59 @@ export default function ManageAccessPage() {
     }
     setTargetRole(initialRole);
 
-    const existingCount = shiftSchedules.filter(
-      (s) => s.targetRole?.toLowerCase() === initialRole.toLowerCase()
-    ).length;
-    setSortOrder(existingCount + 1);
+    const isNonMonitoringRole = initialRole.toLowerCase() !== 'monitoring';
+    setIsDefaultSchedule(isNonMonitoringRole);
+
+    if (isNonMonitoringRole) {
+      setSortOrder(0);
+    } else {
+      const existingCount = shiftSchedules.filter(
+        (s) => s.targetRole?.toLowerCase() === initialRole.toLowerCase() && (s.sortOrder ?? 0) > 0
+      ).length;
+      setSortOrder(existingCount + 1);
+    }
 
     setIsShiftModalOpen(true);
   };
 
   const handleOpenEditShiftModal = (shift: ShiftScheduleItem) => {
+    if (isAccessViewOnly) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     setEditingShiftId(shift.id);
     setShiftName(shift.name);
     setStartShiftTime(shift.startTime);
     setEndShiftTime(shift.endTime);
     setTargetRole(shift.targetRole || roleDropdownOptions[0]?.value || 'monitoring');
-    setSortOrder(shift.sortOrder ?? 1);
+    const isDef = (shift.sortOrder ?? 0) === 0;
+    setIsDefaultSchedule(isDef);
+    setSortOrder(shift.sortOrder ?? (isDef ? 0 : 1));
     setIsShiftModalOpen(true);
   };
 
   const handleTargetRoleChange = (newRole: string) => {
     setTargetRole(newRole);
     if (!editingShiftId) {
-      const existingCount = shiftSchedules.filter(
-        (s) => s.targetRole?.toLowerCase() === newRole.toLowerCase()
-      ).length;
-      setSortOrder(existingCount + 1);
+      const isNonMonitoring = newRole.toLowerCase() !== 'monitoring';
+      setIsDefaultSchedule(isNonMonitoring);
+      if (isNonMonitoring) {
+        setSortOrder(0);
+      } else {
+        const existingCount = shiftSchedules.filter(
+          (s) => s.targetRole?.toLowerCase() === newRole.toLowerCase() && (s.sortOrder ?? 0) > 0
+        ).length;
+        setSortOrder(existingCount + 1);
+      }
     }
   };
 
   const handleSaveShiftSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAccessViewOnly) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     if (!shiftName.trim()) return;
 
     // 1. DUPLICATION CHECK: Prevent same start_time and end_time for the same role
@@ -922,7 +1017,7 @@ export default function ManageAccessPage() {
     try {
       setIsSubmitting(true);
       const computedDuration = calculateDuration(startShiftTime, endShiftTime) || '8 Hours';
-      const safeSortOrder = Math.max(1, Number(sortOrder) || 1);
+      const safeSortOrder = isDefaultSchedule ? 0 : Math.max(1, Number(sortOrder) || 1);
 
       if (editingShiftId) {
         const { error } = await supabase
@@ -960,7 +1055,11 @@ export default function ManageAccessPage() {
               : s
           )
         );
-        showToast(`Shift schedule "${shiftName.trim()}" updated successfully.`);
+        showToast(
+          isDefaultSchedule
+            ? `Default Shift schedule "${shiftName.trim()}" updated.`
+            : `Shift schedule "${shiftName.trim()}" updated (Position #${safeSortOrder}).`
+        );
       } else {
         const shiftPayload = {
           name: shiftName.trim(),
@@ -1003,7 +1102,9 @@ export default function ManageAccessPage() {
 
         setShiftSchedules((prev) => [...prev, newShift]);
         showToast(
-          `Shift "${shiftName.trim()}" added for ${getRoleDisplayName(targetRole)} (Position #${safeSortOrder}).`
+          isDefaultSchedule
+            ? `Default schedule "${shiftName.trim()}" added for ${getRoleDisplayName(targetRole)} (Sort 0).`
+            : `Monitoring shift "${shiftName.trim()}" added for ${getRoleDisplayName(targetRole)} (Position #${safeSortOrder}).`
         );
       }
 
@@ -1018,6 +1119,10 @@ export default function ManageAccessPage() {
   };
 
   const handleConfirmDeleteShift = async () => {
+    if (isAccessViewOnly) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     if (!deleteConfirmShift) return;
     const { id, name } = deleteConfirmShift;
 
@@ -1170,26 +1275,28 @@ export default function ManageAccessPage() {
                         </div>
 
                         {/* Edit & Delete Actions */}
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditRoleModal(role)}
-                            title="Edit Role"
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#004AC6]/10 transition-colors cursor-pointer"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          {!role.isSystem && (
+                        {!isAccessViewOnly && (
+                          <div className="flex items-center gap-1.5 shrink-0">
                             <button
                               type="button"
-                              onClick={() => setDeleteConfirmRole(role)}
-                              title="Delete Role"
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              onClick={() => handleOpenEditRoleModal(role)}
+                              title="Edit Role"
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#004AC6]/10 transition-colors cursor-pointer"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Edit2 className="w-4 h-4" />
                             </button>
-                          )}
-                        </div>
+                            {!role.isSystem && (
+                              <button
+                                type="button"
+                                onClick={() => setDeleteConfirmRole(role)}
+                                title="Delete Role"
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Screen Access Badges */}
@@ -1309,18 +1416,20 @@ export default function ManageAccessPage() {
                         : 'Start by creating customized shift schedules and timetable rotations per user role.'}
                     </p>
                   </div>
-                  <PrimaryButton
-                    size="sm"
-                    pill
-                    onClick={() =>
-                      handleOpenAddShiftModal(
-                        selectedShiftRoleFilter !== 'ALL' ? selectedShiftRoleFilter : undefined
-                      )
-                    }
-                    leftIcon={<Plus className="w-4 h-4" />}
-                  >
-                    Add Shift for {selectedShiftRoleFilter !== 'ALL' ? getRoleDisplayName(selectedShiftRoleFilter) : 'Role'}
-                  </PrimaryButton>
+                  {!isAccessViewOnly && (
+                    <PrimaryButton
+                      size="sm"
+                      pill
+                      onClick={() =>
+                        handleOpenAddShiftModal(
+                          selectedShiftRoleFilter !== 'ALL' ? selectedShiftRoleFilter : undefined
+                        )
+                      }
+                      leftIcon={<Plus className="w-4 h-4" />}
+                    >
+                      Add Shift for {selectedShiftRoleFilter !== 'ALL' ? getRoleDisplayName(selectedShiftRoleFilter) : 'Role'}
+                    </PrimaryButton>
+                  )}
                 </motion.div>
               ) : (
                 <motion.div
@@ -1346,9 +1455,13 @@ export default function ManageAccessPage() {
                           <div>
                             <div className="flex items-center gap-2 flex-wrap">
                               <h3 className="text-base font-bold text-[#1E293B]">{shift.name}</h3>
-                              {shift.sortOrder != null && (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-[#505F76] border border-slate-200 font-mono">
-                                  Position #{shift.sortOrder}
+                              {(shift.sortOrder === 0 || shift.sortOrder == null) ? (
+                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-[#505F76] border border-slate-200">
+                                  Default Schedule
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200/60 font-mono">
+                                  Monitoring Sequence #{shift.sortOrder}
                                 </span>
                               )}
                             </div>
@@ -1366,24 +1479,26 @@ export default function ManageAccessPage() {
                           </div>
 
                           {/* Edit & Delete Actions */}
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditShiftModal(shift)}
-                              title="Edit Shift Schedule"
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#004AC6]/10 transition-colors cursor-pointer"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setDeleteConfirmShift(shift)}
-                              title="Delete Shift Schedule"
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
+                          {!isAccessViewOnly && (
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditShiftModal(shift)}
+                                title="Edit Shift Schedule"
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#004AC6]/10 transition-colors cursor-pointer"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDeleteConfirmShift(shift)}
+                                title="Delete Shift Schedule"
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         {/* Time Breakdown Card */}
@@ -1492,10 +1607,10 @@ export default function ManageAccessPage() {
                   />
                 </div>
 
-                {/* 2. Target Role Dropdown & Sort Order (Two Columns) */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {/* Target Role Dropdown (2 cols) */}
-                  <div className="sm:col-span-2 space-y-1.5">
+                {/* 2. Target Role Dropdown & Default Schedule Toggle */}
+                <div className="space-y-4">
+                  {/* Target Role Dropdown */}
+                  <div className="space-y-1.5">
                     <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide flex items-center justify-between">
                       <span>Target Role</span>
                       <span className="text-[11px] text-[#94A3B8] font-medium lowercase">
@@ -1513,31 +1628,84 @@ export default function ManageAccessPage() {
                     />
                   </div>
 
-                  {/* Sort Order Input (1 col) */}
-                  <div className="flex flex-col gap-1.5">
-                    <label
-                      htmlFor="sortOrder"
-                      className="text-xs font-semibold text-[#505F76] uppercase tracking-wide flex items-center justify-between"
-                    >
-                      <span>Sort Order</span>
-                      <span className="text-[11px] text-[#94A3B8] font-medium">
-                        Position #
-                      </span>
-                    </label>
-                    <div className="relative">
-                      <ArrowUpDown className="w-3.5 h-3.5 text-[#94A3B8] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        id="sortOrder"
-                        type="number"
-                        min={1}
-                        max={99}
-                        required
-                        value={sortOrder}
-                        onChange={(e) => setSortOrder(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                        className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full pl-9 pr-3 py-2.5 text-sm text-[#1E293B] font-mono font-bold focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
-                      />
+                  {/* Default / General Schedule Toggle Switch */}
+                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4 flex items-center justify-between gap-4">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-[#1E293B]">
+                          Default / General Schedule
+                        </span>
+                        {isDefaultSchedule && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-[#505F76] font-mono">
+                            Sort = 0
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[#757680] leading-relaxed">
+                        {isDefaultSchedule
+                          ? 'Standard / default schedule for general rosters (Sort = 0). Excluded from 24/7 monitoring logs sequence.'
+                          : 'Participates in the 24/7 rotational monitoring logs sequence (Sort ≥ 1).'}
+                      </p>
                     </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={isDefaultSchedule}
+                      onClick={() => {
+                        const nextVal = !isDefaultSchedule;
+                        setIsDefaultSchedule(nextVal);
+                        if (nextVal) {
+                          setSortOrder(0);
+                        } else {
+                          const existingCount = shiftSchedules.filter(
+                            (s) => s.targetRole?.toLowerCase() === targetRole.toLowerCase() && (s.sortOrder ?? 0) > 0
+                          ).length;
+                          setSortOrder(existingCount > 0 ? existingCount + 1 : 1);
+                        }
+                      }}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#004AC6]/30 ${
+                        isDefaultSchedule ? 'bg-[#004AC6]' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                          isDefaultSchedule ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
                   </div>
+
+                  {/* Rotational Monitoring Shift Sequence Input (Shown when NOT default schedule) */}
+                  {!isDefaultSchedule && (
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <label
+                        htmlFor="sortOrder"
+                        className="text-xs font-semibold text-[#505F76] uppercase tracking-wide flex items-center justify-between"
+                      >
+                        <span>Monitoring Sequence Position</span>
+                        <span className="text-[11px] text-[#004AC6] font-bold font-mono">
+                          Position #{sortOrder}
+                        </span>
+                      </label>
+                      <div className="relative">
+                        <ArrowUpDown className="w-3.5 h-3.5 text-[#94A3B8] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          id="sortOrder"
+                          type="number"
+                          min={1}
+                          max={99}
+                          required
+                          value={sortOrder || 1}
+                          onChange={(e) => setSortOrder(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                          className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full pl-9 pr-3 py-2.5 text-sm text-[#1E293B] font-mono font-bold focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
+                        />
+                      </div>
+                      <p className="text-[11px] text-[#757680] px-1">
+                        Position 1 = &quot;Start of monitoring Duty&quot;. Last position = Triggers 24-Hour Consolidated Archive on End Shift.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* 3. Dropdown Time Pickers: Start Shift & End Shift */}

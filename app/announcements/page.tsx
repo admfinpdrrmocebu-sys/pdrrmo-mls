@@ -154,8 +154,8 @@ function sanitizeHtml(html: string): string {
 
 export default function AnnouncementsPage() {
   const { user, profile, isAdmin, isViewOnly, canWrite } = useAuth();
-  const isAnnouncementsViewOnly = isViewOnly('Announcements');
   const canModifyAnnouncements = canWrite('Announcements');
+  const isAnnouncementsViewOnly = isViewOnly('Announcements') || !canModifyAnnouncements;
 
   // Data & Loading States
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -317,6 +317,14 @@ export default function AnnouncementsPage() {
 
   // Open Create Modal
   const handleOpenCreate = () => {
+    if (!canModifyAnnouncements) {
+      showToast(
+        'Permission Denied',
+        'You have view-only access. Posting announcements is restricted.',
+        'error'
+      );
+      return;
+    }
     setEditingId(null);
     setFormTitle('');
     setFormDescription('');
@@ -326,7 +334,7 @@ export default function AnnouncementsPage() {
 
   // Open Edit Modal (Allowed for creator or admin)
   const handleOpenEdit = (item: Announcement) => {
-    if (!canUserModify(item)) {
+    if (!canModifyAnnouncements || !canUserModify(item)) {
       showToast(
         'Permission Denied',
         `Only the creator (${item.createdBy}) or Admin can edit this announcement.`,
@@ -345,6 +353,10 @@ export default function AnnouncementsPage() {
   // Save (Create or Update) to Supabase Database
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canModifyAnnouncements) {
+      showToast('Action Restricted', 'You have view-only access. Modifying announcements is restricted.', 'error');
+      return;
+    }
     const plainDesc = getPlainText(formDescription);
     if (!formTitle.trim() || !plainDesc.trim()) {
       showToast('Validation Error', 'Please provide both a title and description.', 'error');
@@ -603,7 +615,7 @@ export default function AnnouncementsPage() {
                   ? 'No broadcast matches your search query.'
                   : 'There are currently no active announcements posted.'}
               </p>
-              {!searchQuery && (
+              {!searchQuery && canModifyAnnouncements && (
                 <div className="mt-4">
                   <PrimaryButton
                     size="sm"

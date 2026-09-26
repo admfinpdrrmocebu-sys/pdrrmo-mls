@@ -113,8 +113,8 @@ const formatDateDisplay = (dateStr: string | null | undefined) => {
 
 export default function LogSettingsPage() {
   const { canWrite, isViewOnly } = useAuth();
-  const isSettingsViewOnly = isViewOnly('Settings');
   const canModifySettings = canWrite('Settings');
+  const isSettingsViewOnly = isViewOnly('Settings') || !canModifySettings;
 
   const [reportTypes, setReportTypes] = useState<ReportTypeItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -219,8 +219,12 @@ export default function LogSettingsPage() {
 
   // ===========================================================================
   // 2. MODAL & CRUD HANDLERS
-  // ===========================================================================
+  // ---------------------------------------------------------------------------
   const handleOpenAddModal = () => {
+    if (!canModifySettings) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     setEditingId(null);
     setItemTitle('');
     setSelectedColor('#004AC6');
@@ -229,6 +233,10 @@ export default function LogSettingsPage() {
   };
 
   const handleOpenEditModal = (item: ReportTypeItem) => {
+    if (!canModifySettings) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     setEditingId(item.id);
     setItemTitle(item.name);
     setSelectedColor(item.color || '#004AC6');
@@ -239,6 +247,10 @@ export default function LogSettingsPage() {
 
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canModifySettings) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     if (!itemTitle.trim()) return;
 
     try {
@@ -345,6 +357,10 @@ export default function LogSettingsPage() {
   };
 
   const handleConfirmDelete = async () => {
+    if (!canModifySettings) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     if (!deleteConfirmItem) return;
     const { id, name } = deleteConfirmItem;
 
@@ -514,14 +530,16 @@ export default function LogSettingsPage() {
                             Start from scratch by creating custom report classifications and assigning indicator colors.
                           </p>
                         </div>
-                        <PrimaryButton
-                          size="sm"
-                          pill
-                          onClick={handleOpenAddModal}
-                          leftIcon={<Plus className="w-4 h-4" />}
-                        >
-                          Add First Report Type
-                        </PrimaryButton>
+                        {canModifySettings && (
+                          <PrimaryButton
+                            size="sm"
+                            pill
+                            onClick={handleOpenAddModal}
+                            leftIcon={<Plus className="w-4 h-4" />}
+                          >
+                            Add First Report Type
+                          </PrimaryButton>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -611,25 +629,29 @@ export default function LogSettingsPage() {
                                   <Eye className="w-3.5 h-3.5 text-[#004AC6]" />
                                   <span>View</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditModal(item)}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] rounded-xl transition-colors cursor-pointer"
-                                >
-                                  <Edit2 className="w-3.5 h-3.5 text-[#505F76]" />
-                                  <span>Edit</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDeleteConfirmItem(item);
-                                    setActiveMenuId(null);
-                                  }}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                                  <span>Delete</span>
-                                </button>
+                                {canModifySettings && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditModal(item)}
+                                      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] rounded-xl transition-colors cursor-pointer"
+                                    >
+                                      <Edit2 className="w-3.5 h-3.5 text-[#505F76]" />
+                                      <span>Edit</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDeleteConfirmItem(item);
+                                        setActiveMenuId(null);
+                                      }}
+                                      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                      <span>Delete</span>
+                                    </button>
+                                  </>
+                                )}
                               </motion.div>
                             )}
                           </AnimatePresence>
@@ -769,24 +791,37 @@ export default function LogSettingsPage() {
 
               {/* Drawer Footer Actions */}
               <div className="p-5 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeleteConfirmItem(viewItem);
-                  }}
-                  className="px-4 py-2.5 rounded-full border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Trash2 className="w-4 h-4" /> Delete
-                </button>
+                {canModifySettings ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteConfirmItem(viewItem);
+                      }}
+                      className="px-4 py-2.5 rounded-full border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" /> Delete
+                    </button>
 
-                <PrimaryButton
-                  size="md"
-                  pill
-                  onClick={() => handleOpenEditModal(viewItem)}
-                  leftIcon={<Edit2 className="w-4 h-4" />}
-                >
-                  Edit Report Type
-                </PrimaryButton>
+                    <PrimaryButton
+                      size="md"
+                      pill
+                      onClick={() => handleOpenEditModal(viewItem)}
+                      leftIcon={<Edit2 className="w-4 h-4" />}
+                    >
+                      Edit Report Type
+                    </PrimaryButton>
+                  </>
+                ) : (
+                  <SecondaryButton
+                    size="md"
+                    pill
+                    onClick={() => setViewItem(null)}
+                    className="w-full"
+                  >
+                    Close Drawer
+                  </SecondaryButton>
+                )}
               </div>
             </motion.div>
           </div>

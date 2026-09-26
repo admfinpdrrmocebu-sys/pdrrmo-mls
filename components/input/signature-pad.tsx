@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useRef, useState, useEffect } from 'react';
 import { PenTool, RotateCcw } from 'lucide-react';
@@ -6,12 +6,16 @@ import { twMerge } from 'tailwind-merge';
 
 export interface SignaturePadProps {
   label?: string;
+  required?: boolean;
+  error?: boolean;
   onSignatureChange?: (dataUrl: string | null) => void;
   className?: string;
 }
 
 export function SignaturePad({
   label = 'Digital Signature',
+  required = false,
+  error = false,
   onSignatureChange,
   className,
 }: SignaturePadProps) {
@@ -102,9 +106,10 @@ export function SignaturePad({
   return (
     <div className={twMerge('flex flex-col gap-1.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] p-3 w-full', className)}>
       <div className="flex items-center justify-between mb-1 px-1">
-        <label className="flex items-center gap-2 text-xs font-semibold text-[#505F76] uppercase tracking-wide">
+        <label className="flex items-center gap-1.5 text-xs font-semibold text-[#505F76] uppercase tracking-wide">
           <PenTool className="w-3.5 h-3.5 text-[#505F76]" />
           <span>{label}</span>
+          {required && <span className="text-rose-500 font-bold text-sm leading-none" title="Required">*</span>}
         </label>
         <button
           type="button"
@@ -116,7 +121,12 @@ export function SignaturePad({
         </button>
       </div>
 
-      <div className="relative w-full h-24 bg-white rounded-lg border border-[#E2E8F0] flex items-center justify-center overflow-hidden cursor-crosshair">
+      <div
+        className={twMerge(
+          'relative w-full h-24 bg-white rounded-lg border flex items-center justify-center overflow-hidden cursor-crosshair transition-all',
+          error ? 'border-rose-400 ring-2 ring-rose-100 bg-rose-50/20' : 'border-[#E2E8F0] focus-within:border-[#004AC6]'
+        )}
+      >
         {!hasSignature && (
           <span className="pointer-events-none absolute text-[#94A3B8] text-xs font-medium select-none">
             Sign here

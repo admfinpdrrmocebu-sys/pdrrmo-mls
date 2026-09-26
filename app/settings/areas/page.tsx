@@ -115,8 +115,8 @@ function AreasTableSkeleton() {
 // =============================================================================
 export default function AreaSeedingPage() {
   const { canWrite, isViewOnly } = useAuth();
-  const isSettingsViewOnly = isViewOnly('Settings');
   const canModifySettings = canWrite('Settings');
+  const isSettingsViewOnly = isViewOnly('Settings') || !canModifySettings;
 
   const [areas, setAreas] = useState<AreaItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -235,8 +235,12 @@ export default function AreaSeedingPage() {
 
   // ===========================================================================
   // 3. HANDLERS: ADD / EDIT / DELETE
-  // ===========================================================================
+  // ---------------------------------------------------------------------------
   const handleOpenAddModal = () => {
+    if (!canModifySettings) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     setEditingAreaId(null);
     setAreaName('');
     setWeatherMonitoring(true);
@@ -246,6 +250,10 @@ export default function AreaSeedingPage() {
   };
 
   const handleOpenEditModal = (area: AreaItem) => {
+    if (!canModifySettings) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     setEditingAreaId(area.id);
     setAreaName(area.name);
     setWeatherMonitoring(area.weatherMonitoring);
@@ -256,6 +264,10 @@ export default function AreaSeedingPage() {
 
   const handleSaveArea = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canModifySettings) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     if (!areaName.trim()) return;
 
     try {
@@ -351,6 +363,10 @@ export default function AreaSeedingPage() {
   };
 
   const handleConfirmDelete = async () => {
+    if (!canModifySettings) {
+      showToast('Action restricted under View-Only clearance.', 'error');
+      return;
+    }
     if (!deleteConfirmArea) return;
     const { id, name } = deleteConfirmArea;
 
@@ -630,24 +646,28 @@ export default function AreaSeedingPage() {
 
                       {/* Actions */}
                       <td className="py-4 px-6 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(area)}
-                            title="Edit Area"
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#004AC6]/10 transition-colors cursor-pointer"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDeleteConfirmArea(area)}
-                            title="Delete Area"
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                        {canModifySettings ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditModal(area)}
+                              title="Edit Area"
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#004AC6]/10 transition-colors cursor-pointer"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteConfirmArea(area)}
+                              title="Delete Area"
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 text-xs italic">View Only</span>
+                        )}
                       </td>
                     </tr>
                   ))

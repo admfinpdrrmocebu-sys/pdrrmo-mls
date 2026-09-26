@@ -327,8 +327,8 @@ const CustomChartTooltip = ({ active, payload }: any) => {
 
 export default function RollCallPage() {
   const { user, profile, isAdmin, canWrite, isViewOnly } = useAuth();
-  const canModifyRollCall = canWrite('Roll Call');
-  const isRollCallViewOnly = isViewOnly('Roll Call');
+  const isRollCallViewOnly = isViewOnly('Roll Call') || !canWrite('Roll Call');
+  const canModifyRollCall = canWrite('Roll Call') && !isViewOnly('Roll Call');
 
   // Active Screen View Switcher: 'operations' | 'analytics'
   const [activeTab, setActiveTab] = useState<'operations' | 'analytics'>('operations');
@@ -417,10 +417,10 @@ export default function RollCallPage() {
   }, [isRollCallActive, activeSession?.conducted_by, user?.id, profile?.id]);
 
   const canModerateRollCall = useMemo(() => {
-    if (!canModifyRollCall) return false;
+    if (!canModifyRollCall || isRollCallViewOnly) return false;
     if (!isRollCallActive) return true;
     return isCurrentModerator;
-  }, [canModifyRollCall, isRollCallActive, isCurrentModerator]);
+  }, [canModifyRollCall, isRollCallViewOnly, isRollCallActive, isCurrentModerator]);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -1118,6 +1118,7 @@ export default function RollCallPage() {
 
   const handleSaveLguDetails = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isRollCallViewOnly || !canModifyRollCall) return;
     if (!editingLgu || !editLguForm.name.trim()) return;
 
     setIsSavingLgu(true);

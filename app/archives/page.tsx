@@ -449,8 +449,8 @@ const renderFormattedDescription = (content: string | undefined | null) => {
 // =============================================================================
 export default function ArchivesPage() {
   const { profile, isViewOnly, canWrite } = useAuth();
-  const isArchivesViewOnly = isViewOnly('Archives');
-  const canModifyArchives = canWrite('Archives');
+  const isArchivesViewOnly = isViewOnly('Archives') || !canWrite('Archives');
+  const canModifyArchives = canWrite('Archives') && !isViewOnly('Archives');
 
   const [activeTab, setActiveTab] = useState<'log' | 'roll-call'>('log');
   const [archivesList, setArchivesList] = useState<ArchivedFile[]>([]);

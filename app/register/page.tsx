@@ -138,8 +138,8 @@ function RegisterForm() {
         });
 
       if (error) {
-        console.warn('Signature upload warning:', error.message);
-        return null;
+        console.warn('Signature storage bucket upload warning, using direct data URI fallback:', error.message);
+        return dataUrl;
       }
 
       const { data: publicData } = supabase.storage
@@ -148,8 +148,8 @@ function RegisterForm() {
 
       return publicData?.publicUrl || fileName;
     } catch (e) {
-      console.warn('Failed to upload signature:', e);
-      return null;
+      console.warn('Failed to upload signature to storage, saving fallback:', e);
+      return dataUrl;
     }
   };
 
@@ -162,15 +162,24 @@ function RegisterForm() {
       return;
     }
 
+    if (!fullName.trim()) {
+      setErrorMessage('Please enter your full name.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setErrorMessage('Password must be at least 6 characters long.');
+      return;
+    }
+
+    if (!signature || signature.trim() === '') {
+      setErrorMessage('Official digital signature is mandatory. Please draw your signature in the box.');
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      if (password.length < 6) {
-        setErrorMessage('Password must be at least 6 characters long.');
-        setIsLoading(false);
-        return;
-      }
-
       // Step 1: Sign up user in Supabase Auth
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
@@ -208,7 +217,7 @@ function RegisterForm() {
 
       const userId = data?.user?.id;
 
-      // Step 3: Upload signature if captured
+      // Step 3: Upload mandatory signature
       if (userId && signature) {
         const sigPath = await uploadSignatureIfPresent(userId, signature);
         if (sigPath) {
@@ -486,12 +495,24 @@ function RegisterForm() {
                   </button>
                 </div>
 
-                {/* Digital Signature Pad */}
-                <div>
+                {/* Digital Signature Pad (Mandatory) */}
+                <div className="flex flex-col gap-1 w-full">
                   <SignaturePad
-                    label="Digital Sign-off Signature (Optional)"
-                    onSignatureChange={(data) => setSignature(data)}
+                    label="Official Digital Signature"
+                    required
+                    error={Boolean(errorMessage && !signature)}
+                    onSignatureChange={(data) => {
+                      setSignature(data);
+                      if (data && errorMessage?.toLowerCase().includes('signature')) {
+                        setErrorMessage(null);
+                      }
+                    }}
                   />
+                  {!signature && (
+                    <p className="text-[11px] text-[#505F76] px-1 flex items-center gap-1">
+                      <span className="text-rose-500 font-bold">*</span> Digital signature is required for official log sign-offs and incident endorsements.
+                    </p>
+                  )}
                 </div>
 
                 {/* Submit Button */}

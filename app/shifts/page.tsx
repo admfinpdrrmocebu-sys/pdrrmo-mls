@@ -253,8 +253,8 @@ function OfficerAvatar({
 // =============================================================================
 
 export default function ShiftSchedulePage() {
-  const { profile, isViewOnly } = useAuth();
-  const isShiftViewOnly = isViewOnly('Shifts');
+  const { profile, isViewOnly, canWrite } = useAuth();
+  const isShiftViewOnly = isViewOnly('Shifts') || !canWrite('Shifts');
 
   // Top Tab Switcher: 'dashboard' (Schedule Dashboard) | 'my-schedule' (My Schedule)
   const [activeTab, setActiveTab] = useState<'dashboard' | 'my-schedule'>('dashboard');
@@ -606,12 +606,20 @@ export default function ShiftSchedulePage() {
 
   // Open Edit Attendance Modal with cloned current state
   const handleOpenEditModal = () => {
+    if (isShiftViewOnly) {
+      showToast('You have view-only access. Updating attendance is restricted.');
+      return;
+    }
     setTempAbsentOfficerIds([...absentOfficerIds]);
     setIsEditModalOpen(true);
   };
 
   // Toggle officer attendance directly on card (Mark as Present)
   const handleSetPresent = async (officerId: string) => {
+    if (isShiftViewOnly) {
+      showToast('You have view-only access. Updating attendance is restricted.');
+      return;
+    }
     const newAbsentIds = absentOfficerIds.filter((id) => id !== officerId);
     setAbsentOfficerIds(newAbsentIds);
 
@@ -648,6 +656,10 @@ export default function ShiftSchedulePage() {
 
   // Toggle officer attendance directly on card (Mark as Absent)
   const handleSetAbsent = async (officerId: string) => {
+    if (isShiftViewOnly) {
+      showToast('You have view-only access. Updating attendance is restricted.');
+      return;
+    }
     const newAbsentIds = absentOfficerIds.includes(officerId)
       ? absentOfficerIds
       : [...absentOfficerIds, officerId];
@@ -686,6 +698,10 @@ export default function ShiftSchedulePage() {
 
   // Save Modal Attendance Changes to Database
   const handleSaveAttendanceModal = async (targetAbsentIds: string[]) => {
+    if (isShiftViewOnly) {
+      showToast('You have view-only access. Updating attendance is restricted.');
+      return;
+    }
     try {
       setIsSavingAttendance(true);
       let targetShift = activeShift;
@@ -1038,291 +1054,329 @@ export default function ShiftSchedulePage() {
               </div>
             )}
 
-            {/* 1. Present On-Duty Personnel (Right Now) */}
-            <div className="bg-white border border-[#E2E8F0] rounded-3xl p-6 shadow-xs space-y-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#E2E8F0]">
-                {/* Left Side: Icon + Title & Shift Name Tag below title */}
-                <div className="flex items-start gap-3">
-                  <div
-                    className="w-10 h-10 rounded-2xl flex items-center justify-center border shrink-0 mt-0.5"
-                    style={{
-                      backgroundColor: liveShiftSchedule ? `${liveShiftSchedule.color || '#004AC6'}15` : '#EFF6FF',
-                      borderColor: liveShiftSchedule ? `${liveShiftSchedule.color || '#004AC6'}30` : '#BFDBFE',
-                      color: liveShiftSchedule?.color || '#004AC6',
-                    }}
-                  >
-                    <ShieldCheck className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
-                        Present On-Duty Personnel
-                      </h2>
-                      <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-2xs font-mono">
-                        {isLoading ? '...' : filteredPresentOfficers.length}
-                      </span>
-                    </div>
-                    {/* Shift Name Tag placed directly below the title */}
-                    <div className="flex items-center gap-2 flex-wrap mt-1">
-                      {liveShiftSchedule && (
-                        <span
-                          style={{
-                            color: liveShiftSchedule.color || '#004AC6',
-                            borderColor: `${liveShiftSchedule.color || '#004AC6'}40`,
-                            backgroundColor: `${liveShiftSchedule.color || '#004AC6'}10`,
-                          }}
-                          className="text-[10px] font-bold px-2.5 py-0.5 rounded-full border shadow-2xs"
-                        >
-                          {liveShiftSchedule.name}
-                        </span>
-                      )}
-                      <p className="text-xs text-[#757680]">
-                        {liveShiftSchedule
-                          ? `${liveShiftSchedule.time} · ${liveShiftSchedule.duration}`
-                          : 'No shift active at this hour'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right Side Controls: Filter Role Dropdown besides/left of Edit Attendance Button */}
-                <div className="flex items-center gap-2.5 self-start md:self-auto flex-wrap sm:flex-nowrap">
-                  {/* Filter Role Dropdown */}
-                  <div className="w-36 sm:w-44 shrink-0">
-                    <CustomDropdown
-                      options={roleFilterDropdownOptions}
-                      value={selectedRoleFilter}
-                      onChange={(val) => setSelectedRoleFilter(val)}
-                      leftIcon={<Shield className="w-3.5 h-3.5 text-[#004AC6]" />}
-                      placeholder="Filter Role"
-                      size="sm"
-                      pill
-                    />
-                  </div>
-
-                  {/* Edit Attendance Button */}
-                  {liveShiftOfficers.length > 0 && !isShiftViewOnly && (
-                    <SecondaryButton
-                      type="button"
-                      size="sm"
-                      pill
-                      onClick={handleOpenEditModal}
-                      leftIcon={<Edit2 className="w-3.5 h-3.5 text-[#004AC6]" />}
-                    >
-                      Edit Attendance
-                    </SecondaryButton>
-                  )}
-                </div>
-              </div>
-
-              {/* Present On Duty Officers Grid */}
-              {isLoading ? (
-                <PersonnelGridSkeleton count={4} />
-              ) : filteredPresentOfficers.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {filteredPresentOfficers.map((member) => {
-                    const badge = getRoleBadge(member.userRole);
-                    return (
+            {/* 3-Column Grid Layout: Present, Absent, and Rest Day Cards */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+              {/* 1. PRESENT ON-DUTY PERSONNEL CARD */}
+              <div className="bg-white border border-[#E2E8F0] rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col space-y-4 min-h-[480px]">
+                {/* Card Header */}
+                <div className="space-y-3 pb-3 border-b border-[#E2E8F0]">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
                       <div
-                        key={member.id}
-                        className="p-4 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-xs space-y-3"
+                        className="w-9 h-9 rounded-2xl flex items-center justify-center border shrink-0"
+                        style={{
+                          backgroundColor: liveShiftSchedule ? `${liveShiftSchedule.color || '#004AC6'}15` : '#EFF6FF',
+                          borderColor: liveShiftSchedule ? `${liveShiftSchedule.color || '#004AC6'}30` : '#BFDBFE',
+                          color: liveShiftSchedule?.color || '#004AC6',
+                        }}
                       >
-                        <div className="flex items-center gap-3">
-                          <OfficerAvatar officer={member} size="md" />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
-                                {member.name}
-                              </h4>
-                              {member.isLead && (
-                                <span className="text-[9px] font-bold bg-blue-100 text-[#004AC6] px-1.5 py-0.2 rounded shrink-0">
-                                  LEAD
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[11px] text-[#757680] truncate font-medium">
-                              {member.role}
-                            </p>
-                          </div>
+                        <ShieldCheck className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm sm:text-base font-bold text-[#1E293B] truncate">
+                            Present On-Duty
+                          </h3>
+                          <span className="text-xs font-extrabold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-2xs font-mono shrink-0">
+                            {isLoading ? '...' : filteredPresentOfficers.length}
+                          </span>
                         </div>
+                      </div>
+                    </div>
 
-                        <div className="pt-2 border-t border-slate-100 text-[11px] text-[#505F76] space-y-1">
-                          <div className="flex items-center justify-between">
-                            <span>Role:</span>
-                            <span className={`text-[9px] font-semibold px-1.5 py-0.2 rounded border ${badge.badgeClass}`}>
+                    {liveShiftSchedule && (
+                      <span
+                        style={{
+                          color: liveShiftSchedule.color || '#004AC6',
+                          borderColor: `${liveShiftSchedule.color || '#004AC6'}40`,
+                          backgroundColor: `${liveShiftSchedule.color || '#004AC6'}10`,
+                        }}
+                        className="text-[10px] font-bold px-2 py-0.5 rounded-full border shadow-2xs shrink-0 truncate max-w-[120px]"
+                      >
+                        {liveShiftSchedule.name}
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-[#757680]">
+                    {liveShiftSchedule
+                      ? `${liveShiftSchedule.time} · ${liveShiftSchedule.duration}`
+                      : 'No shift active at this hour'}
+                  </p>
+
+                  {/* Controls: Filter Role Dropdown + Edit Attendance Button */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <div className="flex-1 min-w-0">
+                      <CustomDropdown
+                        options={roleFilterDropdownOptions}
+                        value={selectedRoleFilter}
+                        onChange={(val) => setSelectedRoleFilter(val)}
+                        leftIcon={<Shield className="w-3.5 h-3.5 text-[#004AC6]" />}
+                        placeholder="Filter Role"
+                        size="sm"
+                        pill
+                      />
+                    </div>
+
+                    {liveShiftOfficers.length > 0 && !isShiftViewOnly && (
+                      <SecondaryButton
+                        type="button"
+                        size="sm"
+                        pill
+                        onClick={handleOpenEditModal}
+                        leftIcon={<Edit2 className="w-3 h-3 text-[#004AC6]" />}
+                        className="shrink-0 text-xs px-2.5"
+                      >
+                        Edit
+                      </SecondaryButton>
+                    )}
+                  </div>
+                </div>
+
+                {/* Present Officers List */}
+                <div className="flex-1 overflow-y-auto max-h-[640px] pr-1 space-y-3">
+                  {isLoading ? (
+                    Array.from({ length: 3 }).map((_, i) => (
+                      <div key={i} className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3">
+                        <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <Skeleton variant="rounded" className="h-3.5 w-24" />
+                          <Skeleton variant="rounded" className="h-2.5 w-16" />
+                        </div>
+                      </div>
+                    ))
+                  ) : filteredPresentOfficers.length > 0 ? (
+                    filteredPresentOfficers.map((member) => {
+                      const badge = getRoleBadge(member.userRole);
+                      return (
+                        <div
+                          key={member.id}
+                          className="p-3.5 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-2xs space-y-2.5"
+                        >
+                          <div className="flex items-center gap-3">
+                            <OfficerAvatar officer={member} size="md" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+                                  {member.name}
+                                </h4>
+                                {member.isLead && (
+                                  <span className="text-[9px] font-bold bg-blue-100 text-[#004AC6] px-1.5 py-0.2 rounded shrink-0">
+                                    LEAD
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-[#757680] truncate font-medium">
+                                {member.role}
+                              </p>
+                            </div>
+                            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
                               {badge.label}
                             </span>
                           </div>
-                          <div className="flex items-center justify-between">
-                            <span>Status:</span>
+
+                          <div className="pt-2 border-t border-slate-100 text-[11px] text-[#505F76] flex items-center justify-between">
+                            <span className="text-[#757680]">Status:</span>
                             <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px]">
                               Present / On-Duty
                             </span>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : presentOfficers.length > 0 && selectedRoleFilter !== 'ALL' ? (
-                <div className="p-8 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-2">
-                  <Shield className="w-8 h-8 text-slate-400 mx-auto" />
-                  <p className="text-sm font-bold text-[#1E293B]">
-                    No {selectedRoleFilter.toUpperCase()} Personnel Present
-                  </p>
-                  <p className="text-xs text-[#757680]">
-                    There are no officers with role &quot;{selectedRoleFilter}&quot; currently on duty for this shift.
-                  </p>
-                </div>
-              ) : (
-                <div className="p-8 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-2">
-                  <AlertCircle className="w-8 h-8 text-slate-400 mx-auto" />
-                  <p className="text-sm font-bold text-[#1E293B]">
-                    No Officers Currently Scheduled On Duty
-                  </p>
-                  <p className="text-xs text-[#757680] max-w-md mx-auto">
-                    There are no duty assignments recorded for the current shift in the database. You can configure shifts in <strong>Settings → Shift Schedule Calendar</strong>.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* 2. Absent Personnel Card */}
-            {filteredAbsentOfficers.length > 0 && (
-              <div className="bg-white border border-[#E2E8F0] rounded-3xl p-6 shadow-xs space-y-4">
-                <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-200 shrink-0">
-                      <UserX className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2.5 flex-wrap">
-                        <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
-                          Absent Personnel Today
-                        </h3>
-                        <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 shadow-2xs font-mono">
-                          {filteredAbsentOfficers.length}
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#757680]">
-                        Personnel assigned to duty but reported absent or on leave today
+                      );
+                    })
+                  ) : presentOfficers.length > 0 && selectedRoleFilter !== 'ALL' ? (
+                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
+                      <Shield className="w-6 h-6 text-slate-400 mx-auto" />
+                      <p className="text-xs font-bold text-[#1E293B]">
+                        No {selectedRoleFilter.toUpperCase()} Present
+                      </p>
+                      <p className="text-[11px] text-[#757680]">
+                        No officers with role &quot;{selectedRoleFilter}&quot; on duty.
                       </p>
                     </div>
-                  </div>
-                  <span className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 px-3 py-1 rounded-full">
-                    Absent / Leave
-                  </span>
+                  ) : (
+                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
+                      <AlertCircle className="w-6 h-6 text-slate-400 mx-auto" />
+                      <p className="text-xs font-bold text-[#1E293B]">
+                        No Officers On Duty
+                      </p>
+                      <p className="text-[11px] text-[#757680]">
+                        No duty assignments found for current shift.
+                      </p>
+                    </div>
+                  )}
                 </div>
+              </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {filteredAbsentOfficers.map((person) => (
-                    <div
-                      key={person.id}
-                      className="p-4 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-xs space-y-3"
-                    >
-                      <div className="flex items-center gap-3">
-                        <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
-                        <div className="min-w-0 flex-1">
-                          <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
-                            {person.name}
-                          </h4>
-                          <p className="text-[11px] text-rose-700 truncate font-medium">
-                            {person.role}
-                          </p>
+              {/* 2. ABSENT PERSONNEL CARD */}
+              <div className="bg-white border border-[#E2E8F0] rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col space-y-4 min-h-[480px]">
+                {/* Card Header */}
+                <div className="space-y-1.5 pb-3 border-b border-[#E2E8F0]">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-200 shrink-0">
+                        <UserX className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                            Absent Personnel
+                          </h3>
+                          <span className="text-xs font-extrabold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 shadow-2xs font-mono">
+                            {isLoading ? '...' : filteredAbsentOfficers.length}
+                          </span>
                         </div>
                       </div>
-                      <div className="pt-2 border-t border-rose-200/60 text-[11px] text-[#505F76] space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span>Status:</span>
+                    </div>
+
+                    <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full shrink-0">
+                      Absent / Leave
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-[#757680]">
+                    Personnel assigned to duty but reported absent today
+                  </p>
+                </div>
+
+                {/* Absent Officers List */}
+                <div className="flex-1 overflow-y-auto max-h-[640px] pr-1 space-y-3">
+                  {isLoading ? (
+                    Array.from({ length: 2 }).map((_, i) => (
+                      <div key={i} className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/30 flex items-center gap-3">
+                        <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <Skeleton variant="rounded" className="h-3.5 w-24" />
+                          <Skeleton variant="rounded" className="h-2.5 w-16" />
+                        </div>
+                      </div>
+                    ))
+                  ) : filteredAbsentOfficers.length > 0 ? (
+                    filteredAbsentOfficers.map((person) => (
+                      <div
+                        key={person.id}
+                        className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs space-y-2.5"
+                      >
+                        <div className="flex items-center gap-3">
+                          <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
+                          <div className="min-w-0 flex-1">
+                            <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+                              {person.name}
+                            </h4>
+                            <p className="text-[11px] text-rose-700 truncate font-medium">
+                              {person.role}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-rose-200/60 text-[11px] text-[#505F76] flex items-center justify-between">
+                          <span className="text-[#757680]">Status:</span>
                           <span className="font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full text-[10px]">
                             Reported Absent
                           </span>
                         </div>
+
+                        {!isShiftViewOnly && (
+                          <button
+                            type="button"
+                            onClick={() => handleSetPresent(person.id)}
+                            className="w-full py-1.5 px-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            Mark as Present
+                          </button>
+                        )}
                       </div>
-                      {!isShiftViewOnly && (
-                        <button
-                          type="button"
-                          onClick={() => handleSetPresent(person.id)}
-                          className="w-full py-1.5 px-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                          Mark as Present
-                        </button>
-                      )}
+                    ))
+                  ) : (
+                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
+                      <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
+                      <p className="text-xs font-bold text-[#1E293B]">
+                        No Absent Personnel
+                      </p>
+                      <p className="text-[11px] text-[#757680]">
+                        All scheduled personnel are on-duty or accounted for.
+                      </p>
                     </div>
-                  ))}
+                  )}
                 </div>
               </div>
-            )}
 
-            {/* 3. Rest Day / Off-Duty Personnel Panel */}
-            <div className="bg-white border border-[#E2E8F0] rounded-3xl p-6 shadow-xs space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-200 shrink-0">
-                    <Coffee className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
-                        Rest Day Personnel Today
-                      </h3>
-                      <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs font-mono">
-                        {isLoading ? '...' : todayRestPersonnel.length}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[#757680]">
-                      Personnel scheduled for mandatory rest day / scheduled off today
-                    </p>
-                  </div>
-                </div>
-                <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full">
-                  Off Duty
-                </span>
-              </div>
-
-              {isLoading ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3"
-                    >
-                      <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <Skeleton variant="rounded" className="h-3.5 w-24" />
-                        <Skeleton variant="rounded" className="h-2.5 w-16" />
+              {/* 3. REST DAY / OFF-DUTY PERSONNEL CARD */}
+              <div className="bg-white border border-[#E2E8F0] rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col space-y-4 min-h-[480px]">
+                {/* Card Header */}
+                <div className="space-y-1.5 pb-3 border-b border-[#E2E8F0]">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-200 shrink-0">
+                        <Coffee className="w-4 h-4" />
                       </div>
-                      <Skeleton variant="pill" className="h-4 w-12" />
-                    </div>
-                  ))}
-                </div>
-              ) : todayRestPersonnel.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {todayRestPersonnel.map((person) => {
-                    const badge = getRoleBadge(person.userRole);
-                    return (
-                      <div
-                        key={person.id}
-                        className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3"
-                      >
-                        <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-bold text-[#1E293B] truncate">{person.name}</p>
-                          <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                            Rest Day Personnel
+                          </h3>
+                          <span className="text-xs font-extrabold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs font-mono">
+                            {isLoading ? '...' : todayRestPersonnel.length}
+                          </span>
                         </div>
-                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${badge.badgeClass}`}>
-                          {badge.label}
-                        </span>
                       </div>
-                    );
-                  })}
+                    </div>
+
+                    <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full shrink-0">
+                      Off Duty
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-[#757680]">
+                    Personnel scheduled for mandatory rest day today
+                  </p>
                 </div>
-              ) : (
-                <div className="py-4 text-center text-xs text-slate-400 italic">
-                  No personnel scheduled for rest day today.
+
+                {/* Rest Day Officers List */}
+                <div className="flex-1 overflow-y-auto max-h-[640px] pr-1 space-y-3">
+                  {isLoading ? (
+                    Array.from({ length: 3 }).map((_, i) => (
+                      <div key={i} className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3">
+                        <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <Skeleton variant="rounded" className="h-3.5 w-24" />
+                          <Skeleton variant="rounded" className="h-2.5 w-16" />
+                        </div>
+                      </div>
+                    ))
+                  ) : todayRestPersonnel.length > 0 ? (
+                    todayRestPersonnel.map((person) => {
+                      const badge = getRoleBadge(person.userRole);
+                      return (
+                        <div
+                          key={person.id}
+                          className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3 shadow-2xs"
+                        >
+                          <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-bold text-[#1E293B] truncate">{person.name}</p>
+                            <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
+                          </div>
+                          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
+                            {badge.label}
+                          </span>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
+                      <Coffee className="w-6 h-6 text-slate-400 mx-auto" />
+                      <p className="text-xs font-bold text-[#1E293B]">
+                        No Rest Day Personnel
+                      </p>
+                      <p className="text-[11px] text-[#757680]">
+                        No personnel scheduled for rest day today.
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           </motion.div>
         )}

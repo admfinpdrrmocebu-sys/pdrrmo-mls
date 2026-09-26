@@ -231,8 +231,8 @@ function getMilitaryTime(date: Date = new Date()): string {
 
 export default function LogsPage() {
   const { user, profile, isAdmin, canWrite, isViewOnly } = useAuth();
-  const isLogsViewOnly = isViewOnly('Logs');
-  const canModifyLogs = canWrite('Logs');
+  const isLogsViewOnly = isViewOnly('Logs') || !canWrite('Logs');
+  const canModifyLogs = canWrite('Logs') && !isViewOnly('Logs');
 
   // Loading States
   const [isLoading, setIsLoading] = useState(true);
@@ -452,7 +452,11 @@ export default function LogsPage() {
 
   // Shift Schedule Sequence Engine (determines first shift, last shift, and if active shift is the final shift of the sequence)
   const shiftScheduleSequenceInfo = useMemo(() => {
-    if (shiftSchedules.length === 0) {
+    // Only shifts with sort_order >= 1 participate in the 24/7 monitoring sequence
+    const monitoringShifts = shiftSchedules.filter((s) => (s.sort_order ?? 0) >= 1);
+    const activeList = monitoringShifts.length > 0 ? monitoringShifts : shiftSchedules;
+
+    if (activeList.length === 0) {
       return {
         firstShift: fallbackSchedules[0],
         lastShift: fallbackSchedules[fallbackSchedules.length - 1],
@@ -460,7 +464,7 @@ export default function LogsPage() {
       };
     }
 
-    const sorted = [...shiftSchedules].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    const sorted = [...activeList].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
     const first = sorted[0];
     const last = sorted[sorted.length - 1];
     const activeLabel = (activeShift?.shift_label || '').trim().toLowerCase();
@@ -553,7 +557,11 @@ export default function LogsPage() {
           is_active: s.is_active ?? true,
           sort_order: s.sort_order ?? 0,
         }));
-        setShiftSchedules(mapped);
+
+        // Rule: Only shift schedules with sort_order >= 1 undergo the 24/7 rotational monitoring cycle.
+        // Shift schedules with sort_order = 0 are defined as default/general schedules and excluded from monitoring log sequence.
+        const monitoringShifts = mapped.filter((s) => (s.sort_order ?? 0) >= 1);
+        setShiftSchedules(monitoringShifts.length > 0 ? monitoringShifts : mapped);
       } else {
         setShiftSchedules(fallbackSchedules);
       }
@@ -1467,6 +1475,7 @@ export default function LogsPage() {
 
   // Open Add Category Modal
   const handleOpenAddCategory = () => {
+    if (isLogsViewOnly || !canModifyLogs) return;
     setNewCategoryName('');
     setNewCategoryColor('#004AC6');
     setIsAddCategoryModalOpen(true);
@@ -1475,6 +1484,7 @@ export default function LogsPage() {
   // Save New Category to public.report_types
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLogsViewOnly || !canModifyLogs) return;
     const cleanCatName = stripEmojis(newCategoryName.trim());
     if (!cleanCatName || isSubmitting) return;
 

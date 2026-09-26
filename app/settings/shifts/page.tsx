@@ -167,8 +167,8 @@ const roleFilterDropdownOptions: CustomDropdownOption[] = [
 ];
 
 export default function ShiftScheduleCalendarPage() {
-  const { user, isViewOnly } = useAuth();
-  const isSettingsViewOnly = isViewOnly('Settings');
+  const { user, isViewOnly, canWrite } = useAuth();
+  const isSettingsViewOnly = isViewOnly('Settings') || !canWrite('Settings');
 
   // Loading & Sync States
   const [isLoading, setIsLoading] = useState(true);
@@ -676,6 +676,10 @@ export default function ShiftScheduleCalendarPage() {
   // EDIT DAY SHIFT ROSTER HANDLERS (SUPABASE INTEGRATION)
   // ===========================================================================
   const handleOpenEditDay = (daySchedule: DayDutySchedule) => {
+    if (isSettingsViewOnly) {
+      showToast('You have view-only access. Modifying rosters is restricted.');
+      return;
+    }
     const dateKey = daySchedule.dateKey;
     setEditingDayDate(daySchedule.date);
 
@@ -694,7 +698,7 @@ export default function ShiftScheduleCalendarPage() {
   };
 
   const handleAddOfficerToShift = (shiftScheduleId: string, profileId: string) => {
-    if (!profileId) return;
+    if (isSettingsViewOnly || !profileId) return;
     setEditingDayAssignments((prev) => {
       const filtered = prev.filter((a) => a.profileId !== profileId);
       return [
@@ -711,7 +715,7 @@ export default function ShiftScheduleCalendarPage() {
   };
 
   const handleAddOfficerToRest = (profileId: string) => {
-    if (!profileId) return;
+    if (isSettingsViewOnly || !profileId) return;
     setEditingDayAssignments((prev) => {
       const filtered = prev.filter((a) => a.profileId !== profileId);
       return [
@@ -728,12 +732,17 @@ export default function ShiftScheduleCalendarPage() {
   };
 
   const handleRemoveOfficerFromDay = (profileId: string) => {
+    if (isSettingsViewOnly) return;
     setEditingDayAssignments((prev) => prev.filter((a) => a.profileId !== profileId));
   };
 
 
 
   const handleSaveDaySchedule = async () => {
+    if (isSettingsViewOnly) {
+      showToast('You have view-only access. Modifying rosters is restricted.');
+      return;
+    }
     if (!editingDayDate) return;
     const dateKey = format(editingDayDate, 'yyyy-MM-dd');
 
@@ -793,6 +802,10 @@ export default function ShiftScheduleCalendarPage() {
   };
 
   const handleClearDaySchedule = async () => {
+    if (isSettingsViewOnly) {
+      showToast('You have view-only access. Modifying rosters is restricted.');
+      return;
+    }
     if (!editingDayDate) return;
     const dateKey = format(editingDayDate, 'yyyy-MM-dd');
 
@@ -844,6 +857,10 @@ export default function ShiftScheduleCalendarPage() {
   // ===========================================================================
   const handleSaveShiftSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSettingsViewOnly) {
+      showToast('You have view-only access. Modifying rosters is restricted.');
+      return;
+    }
     if (shiftSchedules.length === 0) {
       showToast('No shift schedules available in system. Please add shift schedules in Access Control first.');
       return;

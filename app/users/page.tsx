@@ -325,8 +325,8 @@ function UsersTableSkeleton({ rows = 5 }: { rows?: number }) {
 // =============================================================================
 export default function UserManagementPage() {
   const { profile: currentAdminProfile, canWrite, isViewOnly } = useAuth();
-  const isUsersViewOnly = isViewOnly('Users');
   const canModifyUsers = canWrite('Users');
+  const isUsersViewOnly = isViewOnly('Users') || !canModifyUsers;
 
   const [activeTab, setActiveTab] = useState<'official' | 'pending'>('official');
   const [users, setUsers] = useState<UserAccount[]>([]);
@@ -660,6 +660,14 @@ export default function UserManagementPage() {
   // INVITATION MODAL HANDLERS
   // ---------------------------------------------------------------------------
   const handleOpenInviteModal = () => {
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Inviting new users is restricted under View-Only clearance.',
+      });
+      return;
+    }
     setInviteEmails([]);
     setCurrentEmailInput('');
     const defaultPos = positionOptions[0]?.value || 'Monitoring';
@@ -693,6 +701,14 @@ export default function UserManagementPage() {
   // Dispatch Invitation via Supabase Database Insert & Nodemailer SMTP
   const handleSendInvitation = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Inviting new users is restricted under View-Only clearance.',
+      });
+      return;
+    }
 
     let finalEmails = [...inviteEmails];
     if (currentEmailInput.trim()) {
@@ -819,6 +835,14 @@ export default function UserManagementPage() {
 
   // Resend Invitation
   const handleResendInvitation = async (invitation: PendingInvitation) => {
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Resending invitations is restricted under View-Only clearance.',
+      });
+      return;
+    }
     setActiveMenuId(null);
     try {
       const inviterName = currentAdminProfile?.full_name || 'Administrator';
@@ -891,6 +915,14 @@ export default function UserManagementPage() {
 
   // Revoke Invitation
   const handleRevokeInvitation = async (invitationId: string) => {
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Revoking invitations is restricted under View-Only clearance.',
+      });
+      return;
+    }
     setActiveMenuId(null);
     try {
       const { error } = await supabase
@@ -940,6 +972,14 @@ export default function UserManagementPage() {
   // USER EDIT / STATUS / DELETE HANDLERS
   // ---------------------------------------------------------------------------
   const handleOpenEditUser = (user: UserAccount) => {
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Editing user accounts is restricted under View-Only clearance.',
+      });
+      return;
+    }
     setEditingUser(user);
     setEditName(user.name);
     setEditEmail(user.email);
@@ -961,6 +1001,14 @@ export default function UserManagementPage() {
 
   const handleSaveUserEdit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Editing user accounts is restricted under View-Only clearance.',
+      });
+      return;
+    }
     if (!editingUser) return;
     setIsSavingEdit(true);
 
@@ -1104,6 +1152,14 @@ export default function UserManagementPage() {
   };
 
   const handleToggleStatus = async (user: UserAccount) => {
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Modifying user account status is restricted under View-Only clearance.',
+      });
+      return;
+    }
     setActiveMenuId(null);
     const nextStatus = user.status === 'Active' ? 'Inactive' : 'Active';
     const nextIsActive = nextStatus === 'Active';
@@ -1183,12 +1239,28 @@ export default function UserManagementPage() {
   };
 
   const handleOpenDeleteModal = (user: UserAccount) => {
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Removing user accounts is restricted under View-Only clearance.',
+      });
+      return;
+    }
     setDeletingUser(user);
     setIsDeleteModalOpen(true);
     setActiveMenuId(null);
   };
 
   const handleConfirmDeleteUser = async () => {
+    if (!canModifyUsers) {
+      setToastNotification({
+        type: 'warning',
+        message: 'Action Restricted',
+        submessage: 'Removing user accounts is restricted under View-Only clearance.',
+      });
+      return;
+    }
     if (!deletingUser) return;
     const target = deletingUser;
 
@@ -1597,71 +1669,75 @@ export default function UserManagementPage() {
 
                         {/* Action Menu */}
                         <td className="py-4 px-6 text-right relative">
-                          <div className="relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveMenuId(activeMenuId === user.id ? null : user.id);
-                              }}
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
-                              aria-label="User actions"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
+                          {canModifyUsers ? (
+                            <div className="relative inline-block text-left">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMenuId(activeMenuId === user.id ? null : user.id);
+                                }}
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
+                                aria-label="User actions"
+                              >
+                                <MoreVertical className="w-4 h-4" />
+                              </button>
 
-                            {/* Dropdown Menu */}
-                            <AnimatePresence>
-                              {activeMenuId === user.id && (
-                                <motion.div
-                                  initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                                  exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                                  transition={{ duration: 0.12 }}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="absolute right-0 mt-2 w-48 bg-white border border-[#E2E8F0] rounded-2xl shadow-xl p-1.5 z-40 space-y-0.5"
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenEditUser(user)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                              {/* Dropdown Menu */}
+                              <AnimatePresence>
+                                {activeMenuId === user.id && (
+                                  <motion.div
+                                    initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.95, y: -4 }}
+                                    transition={{ duration: 0.12 }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="absolute right-0 mt-2 w-48 bg-white border border-[#E2E8F0] rounded-2xl shadow-xl p-1.5 z-40 space-y-0.5"
                                   >
-                                    <Edit2 className="w-3.5 h-3.5 text-[#505F76]" />
-                                    Edit Account
-                                  </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditUser(user)}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                                    >
+                                      <Edit2 className="w-3.5 h-3.5 text-[#505F76]" />
+                                      Edit Account
+                                    </button>
 
-                                  <button
-                                    type="button"
-                                    onClick={() => handleToggleStatus(user)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
-                                  >
-                                    {user.status === 'Active' ? (
-                                      <>
-                                        <UserX className="w-3.5 h-3.5 text-amber-600" />
-                                        Deactivate User
-                                      </>
-                                    ) : (
-                                      <>
-                                        <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
-                                        Activate User
-                                      </>
-                                    )}
-                                  </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleStatus(user)}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                                    >
+                                      {user.status === 'Active' ? (
+                                        <>
+                                          <UserX className="w-3.5 h-3.5 text-amber-600" />
+                                          Deactivate User
+                                        </>
+                                      ) : (
+                                        <>
+                                          <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                          Activate User
+                                        </>
+                                      )}
+                                    </button>
 
-                                  <div className="h-px bg-[#E2E8F0] my-1" />
+                                    <div className="h-px bg-[#E2E8F0] my-1" />
 
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenDeleteModal(user)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-xl transition-colors text-left cursor-pointer"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                    Remove User
-                                  </button>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenDeleteModal(user)}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-xl transition-colors text-left cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      Remove User
+                                    </button>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-xs italic">View Only</span>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -1735,62 +1811,66 @@ export default function UserManagementPage() {
 
                         {/* Action Menu */}
                         <td className="py-4 px-6 text-right relative">
-                          <div className="relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveMenuId(activeMenuId === inv.id ? null : inv.id);
-                              }}
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
-                              aria-label="Invitation actions"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
+                          {canModifyUsers ? (
+                            <div className="relative inline-block text-left">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMenuId(activeMenuId === inv.id ? null : inv.id);
+                                }}
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
+                                aria-label="Invitation actions"
+                              >
+                                <MoreVertical className="w-4 h-4" />
+                              </button>
 
-                            {/* Dropdown Menu */}
-                            <AnimatePresence>
-                              {activeMenuId === inv.id && (
-                                <motion.div
-                                  initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                                  exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                                  transition={{ duration: 0.12 }}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="absolute right-0 mt-2 w-48 bg-white border border-[#E2E8F0] rounded-2xl shadow-xl p-1.5 z-40 space-y-0.5"
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => handleResendInvitation(inv)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                              {/* Dropdown Menu */}
+                              <AnimatePresence>
+                                {activeMenuId === inv.id && (
+                                  <motion.div
+                                    initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.95, y: -4 }}
+                                    transition={{ duration: 0.12 }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="absolute right-0 mt-2 w-48 bg-white border border-[#E2E8F0] rounded-2xl shadow-xl p-1.5 z-40 space-y-0.5"
                                   >
-                                    <RotateCw className="w-3.5 h-3.5 text-[#505F76]" />
-                                    Resend via SMTP
-                                  </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleResendInvitation(inv)}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                                    >
+                                      <RotateCw className="w-3.5 h-3.5 text-[#505F76]" />
+                                      Resend via SMTP
+                                    </button>
 
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopyInviteLink(inv)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
-                                  >
-                                    <Copy className="w-3.5 h-3.5 text-[#505F76]" />
-                                    Copy Invite Link
-                                  </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopyInviteLink(inv)}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                                    >
+                                      <Copy className="w-3.5 h-3.5 text-[#505F76]" />
+                                      Copy Invite Link
+                                    </button>
 
-                                  <div className="h-px bg-[#E2E8F0] my-1" />
+                                    <div className="h-px bg-[#E2E8F0] my-1" />
 
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRevokeInvitation(inv.id)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-xl transition-colors text-left cursor-pointer"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                    Revoke Invitation
-                                  </button>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRevokeInvitation(inv.id)}
+                                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-xl transition-colors text-left cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      Revoke Invitation
+                                    </button>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-xs italic">View Only</span>
+                          )}
                         </td>
                       </tr>
                     ))
