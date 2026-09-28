@@ -41,7 +41,7 @@ import { CustomDropdown, CustomDropdownOption, CheckboxInput, RichTextEditor, st
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
-import { generateDailyLogsPDF } from '@/lib/pdf-generator';
+import { generateDailyLogsPDF, sortLogsChronologically } from '@/lib/pdf-generator';
 import { Skeleton } from '@/components/skeleton';
 import { format } from 'date-fns';
 
@@ -876,6 +876,10 @@ export default function LogsPage() {
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
 
+  // Pagination State (10 items per page max)
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
   // Filtered Logs with Debounced Search Query & Report Type Filtering
   const filteredLogs = useMemo(() => {
     const q = debouncedSearchQuery.trim().toLowerCase();
@@ -893,6 +897,27 @@ export default function LogsPage() {
       return matchesSearch && matchesReportType;
     });
   }, [logs, debouncedSearchQuery, reportTypeFilter]);
+
+  const totalLogsCount = filteredLogs.length;
+  const totalPages = Math.max(1, Math.ceil(totalLogsCount / itemsPerPage));
+
+  // Reset page to 1 when filters or search query change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearchQuery, reportTypeFilter]);
+
+  // Adjust page if total pages shrank below current page
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  // Paginated subset of logs for the active page
+  const paginatedLogs = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredLogs.slice(start, start + itemsPerPage);
+  }, [filteredLogs, currentPage, itemsPerPage]);
 
   // ===========================================================================
   // 3. LOG CRUD HANDLERS
@@ -1278,27 +1303,58 @@ export default function LogsPage() {
           const shiftIds = (dayShifts || []).map((s: any) => s.id);
           if (!shiftIds.includes(activeShift.id)) shiftIds.push(activeShift.id);
 
-          // Query all duty personnel for all shifts of the day
-          const { data: allDutyPersonnel } = await supabase
-            .from('shift_duty_personnel')
-            .select(`
-              id,
-              shift_id,
-              profile_id,
-              role_in_shift,
-              is_lead,
-              present_at_end,
-              profile:profiles!shift_duty_personnel_profile_id_fkey(id, full_name, position_title, default_shift)
-            `)
-            .in('shift_id', shiftIds);
+          // Query all duty personnel, logs, and profiles for all shifts of the day
+          const [dutyPersonnelRes, dayLogsRes, profilesRes] = await Promise.all([
+            supabase
+              .from('shift_duty_personnel')
+              .select(`
+                id,
+                shift_id,
+                profile_id,
+                role_in_shift,
+                is_lead,
+                present_at_end,
+                profile:profiles!shift_duty_personnel_profile_id_fkey(id, full_name, position_title, default_shift, signature_url)
+              `)
+              .in('shift_id', shiftIds),
+            supabase
+              .from('shift_logs')
+              .select('*')
+              .in('shift_id', shiftIds)
+              .order('created_at', { ascending: true }),
+            supabase
+              .from('profiles')
+              .select('id, full_name, position_title, signature_url'),
+          ]);
 
-          // Query all logs recorded across all shifts of the day
-          const { data: dayLogs } = await supabase
-            .from('shift_logs')
-            .select('*')
-            .in('shift_id', shiftIds)
-            .order('log_date', { ascending: true })
-            .order('log_time', { ascending: true });
+          const allDutyPersonnel = dutyPersonnelRes.data || [];
+          const rawDayLogs = dayLogsRes.data || [];
+          const allProfiles = profilesRes.data || [];
+
+          const profMap = new Map<string, any>();
+          allProfiles.forEach((p) => {
+            if (p.id) profMap.set(p.id.toLowerCase(), p);
+            if (p.full_name) profMap.set(p.full_name.toLowerCase().trim(), p);
+          });
+          if (profile) {
+            if (profile.id) profMap.set(profile.id.toLowerCase(), profile);
+            if (profile.full_name) profMap.set(profile.full_name.toLowerCase().trim(), profile);
+          }
+
+          const signaturesMap: Record<string, string> = {};
+          allProfiles.forEach((p) => {
+            if (p.signature_url) {
+              if (p.full_name) {
+                signaturesMap[p.full_name] = p.signature_url;
+                signaturesMap[p.full_name.toLowerCase()] = p.signature_url;
+              }
+              if (p.id) signaturesMap[p.id] = p.signature_url;
+            }
+          });
+          if (profile?.signature_url && profile.full_name) {
+            signaturesMap[profile.full_name] = profile.signature_url;
+            signaturesMap[profile.full_name.toLowerCase()] = profile.signature_url;
+          }
 
           // Compile multi-shift summary sorted by schedule sort_order from start shift to last shift
           const compiledShifts = (dayShifts || [])
@@ -1312,11 +1368,14 @@ export default function LogsPage() {
                   presentAtEnd: dp.present_at_end !== false,
                 }));
 
-              const shiftLogsList = (dayLogs || []).filter((l: any) => l.shift_id === s.id);
+              const shiftLogsList = (rawDayLogs || []).filter((l: any) => l.shift_id === s.id);
 
               const schedMatch = shiftSchedules.find(
                 (sched) => sched.name.toLowerCase() === (s.shift_label || '').toLowerCase()
               );
+
+              const leadName = (s.lead_officer as any)?.full_name || leadOfficerName;
+              const leadProf = profMap.get(s.lead_officer_id?.toLowerCase()) || profMap.get(leadName.toLowerCase());
 
               return {
                 id: s.id,
@@ -1324,8 +1383,9 @@ export default function LogsPage() {
                 sortOrder: schedMatch?.sort_order ?? 99,
                 startTime: s.start_time,
                 endTime: s.end_time || timeFormatted,
-                leadOfficer: (s.lead_officer as any)?.full_name || leadOfficerName,
-                leadOfficerRole: (s.lead_officer as any)?.position_title || 'Lead Operations Officer',
+                leadOfficer: leadName,
+                leadOfficerRole: (s.lead_officer as any)?.position_title || leadProf?.position_title || 'Lead Operations Officer',
+                signatureUrl: leadProf?.signature_url || null,
                 handoverStatus: s.end_shift_handover_status || 'Situation Remain Normal',
                 incidentDetails: s.incident_report_details || null,
                 monitoringBriefing: s.start_monitoring_details || null,
@@ -1335,15 +1395,27 @@ export default function LogsPage() {
             })
             .sort((a, b) => a.sortOrder - b.sortOrder);
 
-          const allConsolidatedLogs = (dayLogs || []).map((l: any) => ({
-            time: l.log_time,
-            date: l.log_date,
-            status: l.status,
-            title: l.title,
-            reportType: l.report_type_name,
-            description: l.description,
-            operator: l.operator_name,
-          }));
+          const firstCycleStartTime = compiledShifts[0]?.startTime || '0800H';
+          const sortedDayLogs = sortLogsChronologically(rawDayLogs, firstCycleStartTime);
+
+          const allConsolidatedLogs = sortedDayLogs.map((l: any) => {
+            const opProf = profMap.get(l.operator_id?.toLowerCase()) || profMap.get(l.operator_name?.toLowerCase()?.trim());
+            return {
+              id: l.id,
+              shift_id: l.shift_id,
+              time: l.log_time,
+              date: l.log_date,
+              created_at: l.created_at,
+              status: l.status,
+              title: l.title,
+              reportType: l.report_type_name,
+              description: l.description,
+              operator: l.operator_name,
+              operator_id: l.operator_id,
+              operatorRole: opProf?.position_title || 'Monitoring',
+              signatureUrl: opProf?.signature_url || null,
+            };
+          });
 
           const firstShiftName = shiftScheduleSequenceInfo.firstShift?.name || compiledShifts[0]?.shiftLabel || 'Start Shift';
           const lastShiftName = shiftScheduleSequenceInfo.lastShift?.name || activeShift.shift_label || 'Final Shift';
@@ -1386,6 +1458,7 @@ export default function LogsPage() {
             finalOfficerRole: leadOfficerRole,
             finalHandoverStatus: situationText,
             signatureUrl: profile?.signature_url,
+            signaturesMap: signaturesMap,
             shifts: compiledShifts,
             logs: allConsolidatedLogs,
             fileHash: fileHash,
@@ -1738,7 +1811,11 @@ export default function LogsPage() {
                 placeholder="Search logs by title, type, or ID..."
                 className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full py-2.5 pl-10 pr-10 text-xs sm:text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
               />
-              {searchQuery && (
+              {searchQuery !== debouncedSearchQuery ? (
+                <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#94A3B8] pointer-events-none">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#004AC6]" />
+                </div>
+              ) : searchQuery ? (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
@@ -1747,7 +1824,7 @@ export default function LogsPage() {
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
-              )}
+              ) : null}
             </div>
 
             {/* Action Buttons */}
@@ -1950,7 +2027,7 @@ export default function LogsPage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredLogs.map((log) => (
+                  paginatedLogs.map((log) => (
                     <tr
                       key={log.id}
                       className={`hover:bg-slate-50/80 transition-colors group relative ${activeMenuId === log.id ? 'z-50 relative' : 'z-0'}`}
@@ -2059,28 +2136,65 @@ export default function LogsPage() {
 
           {/* Pagination Footer */}
           <div className="p-4 sm:p-5 border-t border-[#E2E8F0] bg-[#F8FAFC]/50 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-[#757680]">
-            <span>
-              Showing <span className="font-bold text-[#1E293B]">{filteredLogs.length}</span> entries
+            <span className="font-medium">
+              Showing <span className="font-bold text-[#1E293B]">{totalLogsCount > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0}</span> to{' '}
+              <span className="font-bold text-[#1E293B]">{Math.min(currentPage * itemsPerPage, totalLogsCount)}</span> of{' '}
+              <span className="font-bold text-[#1E293B]">{totalLogsCount}</span> entries
             </span>
 
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                disabled
-                className="w-8 h-8 rounded-full border border-[#E2E8F0] bg-white flex items-center justify-center text-slate-300 cursor-not-allowed"
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                className="w-8 h-8 rounded-full border border-[#E2E8F0] bg-white flex items-center justify-center text-[#505F76] hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-2xs"
+                title="Previous page"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
+
+              {Array.from({ length: totalPages }).map((_, i) => {
+                const pageNum = i + 1;
+                // Show first, last, current, and adjacent pages
+                if (
+                  totalPages <= 7 ||
+                  pageNum === 1 ||
+                  pageNum === totalPages ||
+                  Math.abs(pageNum - currentPage) <= 1
+                ) {
+                  return (
+                    <button
+                      key={pageNum}
+                      type="button"
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`w-8 h-8 rounded-full text-xs font-semibold flex items-center justify-center transition-all cursor-pointer ${
+                        currentPage === pageNum
+                          ? 'bg-[#004AC6] text-white shadow-xs font-bold'
+                          : 'border border-[#E2E8F0] bg-white text-[#505F76] hover:bg-slate-50 shadow-2xs'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                } else if (
+                  (pageNum === 2 && currentPage > 3) ||
+                  (pageNum === totalPages - 1 && currentPage < totalPages - 2)
+                ) {
+                  return (
+                    <span key={pageNum} className="px-1 text-slate-400 font-bold">
+                      ...
+                    </span>
+                  );
+                }
+                return null;
+              })}
+
               <button
                 type="button"
-                className="w-8 h-8 rounded-full bg-[#004AC6] text-white font-semibold flex items-center justify-center"
-              >
-                1
-              </button>
-              <button
-                type="button"
-                disabled
-                className="w-8 h-8 rounded-full border border-[#E2E8F0] bg-white flex items-center justify-center text-slate-300 cursor-not-allowed"
+                disabled={currentPage === totalPages || totalPages === 0}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                className="w-8 h-8 rounded-full border border-[#E2E8F0] bg-white flex items-center justify-center text-[#505F76] hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-2xs"
+                title="Next page"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -2724,6 +2838,16 @@ export default function LogsPage() {
                   </h3>
                 </div>
 
+                {/* Formatted Operational Description with bold and bullets */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
+                    Operational Description
+                  </span>
+                  <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] leading-relaxed">
+                    {renderFormattedDescription(viewLog.description)}
+                  </div>
+                </div>
+
                 {/* Timestamp & Operator Info */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] shadow-2xs space-y-1">
@@ -2794,16 +2918,6 @@ export default function LogsPage() {
                         {viewLog.operatorRole || 'Monitoring Officer'}
                       </span>
                     </div>
-                  </div>
-                </div>
-
-                {/* Formatted Operational Description with bold and bullets */}
-                <div className="space-y-2">
-                  <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                    Operational Description
-                  </span>
-                  <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] leading-relaxed">
-                    {renderFormattedDescription(viewLog.description)}
                   </div>
                 </div>
               </div>

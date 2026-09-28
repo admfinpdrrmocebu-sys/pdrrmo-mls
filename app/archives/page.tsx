@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import {
   FolderOpen,
   FileText,
@@ -47,7 +48,7 @@ import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
 import { decompressPayload } from '@/lib/compression';
-import { generateRollCallPDF, generateDailyLogsPDF } from '@/lib/pdf-generator';
+import { generateRollCallPDF, generateDailyLogsPDF, sortLogsChronologically } from '@/lib/pdf-generator';
 import { CAPITOL_LOGO_BASE64, PDRRMO_LOGO_BASE64 } from '@/lib/header-logos';
 
 export interface ShiftPersonnelInfo {
@@ -70,18 +71,23 @@ export interface ShiftSummaryEntry {
   monitoringBriefing?: string;
   roster: ShiftPersonnelInfo[];
   standbyVehicles?: { name: string; count: number }[];
-  signatures?: { name: string; title?: string }[];
+  signatures?: { name: string; title?: string; signatureUrl?: string }[];
   logsCount: number;
 }
 
 export interface ShiftLogEntry {
+  id?: string;
   time: string;
   date: string;
+  created_at?: string;
   status: 'Critical' | 'Warning' | 'Active' | 'Info';
   title: string;
   reportType: string;
   description: string;
   operator: string;
+  operator_id?: string;
+  operatorRole?: string;
+  signatureUrl?: string | null;
 }
 
 export interface RollCallStationEntry {
@@ -103,6 +109,7 @@ export interface ArchivedFile {
   createdAt: string;
   generatedAt: string;
   fileSize: string;
+  fileSizeBytes?: number;
   leadOfficer: string;
   leadOfficerRole: string;
   leadOfficerBadge: string;
@@ -142,7 +149,18 @@ export interface ArchivedFile {
 }
 
 // =============================================================================
-// TEMPLATE FORMATTING HELPERS (MATCHING Template-Example-FileFormat-MLS.docx)
+// STORAGE & TEMPLATE FORMATTING HELPERS
+// =============================================================================
+export function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 KB';
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 // =============================================================================
 export const formatFileDate = (dateStr: string) => {
   if (!dateStr) return '09/27/2026';
@@ -217,8 +235,9 @@ function mapDbArchiveToArchivedFile(row: any): ArchivedFile {
 
   // Format file size
   let formattedSize = '1.2 MB';
+  let bytes = 1.2 * 1024 * 1024;
   if (row.file_size_bytes) {
-    const bytes = Number(row.file_size_bytes);
+    bytes = Number(row.file_size_bytes);
     if (bytes >= 1024 * 1024) {
       formattedSize = `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     } else {
@@ -256,6 +275,7 @@ function mapDbArchiveToArchivedFile(row: any): ArchivedFile {
       createdAt: createdAtFormatted,
       generatedAt: `${row.shift_hours || snapshot.sessionTime || '16:00H'} · Official Radio Net Roll Call`,
       fileSize: formattedSize,
+      fileSizeBytes: bytes,
       leadOfficer: row.lead_officer_name || snapshot.conductedBy || 'Monitoring Officer',
       leadOfficerRole: row.lead_officer_role || 'Radio Net Controller',
       leadOfficerBadge: row.lead_officer_badge || 'OPC-1042',
@@ -315,16 +335,25 @@ function mapDbArchiveToArchivedFile(row: any): ArchivedFile {
 
     const shiftData = snapshot.shift || {};
     const handoverStatus = snapshot.finalHandoverStatus || snapshot.handoverStatus || (snapshot.incidentDetails ? 'Incident Report' : 'Situation Remain Normal');
-    
-    const logsList: ShiftLogEntry[] = (snapshot.logs || []).map((l: any) => ({
-      time: l.time || '1200H',
-      date: l.date || dateStr,
+
+    const rawLogs = snapshot.logs || [];
+    const logsList: ShiftLogEntry[] = rawLogs.map((l: any) => ({
+      id: l.id,
+      time: l.time || l.log_time || '1200H',
+      date: l.date || l.log_date || dateStr,
+      created_at: l.created_at,
       status: (l.severity || l.status || 'Info') as 'Critical' | 'Warning' | 'Active' | 'Info',
       title: l.title || l.category || 'Operational Event',
-      reportType: l.category || l.reportType || 'Log Entry',
+      reportType: l.report_type_name || l.reportType || l.category || l.report_type || (l.status && !['Active', 'Critical', 'Warning', 'Info'].includes(l.status) ? l.status : 'Log Entry'),
       description: l.description || '',
-      operator: l.logged_by_name || l.operator || row.lead_officer_name || 'Monitoring Officer',
+      operator: l.logged_by_name || l.operator || l.operator_name || row.lead_officer_name || 'Monitoring Officer',
+      operator_id: l.operator_id,
+      operatorRole: l.operatorRole || l.operator_role,
+      signatureUrl: l.signatureUrl || l.signature_url,
     }));
+
+    const cycleStartTime = shiftsList[0]?.startTime || (logsList[0]?.time ? logsList[0].time : '0800H');
+    const sortedLogsList = sortLogsChronologically(logsList, cycleStartTime);
 
     // Combine roster across all shifts if combined daily report
     let roster: ShiftPersonnelInfo[] = [];
@@ -372,15 +401,16 @@ function mapDbArchiveToArchivedFile(row: any): ArchivedFile {
         ? `24-Hour Daily Operations Report (${snapshot.dailyReportDate || dateStr})`
         : `${row.shift_hours || '16:00H'} · End of Shift Handover`,
       fileSize: formattedSize,
+      fileSizeBytes: bytes,
       leadOfficer: row.lead_officer_name || shiftData.lead_officer_name || 'Lead Officer',
       leadOfficerRole: row.lead_officer_role || 'Lead Operations Officer',
       leadOfficerBadge: row.lead_officer_badge || 'OPC-1001',
       shift: row.shift_label || (isDailyCombined ? '24-Hour Consolidated Operations' : (shiftData.shift_label || 'Day Shift (Alpha)')),
       shiftHours: row.shift_hours || (isDailyCombined ? '00:00H - 23:59H (24-Hour Cycle)' : `${shiftData.start_time || '08:00H'} - ${shiftData.end_time || '16:00H'}`),
-      itemCount: row.item_count || logsList.length,
+      itemCount: row.item_count || sortedLogsList.length,
       hash: row.file_hash,
       summary: row.summary || (isDailyCombined
-        ? `Official 24-Hour consolidated operational report combining ${shiftsList.length} shifts. Total logs: ${logsList.length}.`
+        ? `Official 24-Hour consolidated operational report combining ${shiftsList.length} shifts. Total logs: ${sortedLogsList.length}.`
         : `Official operational shift handover archive for ${row.shift_label}. Handover status: ${handoverStatus}.`),
       status: row.status || 'Verified',
       monitoringBriefing: isDailyCombined
@@ -406,7 +436,7 @@ function mapDbArchiveToArchivedFile(row: any): ArchivedFile {
       isDailyCombined,
       dailyReportDate: snapshot.dailyReportDate,
       shifts: shiftsList,
-      logEntries: logsList,
+      logEntries: sortedLogsList,
       storagePath: row.storage_path,
       fileUrl: row.file_url,
       rawSnapshotData: snapshot,
@@ -445,6 +475,167 @@ const renderFormattedDescription = (content: string | undefined | null) => {
 };
 
 // =============================================================================
+// MEMOIZED ARCHIVE ROW COMPONENT (OPTION C: PREVENTS UNNECESSARY RE-RENDERS)
+// =============================================================================
+interface ArchiveRowProps {
+  file: ArchivedFile;
+  isMenuOpen: boolean;
+  onPreview: (file: ArchivedFile) => void;
+  onDownload: (file: ArchivedFile) => void;
+  onCopyHash: (file: ArchivedFile) => void;
+  onToggleMenu: (id: string, e: React.MouseEvent) => void;
+}
+
+const ArchiveRow = React.memo(function ArchiveRow({
+  file,
+  isMenuOpen,
+  onPreview,
+  onDownload,
+  onCopyHash,
+  onToggleMenu,
+}: ArchiveRowProps) {
+  return (
+    <tr
+      className="hover:bg-slate-50/80 transition-colors group cursor-pointer"
+      onClick={() => onPreview(file)}
+    >
+      {/* File Name / Document Title */}
+      <td className="py-4 px-6">
+        <div className="flex items-center gap-3">
+          <div
+            className={`w-9 h-9 rounded-xl flex items-center justify-center border shadow-2xs shrink-0 ${
+              file.category === 'log'
+                ? 'bg-blue-50 text-[#004AC6] border-blue-200/60'
+                : 'bg-sky-50 text-sky-700 border-sky-200/60'
+            }`}
+          >
+            {file.category === 'log' ? (
+              <FileText className="w-5 h-5" />
+            ) : (
+              <Radio className="w-5 h-5" />
+            )}
+          </div>
+          <div className="flex flex-col">
+            <span className="font-semibold text-[#1E293B] group-hover:text-[#004AC6] transition-colors font-mono">
+              {file.filename}
+            </span>
+            <span className="text-xs text-[#757680]">
+              {file.itemCount} {file.category === 'log' ? 'shift entries' : 'station checks'} ·{' '}
+              <span className="text-emerald-600 font-medium">Verified Official Record</span>
+            </span>
+          </div>
+        </div>
+      </td>
+
+      {/* Lead Officer & Shift */}
+      <td className="py-4 px-6">
+        <div className="flex flex-col">
+          <span className="font-medium text-[#1E293B] text-xs">
+            {file.leadOfficer}
+          </span>
+          <span className="text-[11px] text-[#505F76]">
+            {file.shift}
+          </span>
+        </div>
+      </td>
+
+      {/* Generated At */}
+      <td className="py-4 px-6 text-xs text-[#505F76]">
+        <div className="flex items-center gap-1.5 font-medium">
+          <Clock className="w-3.5 h-3.5 text-[#94A3B8]" />
+          <span>{file.createdAt}</span>
+        </div>
+      </td>
+
+      {/* File Size */}
+      <td className="py-4 px-6">
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-slate-100 text-[#505F76] text-xs font-mono font-medium border border-slate-200">
+          {file.fileSize}
+        </span>
+      </td>
+
+      {/* Action Buttons */}
+      <td
+        className="py-4 px-6 text-right relative"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => onPreview(file)}
+            title="View Certified Document"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-[#505F76] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
+          >
+            <Eye className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onDownload(file)}
+            title="Download Official PDF Document"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-[#505F76] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+          </button>
+
+          <div className="relative inline-block text-left">
+            <button
+              type="button"
+              onClick={(e) => onToggleMenu(file.id, e)}
+              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
+              aria-label="File options"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
+
+            {/* Dropdown Menu */}
+            <AnimatePresence>
+              {isMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: -4 }}
+                  transition={{ duration: 0.12 }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute right-0 mt-2 w-52 bg-white border border-[#E2E8F0] rounded-2xl shadow-xl p-1.5 z-40 space-y-0.5"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onPreview(file)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-[#505F76]" />
+                    View Document Archive
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onDownload(file)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-[#505F76]" />
+                    Download Official PDF
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onCopyHash(file)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
+                  >
+                    <Hash className="w-3.5 h-3.5 text-[#505F76]" />
+                    Copy SHA-256 Hash
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </td>
+    </tr>
+  );
+});
+
+// =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 export default function ArchivesPage() {
@@ -459,7 +650,16 @@ export default function ArchivesPage() {
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedYear, setSelectedYear] = useState('ALL');
+
+  // Debounce search query by 300ms for fast and smooth table filtering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -482,6 +682,22 @@ export default function ArchivesPage() {
     type: 'success' | 'info';
   } | null>(null);
 
+  const [profilesList, setProfilesList] = useState<any[]>([]);
+
+  // Profile Lookup Map by ID and Lowercase Full Name
+  const profileMap = useMemo(() => {
+    const map = new Map<string, { id: string; full_name: string; position_title: string; signature_url: string }>();
+    profilesList.forEach((p) => {
+      if (p.id) map.set(p.id.toLowerCase(), p);
+      if (p.full_name) map.set(p.full_name.toLowerCase().trim(), p);
+    });
+    if (profile) {
+      if (profile.id) map.set(profile.id.toLowerCase(), profile as any);
+      if (profile.full_name) map.set(profile.full_name.toLowerCase().trim(), profile as any);
+    }
+    return map;
+  }, [profilesList, profile]);
+
   // Stable ref for archives
   const archivesListRef = useRef<ArchivedFile[]>([]);
   useEffect(() => {
@@ -496,12 +712,17 @@ export default function ArchivesPage() {
       if (!isBackground) setIsLoading(true);
       else setIsRefreshing(true);
 
-      // 1. Query files STRICTLY from 'archive-documents' storage bucket folders 'MLS' and 'RC'
-      const [mlsRes, rcRes, dbRes] = await Promise.all([
+      // 1. Query files from storage bucket folders 'MLS' and 'RC', and metadata from db
+      const [mlsRes, rcRes, dbRes, profilesRes] = await Promise.all([
         supabase.storage.from('archive-documents').list('MLS', { limit: 200, sortBy: { column: 'created_at', order: 'desc' } }),
         supabase.storage.from('archive-documents').list('RC', { limit: 200, sortBy: { column: 'created_at', order: 'desc' } }),
         supabase.from('archives').select('*'),
+        supabase.from('profiles').select('id, full_name, position_title, signature_url'),
       ]);
+
+      if (profilesRes.data) {
+        setProfilesList(profilesRes.data);
+      }
 
       const dbRows = dbRes.data || [];
       const dbMap = new Map<string, any>();
@@ -534,6 +755,7 @@ export default function ArchivesPage() {
             const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
             const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
             const bytes = fileObj.metadata?.size || 0;
+            const effectiveBytes = bytes > 0 ? bytes : 1.2 * 1024 * 1024;
             const formattedSize = bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
             bucketFilesOnly.push({
@@ -543,6 +765,7 @@ export default function ArchivesPage() {
               createdAt: `${dateStr} · ${timeStr}`,
               generatedAt: '24-Hour Consolidated Operations Daily Report',
               fileSize: formattedSize,
+              fileSizeBytes: effectiveBytes,
               leadOfficer: 'Operations Lead Officer',
               leadOfficerRole: 'Lead Operations Officer',
               leadOfficerBadge: 'OPC-1001',
@@ -587,6 +810,7 @@ export default function ArchivesPage() {
             const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
             const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
             const bytes = fileObj.metadata?.size || 0;
+            const effectiveBytes = bytes > 0 ? bytes : 450 * 1024;
             const formattedSize = bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
             bucketFilesOnly.push({
@@ -596,6 +820,7 @@ export default function ArchivesPage() {
               createdAt: `${dateStr} · ${timeStr}`,
               generatedAt: 'Official Radio Net Roll Call Report',
               fileSize: formattedSize,
+              fileSizeBytes: effectiveBytes,
               leadOfficer: 'Radio Net Controller',
               leadOfficerRole: 'Net Controller',
               leadOfficerBadge: 'OPC-1042',
@@ -699,7 +924,7 @@ export default function ArchivesPage() {
   }, []);
 
   // Open Preview Modal and fetch/generate actual PDF file for embed
-  const handleSelectFileForPreview = async (file: ArchivedFile) => {
+  const handleSelectFileForPreview = useCallback(async (file: ArchivedFile) => {
     setSelectedFileForPreview(file);
     setIsPreviewLoading(true);
     setPreviewError(null);
@@ -711,24 +936,11 @@ export default function ArchivesPage() {
     }
 
     try {
-      // 1. First priority: Download the official PDF directly from the storage bucket
-      if (file.storagePath) {
-        const { data: blobData, error: downloadErr } = await supabase.storage
-          .from('archive-documents')
-          .download(file.storagePath);
-
-        if (!downloadErr && blobData && blobData.size > 0) {
-          const pdfBlob = new Blob([blobData], { type: 'application/pdf' });
-          const objectUrl = URL.createObjectURL(pdfBlob);
-          setPreviewPdfBlobUrl(objectUrl);
-          setIsPreviewLoading(false);
-          return;
-        }
-      }
-
-      // 2. Second priority: If snapshot data exists, generate matching PDF on-the-fly
       if (file.category === 'roll-call') {
         const dateStr = file.createdAt ? file.createdAt.split('·')[0].trim() : '09/27/2026';
+        const rcOfficer = profileMap.get(file.leadOfficer?.toLowerCase().trim()) || profile;
+        const rcSigUrl = rcOfficer?.signature_url || profile?.signature_url;
+
         const pdf = await generateRollCallPDF({
           filename: file.filename,
           sessionDate: dateStr,
@@ -736,8 +948,8 @@ export default function ArchivesPage() {
           frequency: file.rollCallStats?.frequency || '142.500 MHz Primary VHF Net',
           radioScript: file.monitoringBriefing,
           conductedBy: file.leadOfficer || 'Monitoring Officer',
-          conductedByRole: file.leadOfficerRole || 'Net Controller',
-          signatureUrl: profile?.signature_url,
+          conductedByRole: file.leadOfficerRole || rcOfficer?.position_title || 'Net Controller',
+          signatureUrl: rcSigUrl,
           totalStations: file.rollCallStats?.totalAreas || file.itemCount || 8,
           present: file.rollCallStats?.present || 8,
           absent: file.rollCallStats?.absent || 0,
@@ -758,48 +970,98 @@ export default function ArchivesPage() {
         setPreviewPdfBlobUrl(objectUrl);
         setIsPreviewLoading(false);
         return;
-      } else {
+      } else if (file.logEntries && file.logEntries.length > 0) {
         const dateStr = file.dailyReportDate || (file.createdAt ? file.createdAt.split('·')[0].trim() : '09/27/2026');
+
+        const signaturesMap: Record<string, string> = {};
+        profileMap.forEach((prof, key) => {
+          if (prof.signature_url) {
+            signaturesMap[key] = prof.signature_url;
+          }
+        });
+
+        const finalOfficerProfile = profileMap.get(file.leadOfficer?.toLowerCase().trim()) || profile;
+        const finalOfficerSigUrl = finalOfficerProfile?.signature_url || profile?.signature_url;
+
+        const enrichedShifts = (file.shifts || []).map((s) => {
+          const sOfficer = profileMap.get(s.leadOfficer?.toLowerCase().trim());
+          const sigs = (s.signatures && s.signatures.length > 0)
+            ? s.signatures.map((sig) => typeof sig === 'string' ? { name: s.leadOfficer, signatureUrl: sig } : sig)
+            : (sOfficer?.signature_url ? [{ name: s.leadOfficer, title: s.leadOfficerRole || sOfficer?.position_title || 'Lead Operations Officer', signatureUrl: sOfficer.signature_url }] : []);
+          return {
+            shiftLabel: s.shiftLabel,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            leadOfficer: s.leadOfficer,
+            leadOfficerRole: s.leadOfficerRole || sOfficer?.position_title || 'Lead Operations Officer',
+            handoverStatus: s.handoverStatus,
+            roster: s.roster || [],
+            standbyVehicles: s.standbyVehicles || [],
+            signatures: sigs,
+            signatureUrl: sOfficer?.signature_url || null,
+            logsCount: s.logsCount || 0,
+          };
+        });
+
+        const enrichedLogs = (file.logEntries || []).map((l) => {
+          const opProfile = (l.operator_id ? profileMap.get(l.operator_id.toLowerCase()) : undefined) ||
+                            (l.operator ? profileMap.get(l.operator.toLowerCase().trim()) : undefined);
+          return {
+            id: l.id,
+            created_at: l.created_at,
+            time: l.time,
+            date: l.date,
+            status: l.status,
+            title: l.title,
+            reportType: l.reportType || (l.status && !['Active', 'Critical', 'Warning', 'Info'].includes(l.status) ? l.status : 'Info'),
+            description: l.description,
+            operator: l.operator,
+            operator_id: l.operator_id || opProfile?.id,
+            operatorRole: l.operatorRole || opProfile?.position_title || 'Duty Operations Officer',
+            signatureUrl: l.signatureUrl || opProfile?.signature_url,
+          };
+        });
+
+        const sortedLogs = sortLogsChronologically(enrichedLogs, file.shifts?.[0]?.startTime || '08:00');
+
         const pdf = await generateDailyLogsPDF({
           filename: file.filename,
           dailyReportDate: dateStr,
           totalShiftsCount: file.shifts?.length || 1,
           finalOfficer: file.leadOfficer || 'Lead Operations Officer',
-          finalOfficerRole: file.leadOfficerRole || 'Lead Operations Officer',
+          finalOfficerRole: file.leadOfficerRole || finalOfficerProfile?.position_title || 'Lead Operations Officer',
           finalHandoverStatus: file.handoverStatus || 'Situation Remain Normal',
-          signatureUrl: profile?.signature_url,
-          shifts: (file.shifts || []).map((s) => ({
-            shiftLabel: s.shiftLabel,
-            startTime: s.startTime,
-            endTime: s.endTime,
-            leadOfficer: s.leadOfficer,
-            leadOfficerRole: s.leadOfficerRole,
-            handoverStatus: s.handoverStatus,
-            roster: s.roster || [],
-            standbyVehicles: s.standbyVehicles || [],
-            signatures: s.signatures || [],
-            logsCount: s.logsCount || 0,
-          })),
-          logs: (file.logEntries || []).map((l) => ({
-            time: l.time,
-            status: l.status,
-            title: l.title,
-            description: l.description,
-            operator: l.operator,
-          })),
+          signatureUrl: finalOfficerSigUrl,
+          signaturesMap,
+          shifts: enrichedShifts,
+          logs: sortedLogs,
           fileHash: file.hash,
           snapshotPayload: file.rawSnapshotData || {},
         });
         const objectUrl = URL.createObjectURL(pdf.blob);
         setPreviewPdfBlobUrl(objectUrl);
         setIsPreviewLoading(false);
+        return;
+      } else if (file.storagePath) {
+        // Fallback: Download the official PDF directly from the storage bucket
+        const { data: blobData, error: downloadErr } = await supabase.storage
+          .from('archive-documents')
+          .download(file.storagePath);
+
+        if (!downloadErr && blobData && blobData.size > 0) {
+          const pdfBlob = new Blob([blobData], { type: 'application/pdf' });
+          const objectUrl = URL.createObjectURL(pdfBlob);
+          setPreviewPdfBlobUrl(objectUrl);
+          setIsPreviewLoading(false);
+          return;
+        }
       }
     } catch (err: any) {
       console.error('Error loading PDF document preview:', err);
       setPreviewError('Unable to load document preview from secure storage.');
       setIsPreviewLoading(false);
     }
-  };
+  }, [previewPdfBlobUrl, profileMap, profile]);
 
   // Close Preview Modal and revoke object URL
   const handleClosePreview = () => {
@@ -815,6 +1077,46 @@ export default function ArchivesPage() {
   // Split archives by category
   const logFiles = useMemo(() => archivesList.filter((f) => f.category === 'log'), [archivesList]);
   const rollCallFiles = useMemo(() => archivesList.filter((f) => f.category === 'roll-call'), [archivesList]);
+
+  // Storage Metrics & Capacity (1.0 GB baseline storage quota)
+  const STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024; // 1 GB (1,024 MB)
+
+  const { totalStorageBytes, logStorageBytes, rcStorageBytes } = useMemo(() => {
+    let total = 0;
+    let logTotal = 0;
+    let rcTotal = 0;
+
+    archivesList.forEach((file) => {
+      let b = file.fileSizeBytes;
+      if (!b || b <= 0) {
+        const match = file.fileSize?.match(/([\d.]+)\s*(MB|KB|GB|Bytes|B)/i);
+        if (match) {
+          const val = parseFloat(match[1]);
+          const unit = match[2].toUpperCase();
+          if (unit === 'GB') b = val * 1024 * 1024 * 1024;
+          else if (unit === 'MB') b = val * 1024 * 1024;
+          else if (unit === 'KB') b = val * 1024;
+          else b = val;
+        } else {
+          b = 1024 * 1024;
+        }
+      }
+      total += b;
+      if (file.category === 'log') logTotal += b;
+      else if (file.category === 'roll-call') rcTotal += b;
+    });
+
+    return { totalStorageBytes: total, logStorageBytes: logTotal, rcStorageBytes: rcTotal };
+  }, [archivesList]);
+
+  const storagePercentage = useMemo(() => {
+    return Math.min(100, (totalStorageBytes / STORAGE_QUOTA_BYTES) * 100);
+  }, [totalStorageBytes, STORAGE_QUOTA_BYTES]);
+
+  const formattedTotalStorage = useMemo(() => formatBytes(totalStorageBytes), [totalStorageBytes]);
+  const formattedLogStorage = useMemo(() => formatBytes(logStorageBytes), [logStorageBytes]);
+  const formattedRcStorage = useMemo(() => formatBytes(rcStorageBytes), [rcStorageBytes]);
+  const formattedFreeStorage = useMemo(() => formatBytes(Math.max(0, STORAGE_QUOTA_BYTES - totalStorageBytes)), [totalStorageBytes, STORAGE_QUOTA_BYTES]);
 
   // Dynamic Year Filter Options
   const yearFilterOptions: CustomDropdownOption[] = useMemo(() => {
@@ -842,7 +1144,7 @@ export default function ArchivesPage() {
   // Comprehensive search across all historical files, summaries, officers, and events
   const filteredLogFiles = useMemo(() => {
     return logFiles.filter((file) => {
-      const q = searchQuery.toLowerCase().trim();
+      const q = debouncedSearchQuery.toLowerCase().trim();
       const matchesSearch =
         !q ||
         file.filename.toLowerCase().includes(q) ||
@@ -859,11 +1161,11 @@ export default function ArchivesPage() {
       const matchesYear = selectedYear === 'ALL' || file.createdAt.includes(selectedYear);
       return matchesSearch && matchesYear;
     });
-  }, [logFiles, searchQuery, selectedYear]);
+  }, [logFiles, debouncedSearchQuery, selectedYear]);
 
   const filteredRollCallFiles = useMemo(() => {
     return rollCallFiles.filter((file) => {
-      const q = searchQuery.toLowerCase().trim();
+      const q = debouncedSearchQuery.toLowerCase().trim();
       const matchesSearch =
         !q ||
         file.filename.toLowerCase().includes(q) ||
@@ -884,7 +1186,7 @@ export default function ArchivesPage() {
       const matchesYear = selectedYear === 'ALL' || file.createdAt.includes(selectedYear);
       return matchesSearch && matchesYear;
     });
-  }, [rollCallFiles, searchQuery, selectedYear]);
+  }, [rollCallFiles, debouncedSearchQuery, selectedYear]);
 
   const currentDataset = activeTab === 'log' ? filteredLogFiles : filteredRollCallFiles;
   const totalCount = currentDataset.length;
@@ -902,8 +1204,14 @@ export default function ArchivesPage() {
     setActiveMenuId(null);
   };
 
+  // Context Menu Toggle handler
+  const handleToggleMenu = useCallback((id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setActiveMenuId((prev) => (prev === id ? null : id));
+  }, []);
+
   // Copy Hash handler
-  const handleCopyHash = (file: ArchivedFile) => {
+  const handleCopyHash = useCallback((file: ArchivedFile) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(file.hash);
       setToastNotification({
@@ -913,10 +1221,10 @@ export default function ArchivesPage() {
       });
     }
     setActiveMenuId(null);
-  };
+  }, []);
 
   // Download export handler (Supabase Storage download with JSON fallback)
-  const handleDownloadFile = async (file: ArchivedFile) => {
+  const handleDownloadFile = useCallback(async (file: ArchivedFile) => {
     try {
       // 1. Try downloading directly from Supabase Storage bucket if storagePath is present
       if (file.storagePath) {
@@ -977,7 +1285,7 @@ export default function ArchivesPage() {
       console.error('Download error:', err);
     }
     setActiveMenuId(null);
-  };
+  }, []);
 
   // Print ONLY the bucket PDF file itself
   const handlePrintDocument = () => {
@@ -1049,6 +1357,17 @@ export default function ArchivesPage() {
             >
               Refresh Archives
             </SecondaryButton>
+
+            <Link href="/archives/drive">
+              <PrimaryButton
+                size="md"
+                pill
+                leftIcon={<FolderOpen className="w-4 h-4" />}
+                className="w-full sm:w-auto justify-center"
+              >
+                Drive Files
+              </PrimaryButton>
+            </Link>
           </div>
         </div>
 
@@ -1122,6 +1441,94 @@ export default function ArchivesPage() {
         </div>
 
         {/* ========================================================================= */}
+        {/* OVERALL FILE STORAGE & REPOSITORY PROGRESS */}
+        {/* ========================================================================= */}
+        <div className="bg-white rounded-3xl p-5 sm:p-6 border border-[#E2E8F0] shadow-xs space-y-3.5 hover:border-[#CBD5E1] transition-all">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/15 shrink-0">
+                <HardDrive className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                    Overall Archive Storage Capacity
+                  </h3>
+                  <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200/80 font-mono">
+                    {archivesList.length} Archived {archivesList.length === 1 ? 'File' : 'Files'}
+                  </span>
+                </div>
+                <p className="text-xs text-[#757680] mt-0.5">
+                  Total storage consumed across all certified shift logs and roll call session documents
+                </p>
+              </div>
+            </div>
+
+            <div className="text-left sm:text-right self-start sm:self-auto">
+              <div className="flex items-baseline gap-1.5 sm:justify-end">
+                {isLoading ? (
+                  <Skeleton className="h-6 w-28 rounded-md" />
+                ) : (
+                  <>
+                    <span className="text-base sm:text-lg font-extrabold font-mono text-[#1E293B]">
+                      {formattedTotalStorage}
+                    </span>
+                    <span className="text-xs font-semibold text-[#757680]">/ 1.0 GB</span>
+                  </>
+                )}
+              </div>
+              {!isLoading && (
+                <span className="text-[11px] font-bold text-[#505F76]">
+                  {storagePercentage.toFixed(1)}% Allocated
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Progress Bar */}
+          {isLoading ? (
+            <Skeleton className="w-full h-2.5 rounded-full" />
+          ) : (
+            <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-500 rounded-full ${
+                  storagePercentage >= 90
+                    ? 'bg-rose-600'
+                    : storagePercentage >= 75
+                    ? 'bg-amber-500'
+                    : 'bg-linear-to-r from-[#004AC6] to-sky-500'
+                }`}
+                style={{ width: `${Math.max(0.5, Math.min(100, storagePercentage))}%` }}
+              />
+            </div>
+          )}
+
+          {/* Storage Breakdown */}
+          {isLoading ? (
+            <div className="flex justify-between items-center pt-1">
+              <Skeleton className="h-3.5 w-48 rounded" />
+              <Skeleton className="h-3.5 w-24 rounded" />
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between text-xs text-[#505F76] font-medium pt-0.5 gap-2">
+              <div className="flex flex-wrap items-center gap-4">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-[#004AC6]" />
+                  Shift Logs: <strong className="text-[#1E293B] font-mono">{formattedLogStorage}</strong> ({logFiles.length} {logFiles.length === 1 ? 'file' : 'files'})
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-sky-500" />
+                  Roll Calls: <strong className="text-[#1E293B] font-mono">{formattedRcStorage}</strong> ({rollCallFiles.length} {rollCallFiles.length === 1 ? 'file' : 'files'})
+                </span>
+              </div>
+              <span className="text-[#757680] text-[11px] font-medium">
+                {formattedFreeStorage} Available Quota
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* ========================================================================= */}
         {/* 3. ARCHIVES TABLE SECTION WITH TABS & FILTERS */}
         {/* ========================================================================= */}
         <div className="bg-white rounded-3xl border border-[#E2E8F0] shadow-xs overflow-hidden flex flex-col">
@@ -1186,8 +1593,20 @@ export default function ArchivesPage() {
                     setCurrentPage(1);
                   }}
                   placeholder="Search archives by file, officer, shift, hash..."
-                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full py-2.5 pl-10 pr-4 text-xs sm:text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
+                  className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full py-2.5 pl-10 pr-9 text-xs sm:text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
                 />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setCurrentPage(1);
+                    }}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#94A3B8] hover:text-[#1E293B] cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
               <div className="w-36 shrink-0">
@@ -1264,147 +1683,15 @@ export default function ArchivesPage() {
                   </tr>
                 ) : (
                   paginatedFiles.map((file) => (
-                    <tr
+                    <ArchiveRow
                       key={file.id}
-                      className="hover:bg-[#F8FAFC]/80 transition-colors group cursor-pointer"
-                      onClick={() => handleSelectFileForPreview(file)}
-                    >
-                      {/* Name of File */}
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border ${
-                              file.category === 'log'
-                                ? 'bg-blue-50 text-[#004AC6] border-blue-200/60'
-                                : 'bg-sky-50 text-sky-700 border-sky-200/60'
-                            }`}
-                          >
-                            {file.category === 'log' ? (
-                              <FileText className="w-5 h-5" />
-                            ) : (
-                              <Radio className="w-5 h-5" />
-                            )}
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="font-semibold text-[#1E293B] group-hover:text-[#004AC6] transition-colors font-mono">
-                              {file.filename}
-                            </span>
-                            <span className="text-xs text-[#757680]">
-                              {file.itemCount} {file.category === 'log' ? 'shift entries' : 'station checks'} ·{' '}
-                              <span className="text-emerald-600 font-medium">Verified Official Record</span>
-                            </span>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Lead Officer & Shift */}
-                      <td className="py-4 px-6">
-                        <div className="flex flex-col">
-                          <span className="font-medium text-[#1E293B] text-xs">
-                            {file.leadOfficer}
-                          </span>
-                          <span className="text-[11px] text-[#505F76]">
-                            {file.shift}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Generated At */}
-                      <td className="py-4 px-6 text-xs text-[#505F76]">
-                        <div className="flex items-center gap-1.5 font-medium">
-                          <Clock className="w-3.5 h-3.5 text-[#94A3B8]" />
-                          <span>{file.createdAt}</span>
-                        </div>
-                      </td>
-
-                      {/* File Size */}
-                      <td className="py-4 px-6">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-slate-100 text-[#505F76] text-xs font-mono font-medium border border-slate-200">
-                          {file.fileSize}
-                        </span>
-                      </td>
-
-                      {/* Action Buttons */}
-                      <td
-                        className="py-4 px-6 text-right relative"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleSelectFileForPreview(file)}
-                            title="View Certified Document"
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-[#505F76] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadFile(file)}
-                            title="Download Official PDF Document"
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-[#505F76] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
-                          >
-                            <Download className="w-4 h-4" />
-                          </button>
-
-                          <div className="relative inline-block text-left">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveMenuId(activeMenuId === file.id ? null : file.id);
-                              }}
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
-                              aria-label="File options"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
-
-                            {/* Dropdown Menu */}
-                            <AnimatePresence>
-                              {activeMenuId === file.id && (
-                                <motion.div
-                                  initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                                  exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                                  transition={{ duration: 0.12 }}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="absolute right-0 mt-2 w-52 bg-white border border-[#E2E8F0] rounded-2xl shadow-xl p-1.5 z-40 space-y-0.5"
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSelectFileForPreview(file)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
-                                  >
-                                    <Eye className="w-3.5 h-3.5 text-[#505F76]" />
-                                    View Document Archive
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDownloadFile(file)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
-                                  >
-                                    <Download className="w-3.5 h-3.5 text-[#505F76]" />
-                                    Download Official PDF
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopyHash(file)}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#004AC6] rounded-xl transition-colors text-left cursor-pointer"
-                                  >
-                                    <Hash className="w-3.5 h-3.5 text-[#505F76]" />
-                                    Copy SHA-256 Hash
-                                  </button>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
+                      file={file}
+                      isMenuOpen={activeMenuId === file.id}
+                      onPreview={handleSelectFileForPreview}
+                      onDownload={handleDownloadFile}
+                      onCopyHash={handleCopyHash}
+                      onToggleMenu={handleToggleMenu}
+                    />
                   ))
                 )}
               </tbody>
@@ -1538,15 +1825,6 @@ export default function ArchivesPage() {
 
                   <button
                     type="button"
-                    onClick={() => handleCopyHash(selectedFileForPreview)}
-                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-[#E2E8F0] bg-white text-xs font-semibold text-[#505F76] hover:bg-[#F1F5F9] hover:text-[#004AC6] transition-all cursor-pointer shadow-2xs"
-                  >
-                    <Hash className="w-3.5 h-3.5" />
-                    <span>Copy Hash</span>
-                  </button>
-
-                  <button
-                    type="button"
                     onClick={() => handleDownloadFile(selectedFileForPreview)}
                     className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-[#E2E8F0] bg-white text-xs font-semibold text-[#505F76] hover:bg-[#F1F5F9] hover:text-[#004AC6] transition-all cursor-pointer shadow-2xs"
                   >
@@ -1572,21 +1850,6 @@ export default function ArchivesPage() {
                   >
                     <X className="w-5 h-5" />
                   </button>
-                </div>
-              </div>
-
-              {/* SHA-256 Security Strip */}
-              <div className="px-6 py-2.5 bg-slate-50 border-b border-[#E2E8F0] flex items-center justify-between gap-4 text-xs shrink-0">
-                <div className="flex items-center gap-2 truncate text-[#757680]">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span className="font-semibold text-[#1E293B] shrink-0">SHA-256 Digest:</span>
-                  <span className="font-mono text-[11px] text-[#505F76] truncate select-all">
-                    {selectedFileForPreview.hash}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1 shrink-0 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                  <BadgeCheck className="w-3.5 h-3.5" />
-                  <span>Tamper-Proof Archive</span>
                 </div>
               </div>
 
@@ -1663,187 +1926,295 @@ export default function ArchivesPage() {
                       {/* Table Content */}
                       <div className="divide-y divide-slate-300">
                         {selectedFileForPreview.category === 'roll-call' ? (
-                          <>
-                            {/* 1. Start of Roll Call Entry */}
-                            <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
-                              <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
-                                {selectedFileForPreview.shiftHours || '1600H'}
-                              </div>
-                              <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
-                                <p className="font-bold text-slate-950">
-                                  Start of Radio Net Roll Call, {selectedFileForPreview.leadOfficer}
-                                </p>
-                                <p className="text-slate-700">
-                                  <strong>Net Frequency:</strong> {selectedFileForPreview.rollCallStats?.frequency || '142.500 MHz Primary VHF Net'}
-                                </p>
-                                <p className="text-slate-700">
-                                  <strong>Radio Script:</strong> {selectedFileForPreview.monitoringBriefing || 'Radio Roll Call Net Protocol'}
-                                </p>
-                                <p className="text-slate-700">
-                                  <strong>Total Designated Stations:</strong> {selectedFileForPreview.rollCallStats?.totalAreas || selectedFileForPreview.itemCount || 8} Stations
-                                </p>
-                                <div className="pt-2 border-t border-slate-200 mt-2">
-                                  <div className="w-40 border-b border-slate-600 mb-1" />
-                                  <p className="font-bold text-slate-900 text-[11px]">{selectedFileForPreview.leadOfficer}</p>
-                                  <p className="text-[10px] text-slate-500">{selectedFileForPreview.leadOfficerRole || 'Duty Operations Officer'}</p>
-                                </div>
-                              </div>
-                              <div className="col-span-2 text-center text-slate-400 font-semibold pt-0.5">—</div>
-                            </div>
+                          (() => {
+                            const rcOfficerProfile = profileMap.get(selectedFileForPreview.leadOfficer?.toLowerCase().trim()) || profile;
+                            const rcSigUrl = rcOfficerProfile?.signature_url || profile?.signature_url;
 
-                            {/* 2. Stations List */}
-                            {(selectedFileForPreview.rollCallEntries || []).map((stn, idx) => (
-                              <div key={idx} className="grid grid-cols-12 py-2.5 px-3 items-start hover:bg-slate-50">
-                                <div className="col-span-2 text-center font-mono text-slate-800 pt-0.5">
-                                  {stn.timeResponded || selectedFileForPreview.shiftHours || '1600H'}
+                            return (
+                              <>
+                                {/* 1. Start of Roll Call Entry */}
+                                <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                                  <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                    {selectedFileForPreview.shiftHours || '1600H'}
+                                  </div>
+                                  <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                    <p className="font-bold text-slate-950">
+                                      Start of Radio Net Roll Call, {selectedFileForPreview.leadOfficer}
+                                    </p>
+                                    <p className="text-slate-700">
+                                      <strong>Net Frequency:</strong> {selectedFileForPreview.rollCallStats?.frequency || '142.500 MHz Primary VHF Net'}
+                                    </p>
+                                    <p className="text-slate-700">
+                                      <strong>Radio Script:</strong> {selectedFileForPreview.monitoringBriefing || 'Radio Roll Call Net Protocol'}
+                                    </p>
+                                    <p className="text-slate-700">
+                                      <strong>Total Designated Stations:</strong> {selectedFileForPreview.rollCallStats?.totalAreas || selectedFileForPreview.itemCount || 8} Stations
+                                    </p>
+                                    <div className="pt-2 border-t border-slate-200 mt-2">
+                                      {rcSigUrl && (
+                                        <div className="h-10 flex items-end mb-1">
+                                          <img
+                                            src={rcSigUrl}
+                                            alt="Digital Signature"
+                                            className="max-h-10 max-w-[130px] object-contain"
+                                          />
+                                        </div>
+                                      )}
+                                      <div className="w-40 border-b border-slate-600 mb-1" />
+                                      <p className="font-bold text-slate-900 text-[11px]">{selectedFileForPreview.leadOfficer}</p>
+                                      <p className="text-[10px] text-slate-500">{selectedFileForPreview.leadOfficerRole || rcOfficerProfile?.position_title || 'Duty Operations Officer'}</p>
+                                    </div>
+                                  </div>
+                                  <div className="col-span-2 text-center text-slate-400 font-semibold pt-0.5">—</div>
                                 </div>
-                                <div className="col-span-8 px-3 space-y-1 border-x border-slate-200">
-                                  <p className="font-bold text-slate-950">{stn.municipality || stn.station} Station</p>
-                                  <p className="text-slate-600">
-                                    Weather Condition: <strong>{stn.weatherCondition || 'Fair'}</strong> | Port Status: <strong>{stn.seaPortStatus || 'Operational'}</strong>
-                                  </p>
-                                  <p className="text-slate-500 text-[11px]">
-                                    Operator: {stn.dutyOperator || 'Station Duty Officer'}
-                                  </p>
-                                </div>
-                                <div className="col-span-2 text-center pt-0.5">
-                                  <span
-                                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                      stn.status === 'Present'
-                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                        : stn.status === 'Absent'
-                                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                        : 'bg-amber-50 text-amber-700 border border-amber-200'
-                                    }`}
-                                  >
-                                    {stn.status || 'Present'}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
 
-                            {/* 3. End of Roll Call Entry */}
-                            <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
-                              <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
-                                1630H
-                              </div>
-                              <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
-                                <p className="font-bold text-slate-950">
-                                  End of Radio Net Roll Call {selectedFileForPreview.leadOfficer}
-                                </p>
-                                <p className="text-slate-700">
-                                  Attendance Breakdown: <strong>{selectedFileForPreview.rollCallStats?.present || 8} Present</strong>, <strong>{selectedFileForPreview.rollCallStats?.absent || 0} Absent</strong>, <strong>{selectedFileForPreview.rollCallStats?.exempted || 0} Exempted</strong>
-                                </p>
-                                <p className="text-slate-700">Situation Remain Normal</p>
-                                <div className="pt-2 border-t border-slate-200 mt-2">
-                                  <div className="w-40 border-b border-slate-600 mb-1" />
-                                  <p className="font-bold text-slate-900 text-[11px]">{selectedFileForPreview.leadOfficer}</p>
-                                  <p className="text-[10px] text-slate-500">{selectedFileForPreview.leadOfficerRole || 'Duty Operations Officer'}</p>
+                                {/* 2. Stations List */}
+                                {(selectedFileForPreview.rollCallEntries || []).map((stn, idx) => (
+                                  <div key={idx} className="grid grid-cols-12 py-2.5 px-3 items-start hover:bg-slate-50">
+                                    <div className="col-span-2 text-center font-mono text-slate-800 pt-0.5">
+                                      {stn.timeResponded || selectedFileForPreview.shiftHours || '1600H'}
+                                    </div>
+                                    <div className="col-span-8 px-3 space-y-1 border-x border-slate-200">
+                                      <p className="font-bold text-slate-950">{stn.municipality || stn.station} Station</p>
+                                      <p className="text-slate-600">
+                                        Weather Condition: <strong>{stn.weatherCondition || 'Fair'}</strong> | Port Status: <strong>{stn.seaPortStatus || 'Operational'}</strong>
+                                      </p>
+                                      <p className="text-slate-500 text-[11px]">
+                                        Operator: {stn.dutyOperator || 'Station Duty Officer'}
+                                      </p>
+                                    </div>
+                                    <div className="col-span-2 text-center pt-0.5">
+                                      <span
+                                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                          stn.status === 'Present'
+                                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                            : stn.status === 'Absent'
+                                            ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                            : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                        }`}
+                                      >
+                                        {stn.status || 'Present'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+
+                                {/* 3. End of Roll Call Entry */}
+                                <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                                  <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                    1630H
+                                  </div>
+                                  <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                    <p className="font-bold text-slate-950">
+                                      End of Radio Net Roll Call {selectedFileForPreview.leadOfficer}
+                                    </p>
+                                    <p className="text-slate-700">
+                                      Attendance Breakdown: <strong>{selectedFileForPreview.rollCallStats?.present || 8} Present</strong>, <strong>{selectedFileForPreview.rollCallStats?.absent || 0} Absent</strong>, <strong>{selectedFileForPreview.rollCallStats?.exempted || 0} Exempted</strong>
+                                    </p>
+                                    <p className="text-slate-700">Situation Remain Normal</p>
+                                    <div className="pt-2 border-t border-slate-200 mt-2">
+                                      {rcSigUrl && (
+                                        <div className="h-10 flex items-end mb-1">
+                                          <img
+                                            src={rcSigUrl}
+                                            alt="Digital Signature"
+                                            className="max-h-10 max-w-[130px] object-contain"
+                                          />
+                                        </div>
+                                      )}
+                                      <div className="w-40 border-b border-slate-600 mb-1" />
+                                      <p className="font-bold text-slate-900 text-[11px]">{selectedFileForPreview.leadOfficer}</p>
+                                      <p className="text-[10px] text-slate-500">{selectedFileForPreview.leadOfficerRole || rcOfficerProfile?.position_title || 'Duty Operations Officer'}</p>
+                                    </div>
+                                  </div>
+                                  <div className="col-span-2 text-center text-slate-400 font-semibold pt-0.5">—</div>
                                 </div>
-                              </div>
-                              <div className="col-span-2 text-center text-slate-400 font-semibold pt-0.5">—</div>
-                            </div>
-                          </>
+                              </>
+                            );
+                          })()
                         ) : (
-                          <>
-                            {/* 1. Start of Monitoring Duty Entry */}
-                            <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
-                              <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
-                                {getShiftStartTime(selectedFileForPreview)}
-                              </div>
-                              <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
-                                <p className="font-bold text-slate-950">
-                                  Start of Monitoring Duty, {selectedFileForPreview.shifts?.[0]?.leadOfficer || selectedFileForPreview.leadOfficer || 'Duty Officer'}
-                                </p>
-                                <p className="text-slate-700">Standby Vehicles: Pick up - 1, Ambulance - 1, Demo Items - 5</p>
-                                <div className="text-slate-700 text-xs">
-                                  <strong>Active personnel assigned on duty:</strong>{' '}
-                                  {selectedFileForPreview.dutyPersonnelRoster && selectedFileForPreview.dutyPersonnelRoster.length > 0
-                                    ? selectedFileForPreview.dutyPersonnelRoster.map((p) => `${p.name} (${p.role})`).join(', ')
-                                    : selectedFileForPreview.leadOfficer}
-                                </div>
-                                {selectedFileForPreview.monitoringBriefing && (
-                                  <div className="pt-1">
-                                    <span className="font-bold text-slate-900 block mb-0.5">Monitoring Details & Briefing:</span>
-                                    {renderFormattedDescription(selectedFileForPreview.monitoringBriefing)}
+                          (() => {
+                            const previewLogs = selectedFileForPreview.logEntries || [];
+                            const hasStartLog = previewLogs.some(
+                              (l) => /start\s+of\s+monitoring/i.test(l.title || '') || /start\s+of\s+monitoring/i.test(l.description || '')
+                            );
+                            const hasEndLog = previewLogs.some(
+                              (l) => /end\s+of\s+(monitoring|shift)/i.test(l.title || '') || /end\s+of\s+(monitoring|shift)/i.test(l.description || '')
+                            );
+
+                            const firstShift = selectedFileForPreview.shifts?.[0];
+                            const firstOfficerName = firstShift?.leadOfficer || selectedFileForPreview.leadOfficer || 'Duty Officer';
+                            const firstOfficerProfile = profileMap.get(firstOfficerName.toLowerCase().trim()) || profile;
+                            const firstShiftSig = firstShift?.signatures?.[0];
+                            const firstShiftSigUrl = typeof firstShiftSig === 'string' ? firstShiftSig : firstShiftSig?.signatureUrl;
+                            const firstOfficerSigUrl = firstShiftSigUrl || firstOfficerProfile?.signature_url;
+                            const firstOfficerRole = firstShift?.leadOfficerRole || firstOfficerProfile?.position_title || selectedFileForPreview.leadOfficerRole || 'Lead Operations Officer';
+
+                            const finalOfficerName = selectedFileForPreview.leadOfficer || 'Lead Operations Officer';
+                            const finalOfficerProfile = profileMap.get(finalOfficerName.toLowerCase().trim()) || profile;
+                            const finalOfficerSigUrl = finalOfficerProfile?.signature_url;
+                            const finalOfficerRole = selectedFileForPreview.leadOfficerRole || finalOfficerProfile?.position_title || 'Lead Operations Officer';
+
+                            return (
+                              <>
+                                {/* 1. Synthetic Start of Monitoring Duty Entry (if not already recorded in logs) */}
+                                {!hasStartLog && (
+                                  <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                                    <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                      {getShiftStartTime(selectedFileForPreview)}
+                                    </div>
+                                    <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                      <p className="font-bold text-slate-950">
+                                        Start of Monitoring Duty, {firstOfficerName}
+                                      </p>
+                                      <p className="text-slate-700">Standby Vehicles: Pick up - 1, Ambulance - 1, Demo Items - 5</p>
+                                      <div className="text-slate-700 text-xs">
+                                        <strong>Active personnel assigned on duty:</strong>{' '}
+                                        {selectedFileForPreview.dutyPersonnelRoster && selectedFileForPreview.dutyPersonnelRoster.length > 0
+                                          ? selectedFileForPreview.dutyPersonnelRoster.map((p) => `${p.name} (${p.role})`).join(', ')
+                                          : firstOfficerName}
+                                      </div>
+                                      {selectedFileForPreview.monitoringBriefing && (
+                                        <div className="pt-1">
+                                          <span className="font-bold text-slate-900 block mb-0.5">Monitoring Details & Briefing:</span>
+                                          {renderFormattedDescription(selectedFileForPreview.monitoringBriefing)}
+                                        </div>
+                                      )}
+                                      <div className="pt-2 border-t border-slate-200 mt-2">
+                                        {firstOfficerSigUrl && (
+                                          <div className="h-10 flex items-end mb-1">
+                                            <img
+                                              src={firstOfficerSigUrl}
+                                              alt="Digital Signature"
+                                              className="max-h-10 max-w-[130px] object-contain"
+                                            />
+                                          </div>
+                                        )}
+                                        <div className="w-40 border-b border-slate-600 mb-1" />
+                                        <p className="font-bold text-slate-900 text-[11px]">{firstOfficerName}</p>
+                                        <p className="text-[10px] text-slate-500">{firstOfficerRole}</p>
+                                      </div>
+                                    </div>
+                                    <div className="col-span-2 text-center text-slate-500 font-medium pt-0.5">Info</div>
                                   </div>
                                 )}
-                                <div className="pt-2 border-t border-slate-200 mt-2">
-                                  <div className="w-40 border-b border-slate-600 mb-1" />
-                                  <p className="font-bold text-slate-900 text-[11px]">
-                                    {selectedFileForPreview.shifts?.[0]?.leadOfficer || selectedFileForPreview.leadOfficer || 'Lead Operations Officer'}
-                                  </p>
-                                  <p className="text-[10px] text-slate-500">
-                                    {selectedFileForPreview.shifts?.[0]?.leadOfficerRole || selectedFileForPreview.leadOfficerRole || 'Lead Operations Officer'}
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="col-span-2 text-center text-slate-500 font-medium pt-0.5">Info</div>
-                            </div>
 
-                            {/* 2. Chronological Log Entries */}
-                            {(selectedFileForPreview.logEntries || []).map((log, idx) => (
-                              <div key={idx} className="grid grid-cols-12 py-2.5 px-3 items-start hover:bg-slate-50">
-                                <div className="col-span-2 text-center font-mono text-slate-800 pt-0.5">
-                                  {log.time || '1200H'}
-                                </div>
-                                <div className="col-span-8 px-3 space-y-1 border-x border-slate-200">
-                                  <p className="font-bold text-slate-950">{log.title}</p>
-                                  <div className="text-slate-700">
-                                    {renderFormattedDescription(log.description)}
+                                {/* 2. Chronological Log Entries */}
+                                {previewLogs.map((log, idx) => {
+                                  const isStart = /start\s+of\s+monitoring/i.test(log.title || '') || /start\s+of\s+monitoring/i.test(log.description || '');
+                                  const isAssume = /assume\s+monitoring/i.test(log.title || '') || /assume\s+monitoring/i.test(log.description || '');
+                                  const isEnd = /end\s+of\s+(monitoring|shift)/i.test(log.title || '') || /end\s+of\s+(monitoring|shift)/i.test(log.description || '');
+                                  const isDutyLifecycle = isStart || isAssume || isEnd;
+
+                                  const opName = log.operator || selectedFileForPreview.leadOfficer || 'Duty Officer';
+                                  const opProf = (log.operator_id ? profileMap.get(log.operator_id.toLowerCase()) : undefined) ||
+                                                 (log.operator ? profileMap.get(log.operator.toLowerCase().trim()) : undefined) ||
+                                                 profileMap.get(selectedFileForPreview.leadOfficer?.toLowerCase().trim());
+                                  const opSigUrl = log.signatureUrl || opProf?.signature_url;
+                                  const opRole = log.operatorRole || opProf?.position_title || 'Duty Operations Officer';
+
+                                  if (isDutyLifecycle) {
+                                    return (
+                                      <div key={idx} className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                                        <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                          {log.time || '0000H'}
+                                        </div>
+                                        <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                          <p className="font-bold text-slate-950">{log.title}</p>
+                                          <div className="text-slate-700">
+                                            {renderFormattedDescription(log.description)}
+                                          </div>
+                                          <div className="pt-2 border-t border-slate-200 mt-2">
+                                            {opSigUrl && (
+                                              <div className="h-10 flex items-end mb-1">
+                                                <img
+                                                  src={opSigUrl}
+                                                  alt="Digital Signature"
+                                                  className="max-h-10 max-w-[130px] object-contain"
+                                                />
+                                              </div>
+                                            )}
+                                            <div className="w-40 border-b border-slate-600 mb-1" />
+                                            <p className="font-bold text-slate-900 text-[11px]">{opName}</p>
+                                            <p className="text-[10px] text-slate-500">{opRole}</p>
+                                          </div>
+                                        </div>
+                                        <div className="col-span-2 text-center text-slate-500 font-medium pt-0.5">
+                                          <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                                            {log.reportType || log.status || 'Info'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  return (
+                                    <div key={idx} className="grid grid-cols-12 py-2.5 px-3 items-start hover:bg-slate-50">
+                                      <div className="col-span-2 text-center font-mono text-slate-800 pt-0.5">
+                                        {log.time || '1200H'}
+                                      </div>
+                                      <div className="col-span-8 px-3 space-y-1 border-x border-slate-200">
+                                        <p className="font-bold text-slate-950">{log.title}</p>
+                                        <div className="text-slate-700">
+                                          {renderFormattedDescription(log.description)}
+                                        </div>
+                                        {log.operator && (
+                                          <p className="text-[10px] text-slate-400">Operator: {log.operator}</p>
+                                        )}
+                                      </div>
+                                      <div className="col-span-2 text-center pt-0.5">
+                                        <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                                          {log.reportType || log.status || 'Info'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+
+                                {/* 3. Synthetic End of Monitoring Duty Entry (if not already recorded in logs) */}
+                                {!hasEndLog && (
+                                  <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
+                                    <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
+                                      {getShiftEndTime(selectedFileForPreview)}
+                                    </div>
+                                    <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
+                                      <p className="font-bold text-slate-950">
+                                        End of Monitoring Duty {finalOfficerName}
+                                      </p>
+                                      <p className="text-slate-700">
+                                        24-Hour Operational Cycle: <strong>{selectedFileForPreview.shifts?.length || 1} Shifts Combined</strong>
+                                      </p>
+                                      <p className="text-slate-700">
+                                        Handover Status: <strong>{selectedFileForPreview.handoverStatus || 'Situation Remain Normal'}</strong>
+                                      </p>
+                                      {selectedFileForPreview.incidentReportDetails && (
+                                        <p className="text-rose-700 bg-rose-50 p-2 rounded-lg border border-rose-200 text-xs">
+                                          <strong>Incident Notes:</strong> {selectedFileForPreview.incidentReportDetails}
+                                        </p>
+                                      )}
+                                      <div className="pt-2 border-t border-slate-200 mt-2">
+                                        {finalOfficerSigUrl && (
+                                          <div className="h-10 flex items-end mb-1">
+                                            <img
+                                              src={finalOfficerSigUrl}
+                                              alt="Digital Signature"
+                                              className="max-h-10 max-w-[130px] object-contain"
+                                            />
+                                          </div>
+                                        )}
+                                        <div className="w-40 border-b border-slate-600 mb-1" />
+                                        <p className="font-bold text-slate-900 text-[11px]">{finalOfficerName}</p>
+                                        <p className="text-[10px] text-slate-500">{finalOfficerRole}</p>
+                                      </div>
+                                    </div>
+                                    <div className="col-span-2 text-center text-slate-500 font-medium pt-0.5">Info</div>
                                   </div>
-                                  {log.operator && (
-                                    <p className="text-[10px] text-slate-400">Operator: {log.operator}</p>
-                                  )}
-                                </div>
-                                <div className="col-span-2 text-center pt-0.5">
-                                  <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                                    {log.reportType || log.status || 'Info'}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-
-                            {/* 3. End of Monitoring Duty Entry */}
-                            <div className="grid grid-cols-12 py-3 px-3 items-start bg-slate-50/40">
-                              <div className="col-span-2 text-center font-bold font-mono text-slate-900 pt-0.5">
-                                {getShiftEndTime(selectedFileForPreview)}
-                              </div>
-                              <div className="col-span-8 px-3 space-y-1.5 border-x border-slate-200">
-                                <p className="font-bold text-slate-950">
-                                  End of Monitoring Duty {selectedFileForPreview.leadOfficer || 'Duty Officer'}
-                                </p>
-                                <p className="text-slate-700">
-                                  24-Hour Operational Cycle: <strong>{selectedFileForPreview.shifts?.length || 1} Shifts Combined</strong>
-                                </p>
-                                <p className="text-slate-700">
-                                  Handover Status: <strong>{selectedFileForPreview.handoverStatus || 'Situation Remain Normal'}</strong>
-                                </p>
-                                {selectedFileForPreview.incidentReportDetails && (
-                                  <p className="text-rose-700 bg-rose-50 p-2 rounded-lg border border-rose-200 text-xs">
-                                    <strong>Incident Notes:</strong> {selectedFileForPreview.incidentReportDetails}
-                                  </p>
                                 )}
-                                <div className="pt-2 border-t border-slate-200 mt-2">
-                                  <div className="w-40 border-b border-slate-600 mb-1" />
-                                  <p className="font-bold text-slate-900 text-[11px]">
-                                    {selectedFileForPreview.leadOfficer || 'Lead Operations Officer'}
-                                  </p>
-                                  <p className="text-[10px] text-slate-500">
-                                    {selectedFileForPreview.leadOfficerRole || 'Lead Operations Officer'}
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="col-span-2 text-center text-slate-500 font-medium pt-0.5">Info</div>
-                            </div>
-                          </>
+                              </>
+                            );
+                          })()
                         )}
                       </div>
-                    </div>
-
-                    {/* Security Digest */}
-                    <div className="pt-2 text-[11px] text-slate-400 font-mono">
-                      Official Tamper-Proof Audit Digest (SHA-256): {selectedFileForPreview.hash}
                     </div>
                   </div>
                 ) : previewPdfBlobUrl ? (

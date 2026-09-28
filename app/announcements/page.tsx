@@ -49,6 +49,9 @@ export interface Announcement {
 // Truncation limit in words for card previews
 const WORD_LIMIT = 24;
 
+// Maximum allowed active announcements
+const MAX_ANNOUNCEMENTS = 20;
+
 // Extracts clean plain text from HTML
 function getPlainText(html: string): string {
   if (!html) return '';
@@ -162,6 +165,20 @@ export default function AnnouncementsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+
+  // Debounce search query by 300ms for fast and responsive filtering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Capacity calculations (Max 20 limit)
+  const totalCount = announcements.length;
+  const isFull = totalCount >= MAX_ANNOUNCEMENTS;
+  const isAlmost = totalCount >= 16 && totalCount < MAX_ANNOUNCEMENTS;
 
   // Modal State for Viewing Full Content
   const [viewingAnnouncement, setViewingAnnouncement] = useState<Announcement | null>(null);
@@ -302,10 +319,10 @@ export default function AnnouncementsPage() {
     }
   };
 
-  // Filtered Announcements based on search query
+  // Filtered Announcements based on debounced search query
   const filteredAnnouncements = useMemo(() => {
     return announcements.filter((item) => {
-      const q = searchQuery.toLowerCase();
+      const q = debouncedSearchQuery.toLowerCase();
       const plainText = getPlainText(item.description).toLowerCase();
       return (
         item.title.toLowerCase().includes(q) ||
@@ -313,7 +330,7 @@ export default function AnnouncementsPage() {
         item.createdBy.toLowerCase().includes(q)
       );
     });
-  }, [announcements, searchQuery]);
+  }, [announcements, debouncedSearchQuery]);
 
   // Open Create Modal
   const handleOpenCreate = () => {
@@ -321,6 +338,14 @@ export default function AnnouncementsPage() {
       showToast(
         'Permission Denied',
         'You have view-only access. Posting announcements is restricted.',
+        'error'
+      );
+      return;
+    }
+    if (announcements.length >= MAX_ANNOUNCEMENTS) {
+      showToast(
+        'Maximum Capacity Reached',
+        `Maximum limit of ${MAX_ANNOUNCEMENTS} announcements reached. Please delete an older announcement to publish a new one.`,
         'error'
       );
       return;
@@ -355,6 +380,14 @@ export default function AnnouncementsPage() {
     e.preventDefault();
     if (!canModifyAnnouncements) {
       showToast('Action Restricted', 'You have view-only access. Modifying announcements is restricted.', 'error');
+      return;
+    }
+    if (!editingId && announcements.length >= MAX_ANNOUNCEMENTS) {
+      showToast(
+        'Maximum Capacity Reached',
+        `Cannot publish new announcement. The maximum limit of ${MAX_ANNOUNCEMENTS} bulletins has been reached.`,
+        'error'
+      );
       return;
     }
     const plainDesc = getPlainText(formDescription);
@@ -541,6 +574,12 @@ export default function AnnouncementsPage() {
                 pill
                 leftIcon={<Plus className="w-4 h-4" />}
                 onClick={handleOpenCreate}
+                disabled={isFull}
+                title={
+                  isFull
+                    ? `Maximum limit of ${MAX_ANNOUNCEMENTS} announcements reached`
+                    : 'Post Announcement'
+                }
               >
                 Post Announcement
               </PrimaryButton>
@@ -555,27 +594,59 @@ export default function AnnouncementsPage() {
         />
 
         {/* ========================================================================= */}
-        {/* 2. SEARCH BAR */}
+        {/* 2. SEARCH BAR & CAPACITY INDICATOR */}
         {/* ========================================================================= */}
-        <div className="relative flex items-center w-full max-w-md">
-          <span className="absolute left-4 flex items-center justify-center text-[#757680] pointer-events-none">
-            <Search className="w-4 h-4" />
-          </span>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search announcements by title, keywords, or author..."
-            className="w-full bg-white border border-[#E2E8F0] rounded-full py-2.5 pl-11 pr-4 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:ring-2 focus:ring-[#004AC6]/15 hover:border-[#CBD5E1] transition-all shadow-2xs"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-3.5 text-[#94A3B8] hover:text-[#1E293B] cursor-pointer"
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
+          {/* Search Bar */}
+          <div className="relative flex items-center w-full max-w-md">
+            <span className="absolute left-4 flex items-center justify-center text-[#757680] pointer-events-none">
+              <Search className="w-4 h-4" />
+            </span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search announcements by title, keywords, or author..."
+              className="w-full bg-white border border-[#E2E8F0] rounded-full py-2.5 pl-11 pr-4 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:ring-2 focus:ring-[#004AC6]/15 hover:border-[#CBD5E1] transition-all shadow-2xs"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3.5 text-[#94A3B8] hover:text-[#1E293B] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          {/* Capacity Indicator: 0/20 with progress bar (no icons) */}
+          <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-full border border-[#E2E8F0] shadow-2xs shrink-0 self-start sm:self-auto">
+            <span
+              className={`text-xs font-mono font-extrabold ${
+                isFull
+                  ? 'text-rose-600'
+                  : isAlmost
+                  ? 'text-amber-600'
+                  : 'text-[#004AC6]'
+              }`}
             >
-              <X className="w-4 h-4" />
-            </button>
-          )}
+              {totalCount}/{MAX_ANNOUNCEMENTS}
+            </span>
+            <div className="w-24 sm:w-28 bg-slate-100 rounded-full h-2 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 rounded-full ${
+                  isFull
+                    ? 'bg-rose-600'
+                    : isAlmost
+                    ? 'bg-amber-500'
+                    : 'bg-[#004AC6]'
+                }`}
+                style={{
+                  width: `${Math.min(100, (totalCount / MAX_ANNOUNCEMENTS) * 100)}%`,
+                }}
+              />
+            </div>
+          </div>
         </div>
 
         {/* ========================================================================= */}

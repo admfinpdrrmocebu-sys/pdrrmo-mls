@@ -45,16 +45,26 @@ export interface DailyLogShiftItem {
   monitoringBriefing?: string | null;
   roster: Array<{ name: string; role: string; badgeNumber?: string }>;
   standbyVehicles?: Array<{ name: string; count: number }>;
-  signatures?: Array<{ name: string; title?: string }>;
+  signatures?: Array<{ name: string; title?: string; signatureUrl?: string }>;
+  signatureUrl?: string | null;
+  signatureBase64?: string | null;
   logsCount: number;
 }
 
 export interface DailyLogEntryItem {
+  id?: string;
   time: string;
+  date?: string;
+  created_at?: string;
   status: string;
   title: string;
+  reportType?: string;
   description: string;
   operator: string;
+  operator_id?: string;
+  operatorRole?: string;
+  signatureUrl?: string | null;
+  signatureBase64?: string | null;
 }
 
 export interface DailyLogsPdfData {
@@ -66,6 +76,7 @@ export interface DailyLogsPdfData {
   finalHandoverStatus: string;
   signatureUrl?: string | null;
   signatureBase64?: string | null;
+  signaturesMap?: Record<string, string>;
   shifts: DailyLogShiftItem[];
   logs: DailyLogEntryItem[];
   fileHash: string;
@@ -570,6 +581,64 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
   };
 }
 
+// Helper: Sort logs chronologically across operational shifts and 24-hour cycles
+export function sortLogsChronologically<T extends { time?: string; log_time?: string; date?: string; log_date?: string; created_at?: string }>(
+  logs: T[],
+  cycleStartTime?: string
+): T[] {
+  if (!logs || logs.length <= 1) return logs || [];
+
+  const parseTimeMin = (t?: string): number => {
+    if (!t) return 0;
+    const clean = t.replace(/[^0-9]/g, '');
+    if (clean.length >= 4) {
+      const h = parseInt(clean.slice(0, 2), 10);
+      const m = parseInt(clean.slice(2, 4), 10);
+      return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+    }
+    if (clean.length > 0) {
+      const h = parseInt(clean, 10);
+      return isNaN(h) ? 0 : h * 60;
+    }
+    return 0;
+  };
+
+  const cycleStartMin = parseTimeMin(cycleStartTime || '0800H');
+
+  return [...logs].sort((a, b) => {
+    // 1. If created_at ISO timestamp is available on both, it is the absolute true timeline
+    if (a.created_at && b.created_at) {
+      const dtA = new Date(a.created_at).getTime();
+      const dtB = new Date(b.created_at).getTime();
+      if (!isNaN(dtA) && !isNaN(dtB) && dtA !== dtB) {
+        return dtA - dtB;
+      }
+    }
+
+    // 2. If dates differ
+    const dateA = a.date || a.log_date;
+    const dateB = b.date || b.log_date;
+    if (dateA && dateB && dateA !== dateB) {
+      const dtA = new Date(dateA).getTime();
+      const dtB = new Date(dateB).getTime();
+      if (!isNaN(dtA) && !isNaN(dtB) && dtA !== dtB) {
+        return dtA - dtB;
+      }
+    }
+
+    // 3. Compare military time within operational cycle (e.g. 18:00 start cycle)
+    const timeA = a.time || a.log_time;
+    const timeB = b.time || b.log_time;
+    const minA = parseTimeMin(timeA);
+    const minB = parseTimeMin(timeB);
+
+    const normA = (minA - cycleStartMin + 1440) % 1440;
+    const normB = (minB - cycleStartMin + 1440) % 1440;
+
+    return normA - normB;
+  });
+}
+
 /**
  * Generates an official certified PDF for 24-Hour Daily Operations Logs matching Template-Example-FileFormat-MLS.docx
  */
@@ -771,50 +840,167 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
     y += rowHeight;
   };
 
-  // Resolve operating user signature from profile
-  const signatureBase64 = data.signatureBase64 || (await resolveSignatureBase64(data.signatureUrl));
-
-  // Start of duty row (Only operating user signature, no second signature)
-  const firstShift = data.shifts && data.shifts[0];
-  const startDesc: string[] = [
-    `Start of Monitoring Duty, ${firstShift ? firstShift.leadOfficer : (data.finalOfficer || 'Duty Officer')}`,
-    'Standby Vehicles: Pick up - 1, Ambulance - 1, Demo Items - 5',
-  ];
-  if (firstShift?.monitoringBriefing) {
-    startDesc.push(`Monitoring Details & Briefing: ${firstShift.monitoringBriefing}`);
+  // Pre-resolve all signatures from profile, shifts, logs, and signaturesMap
+  const signatureUrlSet = new Set<string>();
+  if (data.signatureUrl) signatureUrlSet.add(data.signatureUrl);
+  if (data.signaturesMap) {
+    Object.values(data.signaturesMap).forEach((url) => {
+      if (url && typeof url === 'string') signatureUrlSet.add(url);
+    });
   }
-  drawSignatureRow(
-    firstShift?.startTime || '0800H',
-    startDesc,
-    'Info',
-    firstShift?.leadOfficer || data.finalOfficer || 'Lead Operations Officer',
-    firstShift?.leadOfficerRole || data.finalOfficerRole || 'Lead Operations Officer',
-    signatureBase64
+  data.shifts?.forEach((s) => {
+    if (s.signatureUrl) signatureUrlSet.add(s.signatureUrl);
+  });
+  data.logs?.forEach((l) => {
+    if (l.signatureUrl) signatureUrlSet.add(l.signatureUrl);
+  });
+
+  const signatureCache = new Map<string, string>();
+  await Promise.all(
+    Array.from(signatureUrlSet).map(async (url) => {
+      const base64 = await resolveSignatureBase64(url);
+      if (base64) signatureCache.set(url, base64);
+    })
   );
 
-  // Chronological Log Entries
-  (data.logs || []).forEach((log) => {
+  const getOfficerSignature = (log: DailyLogEntryItem, officerName?: string): string | null => {
+    if (log.signatureBase64) return log.signatureBase64;
+    if (log.signatureUrl) {
+      if (log.signatureUrl.startsWith('data:image/')) return log.signatureUrl;
+      if (signatureCache.has(log.signatureUrl)) return signatureCache.get(log.signatureUrl)!;
+    }
+    if (officerName) {
+      if (data.signaturesMap) {
+        const mapped = data.signaturesMap[officerName] || data.signaturesMap[officerName.toLowerCase()];
+        if (mapped) {
+          if (mapped.startsWith('data:image/')) return mapped;
+          if (signatureCache.has(mapped)) return signatureCache.get(mapped)!;
+        }
+      }
+      const shiftMatch = data.shifts?.find(
+        (s) => s.leadOfficer && s.leadOfficer.toLowerCase() === officerName.toLowerCase()
+      );
+      if (shiftMatch?.signatureBase64) return shiftMatch.signatureBase64;
+      if (shiftMatch?.signatureUrl && signatureCache.has(shiftMatch.signatureUrl)) {
+        return signatureCache.get(shiftMatch.signatureUrl)!;
+      }
+    }
+    if (data.signatureBase64 && (!officerName || officerName.toLowerCase() === data.finalOfficer?.toLowerCase())) {
+      return data.signatureBase64;
+    }
+    if (data.signatureUrl && signatureCache.has(data.signatureUrl)) {
+      return signatureCache.get(data.signatureUrl)!;
+    }
+    return null;
+  };
+
+  const isDutyLifecycleLog = (log: DailyLogEntryItem) => {
+    const title = (log.title || '').toLowerCase();
+    return (
+      title.includes('start of monitoring') ||
+      title.includes('assume monitoring') ||
+      title.includes('end of monitoring') ||
+      title.includes('start of duty') ||
+      title.includes('assume duty') ||
+      title.includes('end of duty')
+    );
+  };
+
+  const cycleStart = data.shifts?.[0]?.startTime || (data.logs?.[0]?.time ? data.logs[0].time : '0800H');
+  const sortedLogs = sortLogsChronologically(data.logs || [], cycleStart);
+
+  const hasStartDutyLog = sortedLogs.some((l) => {
+    const t = (l.title || '').toLowerCase();
+    return t.includes('start of monitoring') || t.includes('assume monitoring') || t.includes('start of duty');
+  });
+
+  const hasEndDutyLog = sortedLogs.some((l) => {
+    const t = (l.title || '').toLowerCase();
+    return t.includes('end of monitoring') || t.includes('end of duty');
+  });
+
+  // Fallback: If no start log exists in logs data, draw initial start duty row
+  if (!hasStartDutyLog) {
+    const firstShift = data.shifts && data.shifts[0];
+    const startDesc: string[] = [
+      `Start of Monitoring Duty, ${firstShift ? firstShift.leadOfficer : (data.finalOfficer || 'Duty Officer')}`,
+      'Standby Vehicles: Pick up - 1, Ambulance - 1, Demo Items - 5',
+    ];
+    if (firstShift?.monitoringBriefing) {
+      startDesc.push(`Monitoring Details & Briefing: ${firstShift.monitoringBriefing}`);
+    }
+    const officerName = firstShift?.leadOfficer || data.finalOfficer || 'Lead Operations Officer';
+    const officerRole = firstShift?.leadOfficerRole || data.finalOfficerRole || 'Lead Operations Officer';
+    const sigBase64 = getOfficerSignature({ time: '0800H', status: 'Info', title: '', description: '', operator: officerName }, officerName);
+    drawSignatureRow(
+      firstShift?.startTime || '0800H',
+      startDesc,
+      'Info',
+      officerName,
+      officerRole,
+      sigBase64
+    );
+  }
+
+  // Draw all log entries in exact chronological order
+  sortedLogs.forEach((log) => {
+    const isDuty = isDutyLifecycleLog(log);
     const logDesc = [
       log.title || 'Operational Event',
       log.description || '',
     ];
-    drawRow(log.time || '1200H', logDesc, log.status || 'Info');
+
+    if (isDuty) {
+      let officerName = log.operator || data.finalOfficer || 'Monitoring Officer';
+      // If title includes "Start of Monitoring Duty, Name" or "End of Monitoring Duty Name"
+      const nameMatch = log.title?.match(/(?:Start of Monitoring Duty,\s*|End of Monitoring Duty\s+)([^(\n]+)/i);
+      if (nameMatch && nameMatch[1]?.trim()) {
+        officerName = nameMatch[1].trim();
+      }
+
+      let officerRole = log.operatorRole || 'Monitoring';
+      if (!log.operatorRole && data.shifts) {
+        const shiftMatch = data.shifts.find(
+          (s) => s.leadOfficer && s.leadOfficer.toLowerCase() === officerName.toLowerCase()
+        );
+        if (shiftMatch?.leadOfficerRole) {
+          officerRole = shiftMatch.leadOfficerRole;
+        }
+      }
+
+      const sigBase64 = getOfficerSignature(log, officerName);
+      drawSignatureRow(
+        log.time || '1200H',
+        logDesc,
+        log.reportType || log.status || 'Info',
+        officerName,
+        officerRole,
+        sigBase64
+      );
+    } else {
+      drawRow(log.time || '1200H', logDesc, log.reportType || log.status || 'Info');
+    }
   });
 
-  // End of duty row (Only operating user signature, no operations head)
-  const endDesc = [
-    `End of Monitoring Duty ${data.finalOfficer || 'Duty Officer'}`,
-    `24-Hour Operational Cycle: ${data.totalShiftsCount} Shifts Combined`,
-    data.finalHandoverStatus || 'Situation Remain Normal',
-  ];
-  drawSignatureRow(
-    '2359H',
-    endDesc,
-    'Info',
-    data.finalOfficer || 'Lead Operations Officer',
-    data.finalOfficerRole || 'Lead Operations Officer',
-    signatureBase64
-  );
+  // Fallback: If no end log exists in logs data, draw final end duty row
+  if (!hasEndDutyLog) {
+    const endDesc = [
+      `End of Monitoring Duty ${data.finalOfficer || 'Duty Officer'}`,
+      `24-Hour Operational Cycle: ${data.totalShiftsCount} Shifts Combined`,
+      data.finalHandoverStatus || 'Situation Remain Normal',
+    ];
+    const officerName = data.finalOfficer || 'Lead Operations Officer';
+    const officerRole = data.finalOfficerRole || 'Lead Operations Officer';
+    const sigBase64 = getOfficerSignature({ time: '2359H', status: 'Info', title: '', description: '', operator: officerName }, officerName);
+    drawSignatureRow(
+      '2359H',
+      endDesc,
+      'Info',
+      officerName,
+      officerRole,
+      sigBase64
+    );
+  }
 
   // Security Digest
   y += 4;

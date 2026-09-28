@@ -249,6 +249,196 @@ function OfficerAvatar({
   );
 }
 
+// =============================================================================
+// MEMOIZED SUB-COMPONENTS (HYBRID REALTIME & RENDERING OPTIMIZATION)
+// =============================================================================
+
+export interface PresentOfficerCardProps {
+  member: OfficerMember;
+}
+
+export const PresentOfficerCard = React.memo(function PresentOfficerCard({ member }: PresentOfficerCardProps) {
+  const badge = getRoleBadge(member.userRole);
+  return (
+    <div className="p-3.5 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-2xs space-y-2.5">
+      <div className="flex items-center gap-3">
+        <OfficerAvatar officer={member} size="md" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+              {member.name}
+            </h4>
+            {member.isLead && (
+              <span className="text-[9px] font-bold bg-blue-100 text-[#004AC6] px-1.5 py-0.2 rounded shrink-0">
+                LEAD
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-[#757680] truncate font-medium">
+            {member.role}
+          </p>
+        </div>
+        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
+          {badge.label}
+        </span>
+      </div>
+
+      <div className="pt-2 border-t border-slate-100 text-[11px] text-[#505F76] flex items-center justify-between">
+        <span className="text-[#757680]">Status:</span>
+        <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px]">
+          Present / On-Duty
+        </span>
+      </div>
+    </div>
+  );
+});
+
+export interface AbsentOfficerCardProps {
+  person: OfficerMember;
+  isShiftViewOnly: boolean;
+  onSetPresent: (id: string) => void;
+}
+
+export const AbsentOfficerCard = React.memo(function AbsentOfficerCard({
+  person,
+  isShiftViewOnly,
+  onSetPresent,
+}: AbsentOfficerCardProps) {
+  return (
+    <div className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs space-y-2.5">
+      <div className="flex items-center gap-3">
+        <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
+        <div className="min-w-0 flex-1">
+          <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+            {person.name}
+          </h4>
+          <p className="text-[11px] text-rose-700 truncate font-medium">
+            {person.role}
+          </p>
+        </div>
+      </div>
+
+      <div className="pt-2 border-t border-rose-200/60 text-[11px] text-[#505F76] flex items-center justify-between">
+        <span className="text-[#757680]">Status:</span>
+        <span className="font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full text-[10px]">
+          Reported Absent
+        </span>
+      </div>
+
+      {!isShiftViewOnly && (
+        <button
+          type="button"
+          onClick={() => onSetPresent(person.id)}
+          className="w-full py-1.5 px-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+        >
+          <Check className="w-3.5 h-3.5" />
+          Mark as Present
+        </button>
+      )}
+    </div>
+  );
+});
+
+export interface RestDayOfficerCardProps {
+  person: OfficerMember;
+}
+
+export const RestDayOfficerCard = React.memo(function RestDayOfficerCard({ person }: RestDayOfficerCardProps) {
+  const badge = getRoleBadge(person.userRole);
+  return (
+    <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3 shadow-2xs">
+      <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-bold text-[#1E293B] truncate">{person.name}</p>
+        <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
+      </div>
+      <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
+        {badge.label}
+      </span>
+    </div>
+  );
+});
+
+export interface CalendarDayCellProps {
+  cell: {
+    date: Date;
+    isCurrentMonth: boolean;
+    isCurrentDay: boolean;
+    isSelected: boolean;
+    assignment: {
+      type: 'DUTY' | 'REST' | 'NONE';
+      shift?: ShiftScheduleItem | null;
+      isLead?: boolean;
+    };
+  };
+  onSelectDate: (date: Date) => void;
+}
+
+export const CalendarDayCell = React.memo(function CalendarDayCell({ cell, onSelectDate }: CalendarDayCellProps) {
+  const isDuty = cell.assignment.type === 'DUTY';
+  const isRest = cell.assignment.type === 'REST';
+  const shiftColor = cell.assignment.shift?.color || '#004AC6';
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelectDate(cell.date)}
+      className={`min-h-[85px] p-2 rounded-2xl text-left border flex flex-col justify-between transition-all cursor-pointer relative ${
+        !cell.isCurrentMonth
+          ? 'opacity-35 bg-slate-50/50 border-slate-100'
+          : cell.isSelected
+          ? 'border-[#004AC6] ring-2 ring-[#004AC6]/20 bg-blue-50/40 shadow-xs'
+          : cell.isCurrentDay
+          ? 'border-blue-300 bg-blue-50/20'
+          : 'border-[#E2E8F0] bg-white hover:border-blue-200 hover:bg-slate-50/50'
+      }`}
+    >
+      {/* Day Number Header */}
+      <div className="flex items-center justify-between w-full">
+        <span
+          className={`text-xs font-bold ${
+            cell.isCurrentDay
+              ? 'w-5 h-5 rounded-full bg-[#004AC6] text-white flex items-center justify-center text-[10px]'
+              : cell.isSelected
+              ? 'text-[#004AC6]'
+              : 'text-[#1E293B]'
+          }`}
+        >
+          {format(cell.date, 'd')}
+        </span>
+
+        {cell.isCurrentDay && !cell.isSelected && (
+          <span className="text-[9px] font-bold text-[#004AC6]">Today</span>
+        )}
+      </div>
+
+      {/* Shift Badge on Day */}
+      <div className="mt-1">
+        {isDuty ? (
+          <div
+            style={{
+              color: shiftColor,
+              backgroundColor: `${shiftColor}15`,
+              borderColor: `${shiftColor}30`,
+            }}
+            className="px-1.5 py-0.5 rounded-lg text-[10px] font-bold border leading-tight truncate"
+          >
+            {cell.assignment.shift?.name ? cell.assignment.shift.name.split(' ')[0] : 'Duty'}
+          </div>
+        ) : isRest ? (
+          <div className="px-1.5 py-0.5 rounded-lg text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200/60 leading-tight truncate">
+            Rest Day
+          </div>
+        ) : (
+          <div className="text-[10px] text-slate-300 italic px-1">
+            —
+          </div>
+        )}
+      </div>
+    </button>
+  );
+});
+
 // COMPONENT: SHIFT SCHEDULE OPERATIONS SCREEN (100% DYNAMIC DATABASE DATA)
 // =============================================================================
 
@@ -292,9 +482,11 @@ export default function ShiftSchedulePage() {
   // ===========================================================================
   // DATA FETCHING (SUPABASE 100% DYNAMIC)
   // ===========================================================================
-  const fetchShiftData = useCallback(async () => {
+  const fetchShiftData = useCallback(async (isBackground = false) => {
     try {
-      setIsLoading(true);
+      if (!isBackground) {
+        setIsLoading(true);
+      }
 
       // 1. Fetch Profiles
       const { data: profilesData, error: profilesError } = await supabase
@@ -455,35 +647,35 @@ export default function ShiftSchedulePage() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shifts' },
         () => {
-          fetchShiftData();
+          fetchShiftData(true);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shift_duty_personnel' },
         () => {
-          fetchShiftData();
+          fetchShiftData(true);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'duty_roster_assignments' },
         () => {
-          fetchShiftData();
+          fetchShiftData(true);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shift_schedules' },
         () => {
-          fetchShiftData();
+          fetchShiftData(true);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles' },
         () => {
-          fetchShiftData();
+          fetchShiftData(true);
         }
       )
       .subscribe();
@@ -491,7 +683,7 @@ export default function ShiftSchedulePage() {
     // Cross-tab broadcast & localStorage sync
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'pdrrmo_shift_sync') {
-        fetchShiftData();
+        fetchShiftData(true);
       }
     };
     window.addEventListener('storage', handleStorageChange);
@@ -501,7 +693,7 @@ export default function ShiftSchedulePage() {
       bc = new BroadcastChannel('pdrrmo_shift_sync');
       bc.onmessage = (event) => {
         if (event.data?.type === 'shift_state_updated') {
-          fetchShiftData();
+          fetchShiftData(true);
         }
       };
     } catch (e) {}
@@ -605,17 +797,17 @@ export default function ShiftSchedulePage() {
   }, [todayRestAssignments, getOfficerById]);
 
   // Open Edit Attendance Modal with cloned current state
-  const handleOpenEditModal = () => {
+  const handleOpenEditModal = useCallback(() => {
     if (isShiftViewOnly) {
       showToast('You have view-only access. Updating attendance is restricted.');
       return;
     }
     setTempAbsentOfficerIds([...absentOfficerIds]);
     setIsEditModalOpen(true);
-  };
+  }, [isShiftViewOnly, absentOfficerIds]);
 
   // Toggle officer attendance directly on card (Mark as Present)
-  const handleSetPresent = async (officerId: string) => {
+  const handleSetPresent = useCallback(async (officerId: string) => {
     if (isShiftViewOnly) {
       showToast('You have view-only access. Updating attendance is restricted.');
       return;
@@ -652,10 +844,10 @@ export default function ShiftSchedulePage() {
     } catch (err) {
       console.error('Error updating officer attendance in database:', err);
     }
-  };
+  }, [isShiftViewOnly, absentOfficerIds, activeShift, todayKey]);
 
   // Toggle officer attendance directly on card (Mark as Absent)
-  const handleSetAbsent = async (officerId: string) => {
+  const handleSetAbsent = useCallback(async (officerId: string) => {
     if (isShiftViewOnly) {
       showToast('You have view-only access. Updating attendance is restricted.');
       return;
@@ -694,7 +886,12 @@ export default function ShiftSchedulePage() {
     } catch (err) {
       console.error('Error updating officer attendance in database:', err);
     }
-  };
+  }, [isShiftViewOnly, absentOfficerIds, activeShift, todayKey]);
+
+  // Select Date in Calendar
+  const handleSelectDate = useCallback((date: Date) => {
+    setSelectedDate(date);
+  }, []);
 
   // Save Modal Attendance Changes to Database
   const handleSaveAttendanceModal = async (targetAbsentIds: string[]) => {
@@ -957,7 +1154,7 @@ export default function ShiftSchedulePage() {
             {/* Refresh Button */}
             <button
               type="button"
-              onClick={fetchShiftData}
+              onClick={() => fetchShiftData(false)}
               disabled={isLoading}
               className="p-2 rounded-xl border border-[#E2E8F0] text-[#505F76] hover:text-[#1E293B] hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
               title="Refresh Roster Data"
@@ -1146,44 +1343,9 @@ export default function ShiftSchedulePage() {
                       </div>
                     ))
                   ) : filteredPresentOfficers.length > 0 ? (
-                    filteredPresentOfficers.map((member) => {
-                      const badge = getRoleBadge(member.userRole);
-                      return (
-                        <div
-                          key={member.id}
-                          className="p-3.5 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-2xs space-y-2.5"
-                        >
-                          <div className="flex items-center gap-3">
-                            <OfficerAvatar officer={member} size="md" />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5">
-                                <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
-                                  {member.name}
-                                </h4>
-                                {member.isLead && (
-                                  <span className="text-[9px] font-bold bg-blue-100 text-[#004AC6] px-1.5 py-0.2 rounded shrink-0">
-                                    LEAD
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-[11px] text-[#757680] truncate font-medium">
-                                {member.role}
-                              </p>
-                            </div>
-                            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
-                              {badge.label}
-                            </span>
-                          </div>
-
-                          <div className="pt-2 border-t border-slate-100 text-[11px] text-[#505F76] flex items-center justify-between">
-                            <span className="text-[#757680]">Status:</span>
-                            <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px]">
-                              Present / On-Duty
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })
+                    filteredPresentOfficers.map((member) => (
+                      <PresentOfficerCard key={member.id} member={member} />
+                    ))
                   ) : presentOfficers.length > 0 && selectedRoleFilter !== 'ALL' ? (
                     <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
                       <Shield className="w-6 h-6 text-slate-400 mx-auto" />
@@ -1253,40 +1415,12 @@ export default function ShiftSchedulePage() {
                     ))
                   ) : filteredAbsentOfficers.length > 0 ? (
                     filteredAbsentOfficers.map((person) => (
-                      <div
+                      <AbsentOfficerCard
                         key={person.id}
-                        className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs space-y-2.5"
-                      >
-                        <div className="flex items-center gap-3">
-                          <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
-                          <div className="min-w-0 flex-1">
-                            <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
-                              {person.name}
-                            </h4>
-                            <p className="text-[11px] text-rose-700 truncate font-medium">
-                              {person.role}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="pt-2 border-t border-rose-200/60 text-[11px] text-[#505F76] flex items-center justify-between">
-                          <span className="text-[#757680]">Status:</span>
-                          <span className="font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full text-[10px]">
-                            Reported Absent
-                          </span>
-                        </div>
-
-                        {!isShiftViewOnly && (
-                          <button
-                            type="button"
-                            onClick={() => handleSetPresent(person.id)}
-                            className="w-full py-1.5 px-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            Mark as Present
-                          </button>
-                        )}
-                      </div>
+                        person={person}
+                        isShiftViewOnly={isShiftViewOnly}
+                        onSetPresent={handleSetPresent}
+                      />
                     ))
                   ) : (
                     <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
@@ -1346,24 +1480,9 @@ export default function ShiftSchedulePage() {
                       </div>
                     ))
                   ) : todayRestPersonnel.length > 0 ? (
-                    todayRestPersonnel.map((person) => {
-                      const badge = getRoleBadge(person.userRole);
-                      return (
-                        <div
-                          key={person.id}
-                          className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3 shadow-2xs"
-                        >
-                          <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-bold text-[#1E293B] truncate">{person.name}</p>
-                            <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
-                          </div>
-                          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
-                            {badge.label}
-                          </span>
-                        </div>
-                      );
-                    })
+                    todayRestPersonnel.map((person) => (
+                      <RestDayOfficerCard key={person.id} person={person} />
+                    ))
                   ) : (
                     <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
                       <Coffee className="w-6 h-6 text-slate-400 mx-auto" />
@@ -1523,71 +1642,13 @@ export default function ShiftSchedulePage() {
                   <PersonalCalendarSkeleton daysCount={35} />
                 ) : (
                   <div className="grid grid-cols-7 gap-1.5">
-                    {calendarDays.map((cell, idx) => {
-                    const isDuty = cell.assignment.type === 'DUTY';
-                    const isRest = cell.assignment.type === 'REST';
-                    const shiftColor = cell.assignment.shift?.color || '#004AC6';
-
-                    return (
-                      <button
+                    {calendarDays.map((cell, idx) => (
+                      <CalendarDayCell
                         key={idx}
-                        type="button"
-                        onClick={() => setSelectedDate(cell.date)}
-                        className={`min-h-[85px] p-2 rounded-2xl text-left border flex flex-col justify-between transition-all cursor-pointer relative ${
-                          !cell.isCurrentMonth
-                            ? 'opacity-35 bg-slate-50/50 border-slate-100'
-                            : cell.isSelected
-                            ? 'border-[#004AC6] ring-2 ring-[#004AC6]/20 bg-blue-50/40 shadow-xs'
-                            : cell.isCurrentDay
-                            ? 'border-blue-300 bg-blue-50/20'
-                            : 'border-[#E2E8F0] bg-white hover:border-blue-200 hover:bg-slate-50/50'
-                        }`}
-                      >
-                        {/* Day Number Header */}
-                        <div className="flex items-center justify-between w-full">
-                          <span
-                            className={`text-xs font-bold ${
-                              cell.isCurrentDay
-                                ? 'w-5 h-5 rounded-full bg-[#004AC6] text-white flex items-center justify-center text-[10px]'
-                                : cell.isSelected
-                                ? 'text-[#004AC6]'
-                                : 'text-[#1E293B]'
-                            }`}
-                          >
-                            {format(cell.date, 'd')}
-                          </span>
-
-                          {cell.isCurrentDay && !cell.isSelected && (
-                            <span className="text-[9px] font-bold text-[#004AC6]">Today</span>
-                          )}
-                        </div>
-
-                        {/* Shift Badge on Day */}
-                        <div className="mt-1">
-                          {isDuty ? (
-                            <div
-                              style={{
-                                color: shiftColor,
-                                backgroundColor: `${shiftColor}15`,
-                                borderColor: `${shiftColor}30`,
-                              }}
-                              className="px-1.5 py-0.5 rounded-lg text-[10px] font-bold border leading-tight truncate"
-                            >
-                              {cell.assignment.shift?.name ? cell.assignment.shift.name.split(' ')[0] : 'Duty'}
-                            </div>
-                          ) : isRest ? (
-                            <div className="px-1.5 py-0.5 rounded-lg text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200/60 leading-tight truncate">
-                              Rest Day
-                            </div>
-                          ) : (
-                            <div className="text-[10px] text-slate-300 italic px-1">
-                              —
-                            </div>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
+                        cell={cell}
+                        onSelectDate={handleSelectDate}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
