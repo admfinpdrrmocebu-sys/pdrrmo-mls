@@ -93,7 +93,7 @@ export function AppLayoutShell({
         {/* Dynamic Page Content */}
         <main
           className={twMerge(
-            'flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 md:px-8 py-6 pb-28 lg:pb-10 print:p-0 print:m-0 print:max-w-none print:block',
+            'flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 md:px-8 py-6 pb-10 print:p-0 print:m-0 print:max-w-none print:block',
             className
           )}
         >

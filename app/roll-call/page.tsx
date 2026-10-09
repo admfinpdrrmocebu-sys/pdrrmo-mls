@@ -1504,6 +1504,19 @@ export default function RollCallPage() {
           .join(', ') || 'No weather telemetry recorded';
 
       // 1. Generate SHA-256 integrity hash payload
+      const entriesList = municipalities.map((m) => ({
+        id: m.id,
+        code: m.code,
+        name: m.name,
+        hasPort: m.hasPort,
+        portName: m.portName,
+        attendance: m.attendance || 'Absent',
+        weatherStatus: m.attendance === 'Present' ? m.weatherStatus || 'Fair' : 'N/A',
+        portStatus: m.attendance === 'Present' ? (!m.hasPort ? 'No Port (Inland)' : m.portStatus || 'Operational') : 'N/A',
+        timeResponded: m.attendance === 'Present' ? m.timeResponded || timeFormatted : null,
+        dutyOperator: 'Station Duty Officer',
+      }));
+
       const snapshotPayload = {
         sessionId: activeSession.id,
         sessionDate: dateFormatted,
@@ -1517,7 +1530,8 @@ export default function RollCallPage() {
         absent: absentCount,
         exempted: exemptedCount,
         weatherSummary: weatherSummaryText,
-        records: municipalities.map((m) => ({
+        entries: entriesList,
+        records: entriesList.map((m) => ({
           code: m.code,
           name: m.name,
           attendance: m.attendance,
@@ -1541,7 +1555,7 @@ export default function RollCallPage() {
 
       const archiveFilename = `ROLLCALL-REPORT-${dateFormatted.replace(/-/g, '')}-${timeFormatted}.pdf`;
 
-      // 2. Generate PDF document
+      // 2. Generate PDF document (no digital signature, line for physical in-person signing)
       const { blob: pdfBlob, sizeBytes: pdfSize } = await generateRollCallPDF({
         filename: archiveFilename,
         sessionDate: dateFormatted,
@@ -1550,13 +1564,13 @@ export default function RollCallPage() {
         radioScript: activeSession.radio_script,
         conductedBy: officerName,
         conductedByRole: officerRole,
-        signatureUrl: profile?.signature_url,
+        signatureUrl: null,
         totalStations: totalCount,
         present: presentCount,
         absent: absentCount,
         exempted: exemptedCount,
         weatherSummary: weatherSummaryText,
-        entries: municipalities,
+        entries: entriesList,
         fileHash: fileHash,
         snapshotPayload: snapshotPayload,
       });

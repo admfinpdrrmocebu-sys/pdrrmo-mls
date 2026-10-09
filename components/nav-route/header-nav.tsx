@@ -68,7 +68,7 @@ export function HeaderNav({
   return (
     <header
       className={twMerge(
-        'w-full bg-[#F8FAFC]/85 backdrop-blur-md border-b border-[#E2E8F0] px-6 sm:px-8 py-4',
+        'w-full bg-[#F8FAFC]/85 backdrop-blur-md border-b border-[#E2E8F0] pl-15 sm:pl-16 lg:px-8 pr-4 sm:pr-8 py-3.5 sm:py-4',
         'flex flex-col sm:flex-row justify-between items-start sm:items-center sticky top-0 z-30 gap-4',
         className
       )}

@@ -11,7 +11,7 @@ import {
   MoreVertical,
   Download,
   Eye,
-  Calendar,
+  Calendar as CalendarIcon,
   Clock,
   TrendingUp,
   CheckCircle2,
@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Copy,
   Printer,
   X,
@@ -38,11 +39,13 @@ import {
   Loader2,
   RefreshCw,
   ExternalLink,
+  FolderUp,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { format } from 'date-fns';
 import { AppLayoutShell } from '@/components/nav-route';
 import { PrimaryButton, SecondaryButton } from '@/components/button';
-import { CustomDropdown, CustomDropdownOption } from '@/components/input';
+import { Calendar as CalendarPicker } from '@/components/ui/calendar';
 import { Skeleton } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
@@ -99,6 +102,8 @@ export interface RollCallStationEntry {
   seaPortStatus: string;
   dutyOperator: string;
   status: 'Present' | 'Absent' | 'Exempted' | 'Unresponsive';
+  hasPort?: boolean;
+  portName?: string;
   remarks?: string;
 }
 
@@ -257,16 +262,34 @@ function mapDbArchiveToArchivedFile(row: any): ArchivedFile {
     const exempted = snapshot.exempted ?? 0;
     const unresponsive = snapshot.unresponsive !== undefined ? snapshot.unresponsive : absent;
 
-    const entries: RollCallStationEntry[] = (snapshot.entries || []).map((e: any) => ({
-      station: e.portName && e.portName !== 'None' ? `${e.name} Station (${e.portName})` : `${e.name} Station`,
-      municipality: e.name || e.area_name || e.area_code || 'Unknown',
-      timeResponded: e.timeResponded || e.time_responded || '—',
-      weatherCondition: e.attendance === 'Absent' ? 'N/A (Absent)' : (e.weatherStatus || e.weather_status || 'N/A'),
-      seaPortStatus: e.attendance === 'Absent' ? 'N/A (Absent)' : (!e.hasPort ? 'No Port (Inland)' : (e.portStatus || e.port_status || 'Operational')),
-      dutyOperator: e.dutyOperator || e.duty_operator || 'Station Duty Officer',
-      status: (e.attendance as any) || 'Present',
-      remarks: e.remarks || undefined,
-    }));
+    const rawList = Array.isArray(snapshot.entries) && snapshot.entries.length > 0
+      ? snapshot.entries
+      : Array.isArray(snapshot.records) && snapshot.records.length > 0
+      ? snapshot.records
+      : [];
+
+    const entries: RollCallStationEntry[] = rawList.map((e: any) => {
+      const munName = e.name || e.area_name || e.municipality || e.area_code || 'Station';
+      const attStatus = (e.attendance as any) || (e.status as any) || 'Present';
+      const isInactive = attStatus === 'Absent' || attStatus === 'Exempted';
+      const weather = isInactive ? `N/A (${attStatus})` : (e.weatherStatus || e.weather_status || e.weather || 'Fair');
+      const port = isInactive ? `N/A (${attStatus})` : (!e.hasPort && e.hasPort !== undefined ? 'No Port (Inland)' : (e.portStatus || e.port_status || e.port || 'Operational'));
+      const pName = e.portName || e.port_name;
+      const portLabel = pName && pName !== 'None' ? ` (${pName})` : '';
+
+      return {
+        station: `${munName} Station${portLabel}`,
+        municipality: munName,
+        timeResponded: e.timeResponded || e.time_responded || e.time || '—',
+        weatherCondition: weather,
+        seaPortStatus: port,
+        dutyOperator: e.dutyOperator || e.duty_operator || 'Station Duty Officer',
+        status: attStatus,
+        hasPort: e.hasPort,
+        portName: pName,
+        remarks: e.remarks || undefined,
+      };
+    });
 
     return {
       id: row.id,
@@ -635,6 +658,34 @@ const ArchiveRow = React.memo(function ArchiveRow({
   );
 });
 
+// Helper to extract normalized YYYY-MM-DD from an archived file
+function getFileDateISO(file: ArchivedFile): string {
+  if (file.dailyReportDate && /^\d{4}-\d{2}-\d{2}$/.test(file.dailyReportDate)) {
+    return file.dailyReportDate;
+  }
+  if (file.rawSnapshotData?.sessionDate && /^\d{4}-\d{2}-\d{2}$/.test(file.rawSnapshotData.sessionDate)) {
+    return file.rawSnapshotData.sessionDate;
+  }
+  if (file.rawSnapshotData?.dailyReportDate && /^\d{4}-\d{2}-\d{2}$/.test(file.rawSnapshotData.dailyReportDate)) {
+    return file.rawSnapshotData.dailyReportDate;
+  }
+  const filenameMatch = file.filename.match(/(\d{4})(\d{2})(\d{2})/);
+  if (filenameMatch) {
+    return `${filenameMatch[1]}-${filenameMatch[2]}-${filenameMatch[3]}`;
+  }
+  if (file.createdAt) {
+    const cleanDate = file.createdAt.split('·')[0].trim();
+    const parsed = new Date(cleanDate);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const day = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+  }
+  return '';
+}
+
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
@@ -651,7 +702,9 @@ export default function ArchivesPage() {
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
-  const [selectedYear, setSelectedYear] = useState('ALL');
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const datePickerRef = useRef<HTMLDivElement>(null);
 
   // Debounce search query by 300ms for fast and smooth table filtering
   useEffect(() => {
@@ -763,24 +816,24 @@ export default function ArchivesPage() {
               filename: fileObj.name,
               category: 'log',
               createdAt: `${dateStr} · ${timeStr}`,
-              generatedAt: '24-Hour Consolidated Operations Daily Report',
+              generatedAt: 'Official Shift Operations Archive',
               fileSize: formattedSize,
               fileSizeBytes: effectiveBytes,
               leadOfficer: 'Operations Lead Officer',
               leadOfficerRole: 'Lead Operations Officer',
               leadOfficerBadge: 'OPC-1001',
-              shift: '24-Hour Consolidated Operations',
-              shiftHours: '00:00H - 23:59H (24-Hour Cycle)',
+              shift: 'Shift Operations',
+              shiftHours: 'Shift Duty Cycle',
               itemCount: 1,
               hash: fileObj.id ? `sha256-${fileObj.id.replace(/-/g, '').slice(0, 16)}` : 'sha256-verified-storage',
-              summary: `Official 24-hour consolidated operational log archive retrieved from storage bucket archive-documents/${storagePath}.`,
+              summary: `Official shift operational log archive retrieved from storage bucket archive-documents/${storagePath}.`,
               status: 'Verified',
-              monitoringBriefing: 'Consolidated 24-Hour Operations Duty',
+              monitoringBriefing: 'Operational Shift Monitoring Duty',
               dutyPersonnelRoster: [
                 { name: 'Operations Officer', role: 'Operations Staff', badgeNumber: 'OPC-1001', presentAtEnd: true },
               ],
               handoverStatus: 'Situation Remain Normal',
-              isDailyCombined: true,
+              isDailyCombined: false,
               storagePath,
             });
           }
@@ -916,11 +969,16 @@ export default function ArchivesPage() {
     }
   }, [toastNotification]);
 
-  // Close context menu on outside click
+  // Close context menu and date picker on outside click
   useEffect(() => {
-    const handleOutsideClick = () => setActiveMenuId(null);
-    window.addEventListener('click', handleOutsideClick);
-    return () => window.removeEventListener('click', handleOutsideClick);
+    const handleOutsideClick = (e: MouseEvent) => {
+      setActiveMenuId(null);
+      if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
+        setIsDatePickerOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handleOutsideClick);
+    return () => window.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
   // Open Preview Modal and fetch/generate actual PDF file for embed
@@ -939,7 +997,28 @@ export default function ArchivesPage() {
       if (file.category === 'roll-call') {
         const dateStr = file.createdAt ? file.createdAt.split('·')[0].trim() : '09/27/2026';
         const rcOfficer = profileMap.get(file.leadOfficer?.toLowerCase().trim()) || profile;
-        const rcSigUrl = rcOfficer?.signature_url || profile?.signature_url;
+
+        const entriesToRender = (file.rollCallEntries && file.rollCallEntries.length > 0)
+          ? file.rollCallEntries.map((e) => ({
+              name: e.municipality || e.station,
+              attendance: e.status,
+              weatherStatus: e.weatherCondition,
+              portStatus: e.seaPortStatus,
+              hasPort: e.hasPort,
+              portName: e.portName,
+              timeResponded: e.timeResponded !== '—' ? e.timeResponded : null,
+              dutyOperator: e.dutyOperator,
+            }))
+          : (file.rawSnapshotData?.entries || file.rawSnapshotData?.records || []).map((e: any) => ({
+              name: e.name || e.area_name || e.municipality || 'Station',
+              attendance: e.attendance || e.status || 'Present',
+              weatherStatus: e.weatherStatus || e.weather_status || e.weather || 'Fair',
+              portStatus: e.portStatus || e.port_status || e.port || 'Operational',
+              hasPort: e.hasPort,
+              portName: e.portName || e.port_name,
+              timeResponded: e.timeResponded || e.time_responded || e.time,
+              dutyOperator: e.dutyOperator || e.duty_operator || 'Station Duty Officer',
+            }));
 
         const pdf = await generateRollCallPDF({
           filename: file.filename,
@@ -949,20 +1028,13 @@ export default function ArchivesPage() {
           radioScript: file.monitoringBriefing,
           conductedBy: file.leadOfficer || 'Monitoring Officer',
           conductedByRole: file.leadOfficerRole || rcOfficer?.position_title || 'Net Controller',
-          signatureUrl: rcSigUrl,
-          totalStations: file.rollCallStats?.totalAreas || file.itemCount || 8,
-          present: file.rollCallStats?.present || 8,
-          absent: file.rollCallStats?.absent || 0,
-          exempted: file.rollCallStats?.exempted || 0,
+          signatureUrl: null,
+          totalStations: file.rollCallStats?.totalAreas || file.itemCount || entriesToRender.length || 8,
+          present: file.rollCallStats?.present ?? 0,
+          absent: file.rollCallStats?.absent ?? 0,
+          exempted: file.rollCallStats?.exempted ?? 0,
           weatherSummary: file.rollCallStats?.weatherSummary || 'Normal weather conditions reported across active stations.',
-          entries: (file.rollCallEntries || []).map((e) => ({
-            name: e.municipality,
-            attendance: e.status,
-            weatherStatus: e.weatherCondition,
-            portStatus: e.seaPortStatus,
-            timeResponded: e.timeResponded,
-            dutyOperator: e.dutyOperator,
-          })),
+          entries: entriesToRender,
           fileHash: file.hash,
           snapshotPayload: file.rawSnapshotData || {},
         });
@@ -972,22 +1044,10 @@ export default function ArchivesPage() {
         return;
       } else if (file.logEntries && file.logEntries.length > 0) {
         const dateStr = file.dailyReportDate || (file.createdAt ? file.createdAt.split('·')[0].trim() : '09/27/2026');
-
-        const signaturesMap: Record<string, string> = {};
-        profileMap.forEach((prof, key) => {
-          if (prof.signature_url) {
-            signaturesMap[key] = prof.signature_url;
-          }
-        });
-
         const finalOfficerProfile = profileMap.get(file.leadOfficer?.toLowerCase().trim()) || profile;
-        const finalOfficerSigUrl = finalOfficerProfile?.signature_url || profile?.signature_url;
 
         const enrichedShifts = (file.shifts || []).map((s) => {
           const sOfficer = profileMap.get(s.leadOfficer?.toLowerCase().trim());
-          const sigs = (s.signatures && s.signatures.length > 0)
-            ? s.signatures.map((sig) => typeof sig === 'string' ? { name: s.leadOfficer, signatureUrl: sig } : sig)
-            : (sOfficer?.signature_url ? [{ name: s.leadOfficer, title: s.leadOfficerRole || sOfficer?.position_title || 'Lead Operations Officer', signatureUrl: sOfficer.signature_url }] : []);
           return {
             shiftLabel: s.shiftLabel,
             startTime: s.startTime,
@@ -997,8 +1057,8 @@ export default function ArchivesPage() {
             handoverStatus: s.handoverStatus,
             roster: s.roster || [],
             standbyVehicles: s.standbyVehicles || [],
-            signatures: sigs,
-            signatureUrl: sOfficer?.signature_url || null,
+            signatures: [],
+            signatureUrl: null,
             logsCount: s.logsCount || 0,
           };
         });
@@ -1018,7 +1078,7 @@ export default function ArchivesPage() {
             operator: l.operator,
             operator_id: l.operator_id || opProfile?.id,
             operatorRole: l.operatorRole || opProfile?.position_title || 'Duty Operations Officer',
-            signatureUrl: l.signatureUrl || opProfile?.signature_url,
+            signatureUrl: null,
           };
         });
 
@@ -1031,8 +1091,8 @@ export default function ArchivesPage() {
           finalOfficer: file.leadOfficer || 'Lead Operations Officer',
           finalOfficerRole: file.leadOfficerRole || finalOfficerProfile?.position_title || 'Lead Operations Officer',
           finalHandoverStatus: file.handoverStatus || 'Situation Remain Normal',
-          signatureUrl: finalOfficerSigUrl,
-          signaturesMap,
+          signatureUrl: null,
+          signaturesMap: {},
           shifts: enrichedShifts,
           logs: sortedLogs,
           fileHash: file.hash,
@@ -1118,30 +1178,15 @@ export default function ArchivesPage() {
   const formattedRcStorage = useMemo(() => formatBytes(rcStorageBytes), [rcStorageBytes]);
   const formattedFreeStorage = useMemo(() => formatBytes(Math.max(0, STORAGE_QUOTA_BYTES - totalStorageBytes)), [totalStorageBytes, STORAGE_QUOTA_BYTES]);
 
-  // Dynamic Year Filter Options
-  const yearFilterOptions: CustomDropdownOption[] = useMemo(() => {
-    const yearsSet = new Set<string>();
-    archivesList.forEach((file) => {
-      const match = file.createdAt.match(/\b(20\d{2})\b/);
-      if (match) yearsSet.add(match[1]);
-    });
-    const currentYear = new Date().getFullYear().toString();
-    yearsSet.add(currentYear);
+  const selectedDateISO = useMemo(() => {
+    if (!selectedDate) return null;
+    const y = selectedDate.getFullYear();
+    const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
+    const d = String(selectedDate.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }, [selectedDate]);
 
-    const sortedYears = Array.from(yearsSet).sort((a, b) => Number(b) - Number(a));
-    const options: CustomDropdownOption[] = [{ value: 'ALL', label: 'All Years' }];
-    sortedYears.forEach((yr) => {
-      options.push({
-        value: yr,
-        label: `Year ${yr}`,
-        badge: yr === currentYear ? 'Current' : undefined,
-        badgeColor: yr === currentYear ? 'bg-blue-50 text-[#004AC6]' : undefined,
-      });
-    });
-    return options;
-  }, [archivesList]);
-
-  // Comprehensive search across all historical files, summaries, officers, and events
+  // Comprehensive search and date filter across all historical files, summaries, officers, and events
   const filteredLogFiles = useMemo(() => {
     return logFiles.filter((file) => {
       const q = debouncedSearchQuery.toLowerCase().trim();
@@ -1158,10 +1203,11 @@ export default function ArchivesPage() {
           l.description.toLowerCase().includes(q) ||
           l.operator.toLowerCase().includes(q)
         ));
-      const matchesYear = selectedYear === 'ALL' || file.createdAt.includes(selectedYear);
-      return matchesSearch && matchesYear;
+      const fileDateISO = getFileDateISO(file);
+      const matchesDate = !selectedDateISO || fileDateISO === selectedDateISO;
+      return matchesSearch && matchesDate;
     });
-  }, [logFiles, debouncedSearchQuery, selectedYear]);
+  }, [logFiles, debouncedSearchQuery, selectedDateISO]);
 
   const filteredRollCallFiles = useMemo(() => {
     return rollCallFiles.filter((file) => {
@@ -1183,10 +1229,11 @@ export default function ArchivesPage() {
           (e.seaPortStatus && e.seaPortStatus.toLowerCase().includes(q)) ||
           (e.dutyOperator && e.dutyOperator.toLowerCase().includes(q))
         ));
-      const matchesYear = selectedYear === 'ALL' || file.createdAt.includes(selectedYear);
-      return matchesSearch && matchesYear;
+      const fileDateISO = getFileDateISO(file);
+      const matchesDate = !selectedDateISO || fileDateISO === selectedDateISO;
+      return matchesSearch && matchesDate;
     });
-  }, [rollCallFiles, debouncedSearchQuery, selectedYear]);
+  }, [rollCallFiles, debouncedSearchQuery, selectedDateISO]);
 
   const currentDataset = activeTab === 'log' ? filteredLogFiles : filteredRollCallFiles;
   const totalCount = currentDataset.length;
@@ -1355,8 +1402,19 @@ export default function ArchivesPage() {
               onClick={() => fetchArchives()}
               className="w-full sm:w-auto justify-center"
             >
-              Refresh Archives
+              Refresh
             </SecondaryButton>
+
+            <Link href="/archives/transfer">
+              <SecondaryButton
+                size="md"
+                pill
+                leftIcon={<FolderUp className="w-4 h-4 text-[#004AC6]" />}
+                className="w-full sm:w-auto justify-center"
+              >
+                Transfer Hub
+              </SecondaryButton>
+            </Link>
 
             <Link href="/archives/drive">
               <PrimaryButton
@@ -1464,24 +1522,36 @@ export default function ArchivesPage() {
               </div>
             </div>
 
-            <div className="text-left sm:text-right self-start sm:self-auto">
-              <div className="flex items-baseline gap-1.5 sm:justify-end">
-                {isLoading ? (
-                  <Skeleton className="h-6 w-28 rounded-md" />
-                ) : (
-                  <>
-                    <span className="text-base sm:text-lg font-extrabold font-mono text-[#1E293B]">
-                      {formattedTotalStorage}
-                    </span>
-                    <span className="text-xs font-semibold text-[#757680]">/ 1.0 GB</span>
-                  </>
+            <div className="flex items-center gap-3 self-start sm:self-auto">
+              <Link href="/archives/transfer">
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-full text-xs font-bold bg-blue-50 text-[#004AC6] border border-blue-200 hover:bg-blue-100 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                >
+                  <FolderUp className="w-3.5 h-3.5" />
+                  <span>Transfer Hub</span>
+                </button>
+              </Link>
+
+              <div className="text-left sm:text-right">
+                <div className="flex items-baseline gap-1.5 sm:justify-end">
+                  {isLoading ? (
+                    <Skeleton className="h-6 w-28 rounded-md" />
+                  ) : (
+                    <>
+                      <span className="text-base sm:text-lg font-extrabold font-mono text-[#1E293B]">
+                        {formattedTotalStorage}
+                      </span>
+                      <span className="text-xs font-semibold text-[#757680]">/ 1.0 GB</span>
+                    </>
+                  )}
+                </div>
+                {!isLoading && (
+                  <span className="text-[11px] font-bold text-[#505F76]">
+                    {storagePercentage.toFixed(1)}% Allocated
+                  </span>
                 )}
               </div>
-              {!isLoading && (
-                <span className="text-[11px] font-bold text-[#505F76]">
-                  {storagePercentage.toFixed(1)}% Allocated
-                </span>
-              )}
             </div>
           </div>
 
@@ -1609,18 +1679,112 @@ export default function ArchivesPage() {
                 )}
               </div>
 
-              <div className="w-36 shrink-0">
-                <CustomDropdown
-                  options={yearFilterOptions}
-                  value={selectedYear}
-                  onChange={(val) => {
-                    setSelectedYear(val);
-                    setCurrentPage(1);
+              {/* Single Date Picker Filter */}
+              <div className="relative shrink-0" ref={datePickerRef}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setIsDatePickerOpen((prev) => !prev)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setIsDatePickerOpen((prev) => !prev);
+                    }
                   }}
-                  leftIcon={<Calendar className="w-3.5 h-3.5" />}
-                  size="sm"
-                  pill
-                />
+                  className={`h-10 px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer flex items-center gap-2 border select-none ${
+                    selectedDate
+                      ? 'bg-blue-50 text-[#004AC6] border-[#004AC6]/30 shadow-xs'
+                      : 'bg-[#F8FAFC] text-[#505F76] border-[#E2E8F0] hover:border-[#CBD5E1] hover:bg-white'
+                  }`}
+                >
+                  <CalendarIcon className={`w-4 h-4 shrink-0 ${selectedDate ? 'text-[#004AC6]' : 'text-[#94A3B8]'}`} />
+                  <span className="whitespace-nowrap font-medium">
+                    {selectedDate ? format(selectedDate, 'MMM dd, yyyy') : 'All Dates'}
+                  </span>
+                  {selectedDate ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedDate(null);
+                        setCurrentPage(1);
+                      }}
+                      className="w-4 h-4 rounded-full hover:bg-blue-200/60 text-[#004AC6] flex items-center justify-center transition-colors ml-0.5 cursor-pointer"
+                      title="Clear date filter"
+                      aria-label="Clear date filter"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  ) : (
+                    <ChevronDown className={`w-3.5 h-3.5 text-[#94A3B8] transition-transform ${isDatePickerOpen ? 'rotate-180' : ''}`} />
+                  )}
+                </div>
+
+                {/* Dropdown Popover */}
+                <AnimatePresence>
+                  {isDatePickerOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95, y: 6 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95, y: 6 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute right-0 mt-2 z-50 bg-white border border-[#E2E8F0] rounded-3xl shadow-2xl p-3.5 min-w-[300px]"
+                    >
+                      <div className="flex items-center justify-between pb-2 mb-1 border-b border-slate-100 px-2">
+                        <span className="text-xs font-bold text-[#1E293B]">Filter Archives by Date</span>
+                        {selectedDate && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDate(null);
+                              setIsDatePickerOpen(false);
+                              setCurrentPage(1);
+                            }}
+                            className="text-[11px] font-bold text-rose-600 hover:text-rose-700 cursor-pointer"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+
+                      <CalendarPicker
+                        mode="single"
+                        selected={selectedDate || undefined}
+                        onSelect={(date) => {
+                          setSelectedDate(date || null);
+                          setIsDatePickerOpen(false);
+                          setCurrentPage(1);
+                        }}
+                        autoFocus
+                      />
+
+                      <div className="pt-2 mt-1 border-t border-slate-100 flex items-center justify-between gap-2 px-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDate(new Date());
+                            setIsDatePickerOpen(false);
+                            setCurrentPage(1);
+                          }}
+                          className="text-xs font-bold text-[#004AC6] hover:bg-blue-50 px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+                        >
+                          Today
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDate(null);
+                            setIsDatePickerOpen(false);
+                            setCurrentPage(1);
+                          }}
+                          className="text-xs font-medium text-[#505F76] hover:bg-slate-100 px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+                        >
+                          All Dates
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
           </div>
@@ -1673,8 +1837,8 @@ export default function ArchivesPage() {
                       <ArchiveIcon className="w-12 h-12 mx-auto text-slate-300 mb-3" />
                       <p className="font-bold text-base text-[#1E293B]">No Archived Records Found</p>
                       <p className="text-xs text-[#757680] mt-1 max-w-sm mx-auto">
-                        {searchQuery || selectedYear !== 'ALL'
-                          ? 'No files matched your search filters. Try adjusting your search query or year filter.'
+                        {searchQuery || selectedDate !== null
+                          ? 'No files matched your search or date filter. Try adjusting your query or resetting the date picker.'
                           : activeTab === 'log'
                           ? 'Shift handover records will automatically appear here when an officer logs the end of shift.'
                           : 'Roll call session reports will automatically appear here once an operator finalizes a roll call.'}
@@ -1950,17 +2114,8 @@ export default function ArchivesPage() {
                                     <p className="text-slate-700">
                                       <strong>Total Designated Stations:</strong> {selectedFileForPreview.rollCallStats?.totalAreas || selectedFileForPreview.itemCount || 8} Stations
                                     </p>
-                                    <div className="pt-2 border-t border-slate-200 mt-2">
-                                      {rcSigUrl && (
-                                        <div className="h-10 flex items-end mb-1">
-                                          <img
-                                            src={rcSigUrl}
-                                            alt="Digital Signature"
-                                            className="max-h-10 max-w-[130px] object-contain"
-                                          />
-                                        </div>
-                                      )}
-                                      <div className="w-40 border-b border-slate-600 mb-1" />
+                                    <div className="pt-4 border-t border-slate-200 mt-2">
+                                      <div className="w-44 border-b border-slate-700 mb-1.5" />
                                       <p className="font-bold text-slate-900 text-[11px]">{selectedFileForPreview.leadOfficer}</p>
                                       <p className="text-[10px] text-slate-500">{selectedFileForPreview.leadOfficerRole || rcOfficerProfile?.position_title || 'Duty Operations Officer'}</p>
                                     </div>
@@ -2012,17 +2167,8 @@ export default function ArchivesPage() {
                                       Attendance Breakdown: <strong>{selectedFileForPreview.rollCallStats?.present || 8} Present</strong>, <strong>{selectedFileForPreview.rollCallStats?.absent || 0} Absent</strong>, <strong>{selectedFileForPreview.rollCallStats?.exempted || 0} Exempted</strong>
                                     </p>
                                     <p className="text-slate-700">Situation Remain Normal</p>
-                                    <div className="pt-2 border-t border-slate-200 mt-2">
-                                      {rcSigUrl && (
-                                        <div className="h-10 flex items-end mb-1">
-                                          <img
-                                            src={rcSigUrl}
-                                            alt="Digital Signature"
-                                            className="max-h-10 max-w-[130px] object-contain"
-                                          />
-                                        </div>
-                                      )}
-                                      <div className="w-40 border-b border-slate-600 mb-1" />
+                                    <div className="pt-4 border-t border-slate-200 mt-2">
+                                      <div className="w-44 border-b border-slate-700 mb-1.5" />
                                       <p className="font-bold text-slate-900 text-[11px]">{selectedFileForPreview.leadOfficer}</p>
                                       <p className="text-[10px] text-slate-500">{selectedFileForPreview.leadOfficerRole || rcOfficerProfile?.position_title || 'Duty Operations Officer'}</p>
                                     </div>
@@ -2045,14 +2191,10 @@ export default function ArchivesPage() {
                             const firstShift = selectedFileForPreview.shifts?.[0];
                             const firstOfficerName = firstShift?.leadOfficer || selectedFileForPreview.leadOfficer || 'Duty Officer';
                             const firstOfficerProfile = profileMap.get(firstOfficerName.toLowerCase().trim()) || profile;
-                            const firstShiftSig = firstShift?.signatures?.[0];
-                            const firstShiftSigUrl = typeof firstShiftSig === 'string' ? firstShiftSig : firstShiftSig?.signatureUrl;
-                            const firstOfficerSigUrl = firstShiftSigUrl || firstOfficerProfile?.signature_url;
                             const firstOfficerRole = firstShift?.leadOfficerRole || firstOfficerProfile?.position_title || selectedFileForPreview.leadOfficerRole || 'Lead Operations Officer';
 
                             const finalOfficerName = selectedFileForPreview.leadOfficer || 'Lead Operations Officer';
                             const finalOfficerProfile = profileMap.get(finalOfficerName.toLowerCase().trim()) || profile;
-                            const finalOfficerSigUrl = finalOfficerProfile?.signature_url;
                             const finalOfficerRole = selectedFileForPreview.leadOfficerRole || finalOfficerProfile?.position_title || 'Lead Operations Officer';
 
                             return (
@@ -2080,17 +2222,8 @@ export default function ArchivesPage() {
                                           {renderFormattedDescription(selectedFileForPreview.monitoringBriefing)}
                                         </div>
                                       )}
-                                      <div className="pt-2 border-t border-slate-200 mt-2">
-                                        {firstOfficerSigUrl && (
-                                          <div className="h-10 flex items-end mb-1">
-                                            <img
-                                              src={firstOfficerSigUrl}
-                                              alt="Digital Signature"
-                                              className="max-h-10 max-w-[130px] object-contain"
-                                            />
-                                          </div>
-                                        )}
-                                        <div className="w-40 border-b border-slate-600 mb-1" />
+                                      <div className="pt-4 border-t border-slate-200 mt-2">
+                                        <div className="w-44 border-b border-slate-700 mb-1.5" />
                                         <p className="font-bold text-slate-900 text-[11px]">{firstOfficerName}</p>
                                         <p className="text-[10px] text-slate-500">{firstOfficerRole}</p>
                                       </div>
@@ -2110,7 +2243,6 @@ export default function ArchivesPage() {
                                   const opProf = (log.operator_id ? profileMap.get(log.operator_id.toLowerCase()) : undefined) ||
                                                  (log.operator ? profileMap.get(log.operator.toLowerCase().trim()) : undefined) ||
                                                  profileMap.get(selectedFileForPreview.leadOfficer?.toLowerCase().trim());
-                                  const opSigUrl = log.signatureUrl || opProf?.signature_url;
                                   const opRole = log.operatorRole || opProf?.position_title || 'Duty Operations Officer';
 
                                   if (isDutyLifecycle) {
@@ -2124,17 +2256,8 @@ export default function ArchivesPage() {
                                           <div className="text-slate-700">
                                             {renderFormattedDescription(log.description)}
                                           </div>
-                                          <div className="pt-2 border-t border-slate-200 mt-2">
-                                            {opSigUrl && (
-                                              <div className="h-10 flex items-end mb-1">
-                                                <img
-                                                  src={opSigUrl}
-                                                  alt="Digital Signature"
-                                                  className="max-h-10 max-w-[130px] object-contain"
-                                                />
-                                              </div>
-                                            )}
-                                            <div className="w-40 border-b border-slate-600 mb-1" />
+                                          <div className="pt-4 border-t border-slate-200 mt-2">
+                                            <div className="w-44 border-b border-slate-700 mb-1.5" />
                                             <p className="font-bold text-slate-900 text-[11px]">{opName}</p>
                                             <p className="text-[10px] text-slate-500">{opRole}</p>
                                           </div>
@@ -2182,7 +2305,7 @@ export default function ArchivesPage() {
                                         End of Monitoring Duty {finalOfficerName}
                                       </p>
                                       <p className="text-slate-700">
-                                        24-Hour Operational Cycle: <strong>{selectedFileForPreview.shifts?.length || 1} Shifts Combined</strong>
+                                        Shift: <strong>{selectedFileForPreview.shift || 'Operations Shift'}</strong>
                                       </p>
                                       <p className="text-slate-700">
                                         Handover Status: <strong>{selectedFileForPreview.handoverStatus || 'Situation Remain Normal'}</strong>
@@ -2192,17 +2315,8 @@ export default function ArchivesPage() {
                                           <strong>Incident Notes:</strong> {selectedFileForPreview.incidentReportDetails}
                                         </p>
                                       )}
-                                      <div className="pt-2 border-t border-slate-200 mt-2">
-                                        {finalOfficerSigUrl && (
-                                          <div className="h-10 flex items-end mb-1">
-                                            <img
-                                              src={finalOfficerSigUrl}
-                                              alt="Digital Signature"
-                                              className="max-h-10 max-w-[130px] object-contain"
-                                            />
-                                          </div>
-                                        )}
-                                        <div className="w-40 border-b border-slate-600 mb-1" />
+                                      <div className="pt-4 border-t border-slate-200 mt-2">
+                                        <div className="w-44 border-b border-slate-700 mb-1.5" />
                                         <p className="font-bold text-slate-900 text-[11px]">{finalOfficerName}</p>
                                         <p className="text-[10px] text-slate-500">{finalOfficerRole}</p>
                                       </div>

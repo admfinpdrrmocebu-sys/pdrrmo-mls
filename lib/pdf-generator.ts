@@ -421,9 +421,9 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
 
     const lineHeight = 4.0;
     const textLinesHeight = Math.max(1, processedLines.length) * lineHeight + 4;
-    const sigImgHeight = signatureImgBase64 ? 12 : 6;
+    const sigSpaceHeight = 10;
     const sigTextHeight = 10;
-    const rowHeight = Math.max(36, textLinesHeight + sigImgHeight + sigTextHeight + 4);
+    const rowHeight = Math.max(34, textLinesHeight + sigSpaceHeight + sigTextHeight + 4);
 
     checkPageBreak(rowHeight);
 
@@ -450,20 +450,7 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
       lineY += lineHeight;
     });
 
-    lineY += 1;
-
-    // Attach operating user's signature if available
-    if (signatureImgBase64) {
-      try {
-        doc.addImage(signatureImgBase64, 'PNG', col2X + 3, lineY, 28, 10);
-        lineY += 11;
-      } catch (imgErr) {
-        console.warn('Could not render signature on PDF:', imgErr);
-        lineY += 5;
-      }
-    } else {
-      lineY += 5;
-    }
+    lineY += 9; // Space for physical in-person signing
 
     // Signature line
     doc.setDrawColor(51, 65, 85);
@@ -525,11 +512,27 @@ export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob
   );
 
   // 2. STATION TELEMETRY ROSTER ENTRIES
-  (data.entries || []).forEach((stn) => {
+  const stationEntries: RollCallStationItem[] = (
+    data.entries && data.entries.length > 0
+      ? data.entries
+      : data.snapshotPayload?.entries || data.snapshotPayload?.records || []
+  ).map((stn: any) => ({
+    name: stn.name || stn.area_name || stn.municipality || 'Station',
+    code: stn.code || stn.area_code,
+    attendance: stn.attendance || stn.status || 'Present',
+    weatherStatus: stn.weatherStatus || stn.weather_status || stn.weather || 'Fair',
+    portStatus: stn.portStatus || stn.port_status || stn.port || 'Operational',
+    hasPort: stn.hasPort,
+    portName: stn.portName || stn.port_name,
+    timeResponded: stn.timeResponded || stn.time_responded || stn.time,
+    dutyOperator: stn.dutyOperator || stn.duty_operator || 'Station Duty Officer',
+  }));
+
+  stationEntries.forEach((stn) => {
     const attendanceStatus = stn.attendance || 'Present';
     const isInactive = attendanceStatus === 'Absent' || attendanceStatus === 'Exempted';
-    const weather = isInactive ? 'N/A' : (stn.weatherStatus || 'Fair');
-    const port = isInactive ? 'N/A' : (!stn.hasPort ? 'No Port (Inland)' : (stn.portStatus || 'Operational'));
+    const weather = isInactive ? `N/A (${attendanceStatus})` : (stn.weatherStatus || 'Fair');
+    const port = isInactive ? `N/A (${attendanceStatus})` : (!stn.hasPort ? 'No Port (Inland)' : (stn.portStatus || 'Operational'));
     const portLabel = stn.portName && stn.portName !== 'None' ? ` (${stn.portName})` : '';
 
     const stnDesc = [
@@ -664,11 +667,13 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
 
   let y = drawDocumentHeader(doc, 'Monitoring Logs System', 1);
 
-  // Date line
+  // Date & Shift Info line
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
-  doc.text(`Date: ${formatHeaderDate(data.dailyReportDate)}`, 14, y);
+  const shiftHeaderInfo = data.shifts?.[0]?.shiftLabel ? ` | Shift: ${data.shifts[0].shiftLabel}` : '';
+  const shiftHoursInfo = data.shifts?.[0]?.startTime ? ` (${data.shifts[0].startTime} - ${data.shifts[0].endTime || ''})` : '';
+  doc.text(`Date: ${formatHeaderDate(data.dailyReportDate)}${shiftHeaderInfo}${shiftHoursInfo}`, 14, y);
   y += 5;
 
   y = drawTableHeader(doc, y);
@@ -738,14 +743,14 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
     y += rowHeight;
   };
 
-  // Dedicated drawer for start/end rows with user profile signature and NO second signature
+  // Dedicated drawer for start/end rows with blank signature line for physical in-person signing
   const drawSignatureRow = (
     timeStr: string,
     descLines: string[],
     reportType: string,
     officerName: string,
     officerRole: string,
-    signatureImgBase64?: string | null
+    _signatureImgBase64?: string | null
   ) => {
     const processedLines: { text: string; isBold: boolean; color: [number, number, number] }[] = [];
 
@@ -771,9 +776,9 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
 
     const lineHeight = 4.0;
     const textLinesHeight = Math.max(1, processedLines.length) * lineHeight + 4;
-    const sigImgHeight = signatureImgBase64 ? 12 : 6;
+    const sigSpaceHeight = 10;
     const sigTextHeight = 10;
-    const rowHeight = Math.max(36, textLinesHeight + sigImgHeight + sigTextHeight + 4);
+    const rowHeight = Math.max(34, textLinesHeight + sigSpaceHeight + sigTextHeight + 4);
 
     checkPageBreak(rowHeight);
 
@@ -797,20 +802,7 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
       lineY += lineHeight;
     });
 
-    lineY += 1;
-
-    // Attach operating user's signature if available
-    if (signatureImgBase64) {
-      try {
-        doc.addImage(signatureImgBase64, 'PNG', col2X + 3, lineY, 28, 10);
-        lineY += 11;
-      } catch (imgErr) {
-        console.warn('Could not render signature on PDF:', imgErr);
-        lineY += 5;
-      }
-    } else {
-      lineY += 5;
-    }
+    lineY += 9; // Space for physical in-person signing
 
     // Signature line
     doc.setDrawColor(51, 65, 85);

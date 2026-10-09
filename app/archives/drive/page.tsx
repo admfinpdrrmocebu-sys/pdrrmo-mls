@@ -24,6 +24,7 @@ import {
   AlertCircle,
   FileText,
   CheckCircle2,
+  FolderUp,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
@@ -779,6 +780,17 @@ export default function DriveFilesPage() {
             >
               Refresh
             </SecondaryButton>
+
+            <Link href="/archives/transfer">
+              <SecondaryButton
+                size="md"
+                pill
+                leftIcon={<FolderUp className="w-4 h-4 text-[#004AC6]" />}
+                className="w-full sm:w-auto justify-center"
+              >
+                Transfer Hub
+              </SecondaryButton>
+            </Link>
 
             {canModifyDrive && (
               <PrimaryButton
