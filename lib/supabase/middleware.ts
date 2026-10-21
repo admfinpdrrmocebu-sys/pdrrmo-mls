@@ -16,6 +16,7 @@ const PUBLIC_ROUTES = [
   '/terms-and-conditions',
   '/privacy',
   '/privacy-policy',
+  '/googlec855f23319c579a6.html',
 ];
 
 /**
