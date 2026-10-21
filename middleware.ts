@@ -13,8 +13,9 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      * - assets (public assets)
+     * - terms / terms-and-conditions / privacy / privacy-policy (public OAuth compliance pages)
      * - Any image extension (.svg, .png, .jpg, .jpeg, .gif, .webp)
      */
-    '/((?!_next/static|_next/image|favicon.ico|assets|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|assets|terms|terms-and-conditions|privacy|privacy-policy|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };

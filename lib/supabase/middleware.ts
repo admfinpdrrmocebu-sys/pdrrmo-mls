@@ -9,9 +9,14 @@ const AUTH_ROUTES = ['/login', '/register', '/forgot-password'];
 
 /**
  * Public standalone routes accessible to both unauthenticated and authenticated visitors
- * (e.g. Google OAuth Consent Screen verification pages).
+ * (e.g. Google OAuth Consent Screen Privacy Policy & Terms of Service verification pages).
  */
-const PUBLIC_ROUTES = ['/terms', '/terms-and-conditions'];
+const PUBLIC_ROUTES = [
+  '/terms',
+  '/terms-and-conditions',
+  '/privacy',
+  '/privacy-policy',
+];
 
 /**
  * Checks whether a given path is an auth route or root landing.
@@ -31,6 +36,16 @@ function isPublicRoute(pathname: string): boolean {
  * Refreshes auth tokens and enforces server-side route protection.
  */
 export async function updateSession(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+
+  // Fast-path: Public standalone routes (e.g. /terms-and-conditions, /privacy for Google OAuth verification)
+  // Return immediately without round-trip auth checks so crawlers get instant HTTP 200 responses.
+  if (isPublicRoute(pathname)) {
+    return NextResponse.next({
+      request,
+    });
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   });
@@ -63,13 +78,6 @@ export async function updateSession(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const pathname = request.nextUrl.pathname;
-
-  // 0. Public standalone routes (e.g. /terms for Google Drive API OAuth verification)
-  if (isPublicRoute(pathname)) {
-    return supabaseResponse;
-  }
 
   // 1. Unauthenticated user trying to access protected routes
   if (!user && !isAuthRoute(pathname) && pathname !== '/') {
