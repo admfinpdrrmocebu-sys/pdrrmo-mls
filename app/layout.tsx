@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Hanken_Grotesk, Inter } from "next/font/google";
 import { ScreenBackground } from "@/components/layout";
 import { AuthProvider } from "@/lib/auth";
+import { ThemeProvider } from "@/lib/theme";
 import "./globals.css";
 
 /**
@@ -57,6 +58,11 @@ export const metadata: Metadata = {
   title: "PDRRMO MLS — Monitoring & Logging System",
   description:
     "Provincial Disaster Risk Reduction and Management Office (PDRRMO) Modern Precision Monitoring & Logging System.",
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 export default function RootLayout({
@@ -67,14 +73,37 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${hankenGrotesk.variable} ${inter.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#F8FAFC] text-[#1E293B] font-sans selection:bg-[#004AC6]/15 selection:text-[#004AC6]">
-        <ScreenBackground>
-          <AuthProvider>
-            {children}
-          </AuthProvider>
-        </ScreenBackground>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var theme = localStorage.getItem('pdrrmo-theme');
+                  if (theme === 'dark') {
+                    document.documentElement.classList.add('dark');
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                  } else {
+                    document.documentElement.classList.remove('dark');
+                    document.documentElement.setAttribute('data-theme', 'light');
+                  }
+                } catch (e) {}
+              })();
+            `,
+          }}
+        />
+      </head>
+      <body className="min-h-full flex flex-col bg-[#F8FAFC] text-[#1E293B] font-sans selection:bg-[#004AC6]/15 selection:text-[#004AC6] transition-colors duration-200">
+        <ThemeProvider>
+          <ScreenBackground>
+            <AuthProvider>
+              {children}
+            </AuthProvider>
+          </ScreenBackground>
+        </ThemeProvider>
       </body>
     </html>
   );

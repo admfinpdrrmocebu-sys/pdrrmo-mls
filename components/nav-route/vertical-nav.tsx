@@ -13,9 +13,12 @@ import {
   Menu,
   X,
   ChevronRight,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '@/lib/auth';
+import { useTheme } from '@/lib/theme';
 
 export interface NavItemDef {
   label: string;
@@ -60,6 +63,7 @@ export function VerticalNav({
   const [isHovered, setIsHovered] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const { profile, currentRole, signOut, canAccess } = useAuth();
+  const { isDark, toggleTheme } = useTheme();
 
   // Close mobile navigation drawer on route navigation
   useEffect(() => {
@@ -230,8 +234,8 @@ export function VerticalNav({
           </nav>
         </div>
 
-        {/* Bottom Section: Sign Out */}
-        <div className="pt-4 border-t border-[#E2E8F0]">
+        {/* Bottom Section: Sign Out & Dark Mode Preferences */}
+        <div className="pt-4 border-t border-[#E2E8F0] flex flex-col gap-1.5">
           <button
             type="button"
             onClick={signOut}
@@ -248,6 +252,41 @@ export function VerticalNav({
             >
               Sign out
             </span>
+          </button>
+
+          {/* Dark Mode Preference Toggle (Below Sign Out) */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className="w-full flex items-center h-12 px-3.5 rounded-xl text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B] transition-all duration-200 group cursor-pointer text-left"
+          >
+            <div className="flex items-center justify-center w-5 shrink-0">
+              {isDark ? (
+                <Moon className="w-5 h-5 text-blue-400 group-hover:-rotate-12 transition-transform" />
+              ) : (
+                <Sun className="w-5 h-5 text-amber-500 group-hover:rotate-45 transition-transform" />
+              )}
+            </div>
+            <div
+              className={twMerge(
+                'flex items-center justify-between flex-1 overflow-hidden transition-all duration-300',
+                isHovered ? 'opacity-100 ml-3 max-w-[170px]' : 'opacity-0 ml-0 max-w-0 pointer-events-none'
+              )}
+            >
+              <span className="text-sm font-medium whitespace-nowrap">
+                Dark mode
+              </span>
+              <div
+                className={twMerge(
+                  'w-9 h-5 rounded-full p-0.5 transition-colors duration-200 flex items-center shrink-0',
+                  isDark ? 'bg-[#2563EB] justify-end' : 'bg-slate-200 justify-start'
+                )}
+              >
+                <div className="w-4 h-4 rounded-full bg-white shadow-xs transition-transform" />
+              </div>
+            </div>
           </button>
         </div>
       </aside>
@@ -396,8 +435,8 @@ export function VerticalNav({
           </nav>
         </div>
 
-        {/* Bottom Section: Sign Out */}
-        <div className="pt-4 mt-2 border-t border-[#E2E8F0]">
+        {/* Bottom Section: Sign Out & Dark Mode Preferences */}
+        <div className="pt-4 mt-2 border-t border-[#E2E8F0] flex flex-col gap-1.5">
           <button
             type="button"
             onClick={() => {
@@ -412,6 +451,35 @@ export function VerticalNav({
             <span className="text-sm font-semibold ml-3">
               Sign out
             </span>
+          </button>
+
+          {/* Dark Mode Preference Toggle (Below Sign Out) */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className="w-full flex items-center h-12 px-3.5 rounded-xl text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B] transition-all duration-200 group cursor-pointer text-left"
+          >
+            <div className="flex items-center justify-center w-5 shrink-0">
+              {isDark ? (
+                <Moon className="w-5 h-5 text-blue-400 group-hover:-rotate-12 transition-transform" />
+              ) : (
+                <Sun className="w-5 h-5 text-amber-500 group-hover:rotate-45 transition-transform" />
+              )}
+            </div>
+            <div className="flex items-center justify-between flex-1 ml-3">
+              <span className="text-sm font-medium whitespace-nowrap">
+                Dark mode
+              </span>
+              <div
+                className={twMerge(
+                  'w-9 h-5 rounded-full p-0.5 transition-colors duration-200 flex items-center shrink-0',
+                  isDark ? 'bg-[#2563EB] justify-end' : 'bg-slate-200 justify-start'
+                )}
+              >
+                <div className="w-4 h-4 rounded-full bg-white shadow-xs transition-transform" />
+              </div>
+            </div>
           </button>
         </div>
       </aside>

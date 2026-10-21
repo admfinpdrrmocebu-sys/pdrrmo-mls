@@ -33,6 +33,7 @@ import { SummaryCard } from '@/components/card';
 import { Skeleton } from '@/components/skeleton';
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/lib/auth';
+import { useTheme } from '@/lib/theme';
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -255,6 +256,7 @@ function DashboardChartsSkeleton() {
 
 export default function DashboardPage() {
   const { profile } = useAuth();
+  const { isDark } = useTheme();
   const [timeRange, setTimeRange] = useState<'Last 24 Hours' | 'Last 7 Days' | 'Last 30 Days'>('Last 24 Hours');
   const [isLoading, setIsLoading] = useState(true);
 
@@ -842,25 +844,26 @@ export default function DashboardPage() {
                             <stop offset="95%" stopColor="#004AC6" stopOpacity={0.0} />
                           </linearGradient>
                         </defs>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#1E293B' : '#E2E8F0'} />
                         <XAxis
                           dataKey="time"
                           tickLine={false}
-                          axisLine={{ stroke: '#E2E8F0' }}
-                          tick={{ fill: '#757680', fontSize: 12 }}
+                          axisLine={{ stroke: isDark ? '#1E293B' : '#E2E8F0' }}
+                          tick={{ fill: isDark ? '#94A3B8' : '#757680', fontSize: 12 }}
                         />
                         <YAxis
                           tickLine={false}
                           axisLine={false}
-                          tick={{ fill: '#757680', fontSize: 12 }}
+                          tick={{ fill: isDark ? '#94A3B8' : '#757680', fontSize: 12 }}
                           allowDecimals={false}
                         />
                         <Tooltip
                           contentStyle={{
-                            backgroundColor: '#FFFFFF',
+                            backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                            color: isDark ? '#F1F5F9' : '#1E293B',
                             borderRadius: '12px',
-                            border: '1px solid #E2E8F0',
-                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
+                            border: isDark ? '1px solid #1E293B' : '1px solid #E2E8F0',
+                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.2)',
                             fontSize: '12px',
                           }}
                           formatter={(val: any) => [`${val} Log Entries`, 'Volume']}
@@ -868,7 +871,7 @@ export default function DashboardPage() {
                         <Area
                           type="monotone"
                           dataKey="logs"
-                          stroke="#004AC6"
+                          stroke={isDark ? '#3B82F6' : '#004AC6'}
                           strokeWidth={2.5}
                           fillOpacity={1}
                           fill="url(#logTrendGradient)"
@@ -902,16 +905,17 @@ export default function DashboardPage() {
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
-                            data={allLogs.length > 0 ? distributionData : [{ name: 'Empty', value: 100, color: '#E2E8F0', count: 0 }]}
+                            data={allLogs.length > 0 ? distributionData : [{ name: 'Empty', value: 100, color: isDark ? '#1E293B' : '#E2E8F0', count: 0 }]}
                             cx="50%"
                             cy="50%"
                             innerRadius={55}
                             outerRadius={80}
                             paddingAngle={allLogs.length > 0 ? 4 : 0}
                             dataKey="value"
+                            stroke="none"
                           >
-                            {(allLogs.length > 0 ? distributionData : [{ name: 'Empty', value: 100, color: '#E2E8F0', count: 0 }]).map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            {(allLogs.length > 0 ? distributionData : [{ name: 'Empty', value: 100, color: isDark ? '#1E293B' : '#E2E8F0', count: 0 }]).map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} stroke="none" />
                             ))}
                           </Pie>
                         </PieChart>
@@ -984,26 +988,27 @@ export default function DashboardPage() {
                             <stop offset="95%" stopColor="#004AC6" stopOpacity={0.0} />
                           </linearGradient>
                         </defs>
-                        <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#E2E8F0" />
+                        <CartesianGrid strokeDasharray="4 4" vertical={false} stroke={isDark ? '#1E293B' : '#E2E8F0'} />
                         <XAxis
                           dataKey="day"
                           tickLine={false}
-                          axisLine={{ stroke: '#E2E8F0' }}
-                          tick={{ fill: '#757680', fontSize: 12 }}
+                          axisLine={{ stroke: isDark ? '#1E293B' : '#E2E8F0' }}
+                          tick={{ fill: isDark ? '#94A3B8' : '#757680', fontSize: 12 }}
                         />
                         <YAxis
                           tickLine={false}
                           axisLine={false}
-                          tick={{ fill: '#757680', fontSize: 12 }}
+                          tick={{ fill: isDark ? '#94A3B8' : '#757680', fontSize: 12 }}
                           domain={[0, 100]}
                           unit="%"
                         />
                         <Tooltip
                           contentStyle={{
-                            backgroundColor: '#FFFFFF',
+                            backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                            color: isDark ? '#F1F5F9' : '#1E293B',
                             borderRadius: '12px',
-                            border: '1px solid #E2E8F0',
-                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
+                            border: isDark ? '1px solid #1E293B' : '1px solid #E2E8F0',
+                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.2)',
                             fontSize: '12px',
                           }}
                           formatter={(val: any) => [`${val}% Attendance`, 'Station Response']}
@@ -1011,7 +1016,7 @@ export default function DashboardPage() {
                         <Area
                           type="monotone"
                           dataKey="attendance"
-                          stroke="#004AC6"
+                          stroke={isDark ? '#3B82F6' : '#004AC6'}
                           strokeWidth={2}
                           fillOpacity={1}
                           fill="url(#netAttendanceGradient)"

@@ -1,10 +1,11 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { CalendarDays, Megaphone, Settings } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '@/lib/auth';
+import { supabase } from '@/lib/supabase/client';
 
 export interface HeaderNavProps {
   title?: string;
@@ -26,7 +27,7 @@ export interface HeaderNavProps {
  * Refined top navigation bar.
  * Features:
  * 1. Title & Subtitle
- * 2. Action buttons (Announcements, Settings - RBAC gated)
+ * 2. Action buttons (Announcements with red unacknowledged indicator, Settings - RBAC gated)
  * 3. User status pill with live indicator and role display
  */
 export function HeaderNav({
@@ -36,7 +37,88 @@ export function HeaderNav({
   onSettingsClick,
   className,
 }: HeaderNavProps) {
-  const { profile, currentRole, canAccess } = useAuth();
+  const { user: authUser, profile, currentRole, canAccess } = useAuth();
+  const currentUserId = authUser?.id || profile?.id || '';
+
+  const [unacknowledgedCount, setUnacknowledgedCount] = useState(0);
+
+  // Check if there are any announcements not created by and not yet acknowledged by the current user
+  const checkUnacknowledgedAnnouncements = useCallback(async () => {
+    if (!currentUserId) {
+      setUnacknowledgedCount(0);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('announcements')
+        .select(`
+          id,
+          created_by,
+          acknowledgments:announcement_acknowledgments(user_id)
+        `);
+
+      if (error || !data) {
+        return;
+      }
+
+      const count = data.filter((row: any) => {
+        const isCreator =
+          row.created_by === currentUserId ||
+          row.created_by === authUser?.id ||
+          row.created_by === profile?.id;
+        if (isCreator) return false;
+
+        const acks = Array.isArray(row.acknowledgments) ? row.acknowledgments : [];
+        const hasAcked = acks.some(
+          (a: any) =>
+            a.user_id === currentUserId ||
+            a.user_id === authUser?.id ||
+            a.user_id === profile?.id
+        );
+        return !hasAcked;
+      }).length;
+
+      setUnacknowledgedCount(count);
+    } catch {
+      // Gracefully ignore if table is not yet migrated
+    }
+  }, [currentUserId, authUser?.id, profile?.id]);
+
+  useEffect(() => {
+    checkUnacknowledgedAnnouncements();
+
+    const channel = supabase
+      .channel(`header-announcements-badge-${currentUserId || 'anon'}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'announcements' },
+        () => {
+          checkUnacknowledgedAnnouncements();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'announcement_acknowledgments' },
+        () => {
+          checkUnacknowledgedAnnouncements();
+        }
+      )
+      .subscribe();
+
+    const handleCustomSync = () => {
+      checkUnacknowledgedAnnouncements();
+    };
+
+    window.addEventListener('pdrrmo:announcement-ack-changed', handleCustomSync);
+
+    return () => {
+      window.removeEventListener('pdrrmo:announcement-ack-changed', handleCustomSync);
+      supabase.removeChannel(channel);
+    };
+  }, [checkUnacknowledgedAnnouncements, currentUserId]);
+
+  const hasUnacknowledged = unacknowledgedCount > 0;
 
   const user = profile
     ? {
@@ -99,13 +181,38 @@ export function HeaderNav({
             <CalendarDays className="w-4 h-4" />
           </Link>
 
-          {/* Announcements */}
+          {/* Announcements (Red when user has unacknowledged announcements) */}
           <Link
             href="/announcements"
-            aria-label="Announcements"
-            className="w-10 h-10 flex items-center justify-center rounded-full text-[#505F76] hover:bg-white hover:text-[#1E293B] hover:shadow-sm border border-transparent hover:border-[#E2E8F0] transition-all cursor-pointer"
+            aria-label={
+              hasUnacknowledged
+                ? `Announcements (${unacknowledgedCount} unacknowledged)`
+                : 'Announcements'
+            }
+            title={
+              hasUnacknowledged
+                ? `${unacknowledgedCount} unacknowledged announcement${unacknowledgedCount > 1 ? 's' : ''}`
+                : 'Announcements'
+            }
+            className={twMerge(
+              'relative w-10 h-10 flex items-center justify-center rounded-full border transition-all cursor-pointer',
+              hasUnacknowledged
+                ? 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100 hover:text-rose-700 shadow-xs'
+                : 'text-[#505F76] hover:bg-white hover:text-[#1E293B] hover:shadow-sm border-transparent hover:border-[#E2E8F0]'
+            )}
           >
-            <Megaphone className="w-4 h-4" />
+            <Megaphone
+              className={twMerge(
+                'w-4 h-4 transition-colors',
+                hasUnacknowledged && 'text-rose-600'
+              )}
+            />
+            {hasUnacknowledged && (
+              <span className="absolute -top-0.5 -right-0.5 flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-600 border-2 border-white" />
+              </span>
+            )}
           </Link>
 
           {/* Settings (Gated by Settings clearance) */}

@@ -1,8 +1,8 @@
-﻿'use client';
+'use client';
 
 import React from 'react';
-import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { useTheme } from '@/lib/theme';
 
 export interface ScreenBackgroundProps extends React.HTMLAttributes<HTMLDivElement> {
   children?: React.ReactNode;
@@ -19,9 +19,9 @@ export interface ScreenBackgroundProps extends React.HTMLAttributes<HTMLDivEleme
  * 'MLS Login - Modern Fintech Style' and 'MLS Insight Monitor'.
  *
  * Provides:
- * 1. Base cool canvas (#F8FAFC)
+ * 1. Base cool canvas (#F8FAFC in Light Mode, #0B1120 in Dark Mode)
  * 2. 40px x 40px precision fintech engineering grid
- * 3. Subtle ambient radial lighting with primary (#004AC6) tints
+ * 3. Subtle ambient radial lighting with primary (#004AC6 / #3B82F6) tints
  */
 export function ScreenBackground({
   children,
@@ -31,10 +31,12 @@ export function ScreenBackground({
   className,
   ...props
 }: ScreenBackgroundProps) {
+  const { isDark } = useTheme();
+
   return (
     <div
       className={twMerge(
-        'relative min-h-screen w-full bg-[#F8FAFC] text-[#1E293B] overflow-x-hidden',
+        'relative min-h-screen w-full bg-[#F8FAFC] text-[#1E293B] transition-colors duration-200 overflow-x-hidden',
         className
       )}
       {...props}
@@ -43,9 +45,11 @@ export function ScreenBackground({
       {withGrid && (
         <div
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-0 opacity-100"
+          className="pointer-events-none fixed inset-0 z-0 opacity-100 print:hidden"
           style={{
-            backgroundImage: `linear-gradient(to right, rgba(0, 74, 198, 0.04) 1px, transparent 1px), linear-gradient(to bottom, rgba(0, 74, 198, 0.04) 1px, transparent 1px)`,
+            backgroundImage: isDark
+              ? `linear-gradient(to right, rgba(59, 130, 246, 0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(59, 130, 246, 0.06) 1px, transparent 1px)`
+              : `linear-gradient(to right, rgba(0, 74, 198, 0.04) 1px, transparent 1px), linear-gradient(to bottom, rgba(0, 74, 198, 0.04) 1px, transparent 1px)`,
             backgroundSize: '40px 40px',
             backgroundAttachment: 'fixed',
           }}
@@ -56,13 +60,15 @@ export function ScreenBackground({
       {withGlow && (
         <div
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
+          className="pointer-events-none fixed inset-0 z-0 overflow-hidden print:hidden"
         >
           {/* Top Center Primary Ambient Glow */}
           <div
             className="absolute -top-[20%] left-1/2 -translate-x-1/2 h-[600px] w-[900px] rounded-full opacity-60 blur-3xl pointer-events-none"
             style={{
-              background: 'radial-gradient(ellipse at center, rgba(0, 74, 198, 0.08), rgba(0, 74, 198, 0.02) 50%, transparent 70%)',
+              background: isDark
+                ? 'radial-gradient(ellipse at center, rgba(37, 99, 235, 0.14), rgba(37, 99, 235, 0.03) 50%, transparent 70%)'
+                : 'radial-gradient(ellipse at center, rgba(0, 74, 198, 0.08), rgba(0, 74, 198, 0.02) 50%, transparent 70%)',
             }}
           />
 
@@ -70,7 +76,9 @@ export function ScreenBackground({
           <div
             className="absolute -bottom-[15%] -right-[10%] h-[500px] w-[600px] rounded-full opacity-40 blur-3xl pointer-events-none"
             style={{
-              background: 'radial-gradient(circle at center, rgba(80, 95, 118, 0.06), transparent 70%)',
+              background: isDark
+                ? 'radial-gradient(circle at center, rgba(30, 58, 138, 0.16), transparent 70%)'
+                : 'radial-gradient(circle at center, rgba(80, 95, 118, 0.06), transparent 70%)',
             }}
           />
         </div>

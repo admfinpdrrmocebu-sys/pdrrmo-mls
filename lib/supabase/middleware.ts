@@ -8,10 +8,23 @@ import { NextResponse, type NextRequest } from 'next/server';
 const AUTH_ROUTES = ['/login', '/register', '/forgot-password'];
 
 /**
+ * Public standalone routes accessible to both unauthenticated and authenticated visitors
+ * (e.g. Google OAuth Consent Screen verification pages).
+ */
+const PUBLIC_ROUTES = ['/terms', '/terms-and-conditions'];
+
+/**
  * Checks whether a given path is an auth route or root landing.
  */
 function isAuthRoute(pathname: string): boolean {
   return AUTH_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+}
+
+/**
+ * Checks whether a given path is a public route accessible without authentication.
+ */
+function isPublicRoute(pathname: string): boolean {
+  return PUBLIC_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));
 }
 
 /**
@@ -52,6 +65,11 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
+
+  // 0. Public standalone routes (e.g. /terms for Google Drive API OAuth verification)
+  if (isPublicRoute(pathname)) {
+    return supabaseResponse;
+  }
 
   // 1. Unauthenticated user trying to access protected routes
   if (!user && !isAuthRoute(pathname) && pathname !== '/') {

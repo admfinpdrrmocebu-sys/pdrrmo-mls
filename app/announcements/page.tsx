@@ -11,6 +11,7 @@ import {
   User,
   Clock,
   CheckCircle2,
+  Check,
   X,
   Lock,
   Save,
@@ -32,6 +33,16 @@ import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 
+export interface AnnouncementAcknowledgment {
+  id: string;
+  announcementId: string;
+  userId: string;
+  userName: string;
+  userAvatarUrl?: string | null;
+  userRole?: string | null;
+  createdAt: string;
+}
+
 export interface Announcement {
   id: string;
   title: string;
@@ -44,6 +55,7 @@ export interface Announcement {
   updatedById?: string | null;
   updatedAt?: string | null;
   rawUpdatedAt?: string | null;
+  acknowledgments: AnnouncementAcknowledgment[];
 }
 
 // Truncation limit in words for card previews
@@ -51,6 +63,108 @@ const WORD_LIMIT = 24;
 
 // Maximum allowed active announcements
 const MAX_ANNOUNCEMENTS = 20;
+
+// Helper to compute initials from full name
+function getInitials(name: string): string {
+  if (!name) return 'OP';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+// Deterministic vibrant avatar background colors when profile picture is missing
+const AVATAR_COLORS = [
+  'bg-blue-600',
+  'bg-indigo-600',
+  'bg-emerald-600',
+  'bg-amber-600',
+  'bg-rose-600',
+  'bg-sky-600',
+  'bg-purple-600',
+  'bg-teal-600',
+];
+
+function getAvatarColorClass(idOrName: string): string {
+  let hash = 0;
+  for (let i = 0; i < idOrName.length; i++) {
+    hash = (hash << 5) - hash + idOrName.charCodeAt(i);
+    hash |= 0;
+  }
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+// Single profile avatar circle with image and initials fallback
+const AcknowledgmentAvatar = React.memo(function AcknowledgmentAvatar({
+  ack,
+  size = 'w-7 h-7',
+}: {
+  ack: AnnouncementAcknowledgment;
+  size?: string;
+}) {
+  const [imgError, setImgError] = useState(false);
+  const initials = getInitials(ack.userName);
+  const colorClass = getAvatarColorClass(ack.userId || ack.userName);
+
+  if (ack.userAvatarUrl && !imgError) {
+    return (
+      <img
+        src={ack.userAvatarUrl}
+        alt={ack.userName}
+        onError={() => setImgError(true)}
+        title={`${ack.userName} (${ack.userRole || 'Officer'}) · ${ack.createdAt}`}
+        className={`${size} rounded-full object-cover border-2 border-white ring-1 ring-slate-200/80 shadow-2xs shrink-0 select-none`}
+      />
+    );
+  }
+
+  return (
+    <div
+      title={`${ack.userName} (${ack.userRole || 'Officer'}) · ${ack.createdAt}`}
+      className={`${size} rounded-full font-bold text-[10px] flex items-center justify-center border-2 border-white ring-1 ring-slate-200/80 shadow-2xs shrink-0 select-none text-white ${colorClass}`}
+    >
+      {initials}
+    </div>
+  );
+});
+
+// Overlapped avatar stack: max 3 avatars + 4th circle with +count
+const AcknowledgmentAvatarStack = React.memo(function AcknowledgmentAvatarStack({
+  acknowledgments,
+  size = 'w-7 h-7',
+}: {
+  acknowledgments: AnnouncementAcknowledgment[];
+  size?: string;
+}) {
+  if (!acknowledgments || acknowledgments.length === 0) {
+    return <span className="text-xs text-[#94A3B8] italic">No acknowledgments yet</span>;
+  }
+
+  const visibleAcks = acknowledgments.slice(0, 3);
+  const remainingCount = acknowledgments.length - 3;
+  const remainingNames = acknowledgments
+    .slice(3)
+    .map((a) => a.userName)
+    .join(', ');
+
+  return (
+    <div className="flex items-center -space-x-2 overflow-visible">
+      {visibleAcks.map((ack) => (
+        <AcknowledgmentAvatar key={ack.id} ack={ack} size={size} />
+      ))}
+
+      {remainingCount > 0 && (
+        <div
+          title={`+${remainingCount} more: ${remainingNames}`}
+          className={`${size} rounded-full bg-slate-100 border-2 border-white ring-1 ring-slate-200/80 text-[#004AC6] font-bold text-[10px] flex items-center justify-center shadow-2xs shrink-0 cursor-default select-none`}
+        >
+          +{remainingCount}
+        </div>
+      )}
+    </div>
+  );
+});
 
 // Extracts clean plain text from HTML
 function getPlainText(html: string): string {
@@ -103,6 +217,22 @@ function mapAnnouncementRow(row: any, fallbackName?: string): Announcement {
     row.updated_by_name ||
     null;
 
+  const rawAcks = Array.isArray(row.acknowledgments) ? row.acknowledgments : [];
+  const mappedAcks: AnnouncementAcknowledgment[] = rawAcks
+    .filter(Boolean)
+    .map((ack: any) => {
+      const userProf = Array.isArray(ack.user) ? ack.user[0] : ack.user;
+      return {
+        id: ack.id || `ack-${ack.user_id}-${row.id}`,
+        announcementId: ack.announcement_id || row.id,
+        userId: ack.user_id,
+        userName: userProf?.full_name || ack.user_name || 'Monitoring Officer',
+        userAvatarUrl: userProf?.avatar_url || null,
+        userRole: userProf?.role || userProf?.position_title || 'Officer',
+        createdAt: formatAnnouncementDate(ack.created_at),
+      };
+    });
+
   return {
     id: row.id,
     title: row.title || '',
@@ -118,6 +248,7 @@ function mapAnnouncementRow(row: any, fallbackName?: string): Announcement {
         ? formatAnnouncementDate(row.updated_at)
         : null,
     rawUpdatedAt: row.updated_at || null,
+    acknowledgments: mappedAcks,
   };
 }
 
@@ -201,6 +332,9 @@ export default function AnnouncementsPage() {
   // Delete confirmation
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Acknowledging button loading state
+  const [acknowledgingIds, setAcknowledgingIds] = useState<Record<string, boolean>>({});
+
   // Toast notification
   const [toastNotification, setToastNotification] = useState<{
     message: string;
@@ -236,20 +370,48 @@ export default function AnnouncementsPage() {
     async (isInitial = false) => {
       if (isInitial) setIsLoading(true);
       try {
-        const { data, error } = await supabase
+        let { data, error } = await supabase
           .from('announcements')
-          .select('*, creator:created_by(id, full_name, email, role), updater:updated_by(id, full_name, email, role)')
+          .select(`
+            *,
+            creator:created_by(id, full_name, email, role),
+            updater:updated_by(id, full_name, email, role),
+            acknowledgments:announcement_acknowledgments(
+              id,
+              announcement_id,
+              user_id,
+              created_at,
+              user:user_id(id, full_name, email, role, avatar_url)
+            )
+          `)
           .order('created_at', { ascending: false });
 
         if (error) {
-          console.error('Error loading announcements:', error);
-          showToast('Failed to load announcements', error.message, 'error');
-          return;
+          // Graceful fallback if relationship or table not yet applied in Supabase
+          console.warn('Falling back to basic announcements query:', error.message);
+          const fallback = await supabase
+            .from('announcements')
+            .select('*, creator:created_by(id, full_name, email, role), updater:updated_by(id, full_name, email, role)')
+            .order('created_at', { ascending: false });
+
+          if (fallback.error) {
+            console.error('Error loading announcements:', fallback.error);
+            showToast('Failed to load announcements', fallback.error.message, 'error');
+            return;
+          }
+          data = fallback.data;
         }
 
         if (data) {
           const mapped = data.map((row: any) => mapAnnouncementRow(row));
           setAnnouncements(mapped);
+
+          // Keep viewing modal in sync with realtime updates
+          setViewingAnnouncement((prev) => {
+            if (!prev) return null;
+            const updated = mapped.find((m) => m.id === prev.id);
+            return updated || prev;
+          });
         }
       } catch (err: any) {
         console.error('Unexpected error fetching announcements:', err);
@@ -274,6 +436,13 @@ export default function AnnouncementsPage() {
           fetchAnnouncements(false);
         }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'announcement_acknowledgments' },
+        () => {
+          fetchAnnouncements(false);
+        }
+      )
       .subscribe();
 
     return () => {
@@ -281,6 +450,105 @@ export default function AnnouncementsPage() {
       supabase.removeChannel(channel);
     };
   }, [fetchAnnouncements]);
+
+  // 3. Toggle Acknowledgment (Receipt) Handler
+  const handleToggleAcknowledge = useCallback(
+    async (announcementId: string) => {
+      const currentUserId = user?.id || profile?.id;
+      if (!currentUserId) {
+        showToast('Authentication required', 'Please sign in to acknowledge announcements', 'error');
+        return;
+      }
+
+      const target = announcements.find((a) => a.id === announcementId);
+      if (!target) return;
+
+      // Creator cannot acknowledge their own announcement
+      if (target.createdById === currentUserId || target.createdById === user?.id || target.createdById === profile?.id) {
+        return;
+      }
+
+      const existingAck = target.acknowledgments?.find(
+        (a) => a.userId === currentUserId || a.userId === user?.id || a.userId === profile?.id
+      );
+      const isCurrentlyAcked = !!existingAck;
+
+      // Mark button as loading
+      setAcknowledgingIds((prev) => ({ ...prev, [announcementId]: true }));
+
+      // Optimistic update
+      const currentUserName = profile?.full_name || user?.user_metadata?.full_name || 'Personnel';
+      const currentUserRole = profile?.role || profile?.position_title || 'Officer';
+      const currentUserAvatar = profile?.avatar_url || null;
+
+      const updatedAcks: AnnouncementAcknowledgment[] = isCurrentlyAcked
+        ? target.acknowledgments.filter(
+            (a) => a.userId !== currentUserId && a.userId !== user?.id && a.userId !== profile?.id
+          )
+        : [
+            ...target.acknowledgments,
+            {
+              id: 'temp-' + Date.now(),
+              announcementId,
+              userId: currentUserId,
+              userName: currentUserName,
+              userAvatarUrl: currentUserAvatar,
+              userRole: currentUserRole,
+              createdAt: 'Just now',
+            },
+          ];
+
+      setAnnouncements((prev) =>
+        prev.map((a) => (a.id === announcementId ? { ...a, acknowledgments: updatedAcks } : a))
+      );
+      setViewingAnnouncement((prev) =>
+        prev && prev.id === announcementId ? { ...prev, acknowledgments: updatedAcks } : prev
+      );
+
+      try {
+        if (isCurrentlyAcked) {
+          const { error } = await supabase
+            .from('announcement_acknowledgments')
+            .delete()
+            .eq('announcement_id', announcementId)
+            .eq('user_id', currentUserId);
+
+          if (error) {
+            console.error('Error removing acknowledgment:', error);
+            showToast('Failed to update acknowledgment', error.message, 'error');
+            fetchAnnouncements(false);
+          } else {
+            showToast('Acknowledgment removed', 'You have unacknowledged this announcement', 'info');
+          }
+        } else {
+          const { error } = await supabase
+            .from('announcement_acknowledgments')
+            .insert({
+              announcement_id: announcementId,
+              user_id: currentUserId,
+            });
+
+          if (error) {
+            console.error('Error saving acknowledgment:', error);
+            showToast('Failed to acknowledge', error.message, 'error');
+            fetchAnnouncements(false);
+          } else {
+            showToast('Announcement Acknowledged', 'Your acknowledgment has been recorded', 'success');
+          }
+        }
+      } catch (err: any) {
+        console.error('Unexpected error toggling acknowledgment:', err);
+        showToast('Error', err.message || 'Something went wrong', 'error');
+        fetchAnnouncements(false);
+      } finally {
+        setAcknowledgingIds((prev) => ({ ...prev, [announcementId]: false }));
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('pdrrmo:announcement-ack-changed'));
+        }
+      }
+    },
+    [announcements, user, profile, showToast, fetchAnnouncements]
+  );
 
   // Check active formatting state in editor
   const checkActiveCommands = useCallback(() => {
@@ -701,7 +969,21 @@ export default function AnnouncementsPage() {
             </GeneralCard>
           ) : (
             filteredAnnouncements.map((item) => {
+              const currentUserId = user?.id || profile?.id || '';
               const isOwner = canUserModify(item);
+              const isCreator = Boolean(
+                currentUserId &&
+                (item.createdById === currentUserId ||
+                 item.createdById === user?.id ||
+                 item.createdById === profile?.id)
+              );
+              const hasAcknowledged = Boolean(
+                currentUserId &&
+                item.acknowledgments?.some(
+                  (a) => a.userId === currentUserId || a.userId === user?.id || a.userId === profile?.id
+                )
+              );
+              const isAcknowledging = Boolean(acknowledgingIds[item.id]);
               const isTruncated = checkIsTruncated(item.description);
 
               return (
@@ -795,6 +1077,62 @@ export default function AnnouncementsPage() {
                           <span>
                             Updated by {item.updatedBy} · {item.updatedAt}
                           </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Acknowledgment Section: Left = Acknowledge by [Avatars], Right = Acknowledge Button */}
+                    <div className="flex items-center justify-between gap-3 pt-3 mt-1 border-t border-[#F1F5F9]">
+                      <div
+                        className="flex items-center gap-2 min-w-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span className="text-xs font-semibold text-[#505F76] shrink-0">
+                          Acknowledge by:
+                        </span>
+                        <AcknowledgmentAvatarStack
+                          acknowledgments={item.acknowledgments}
+                          size="w-7 h-7"
+                        />
+                      </div>
+
+                      {!isCreator && (
+                        <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            disabled={isAcknowledging}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleAcknowledge(item.id);
+                            }}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-2xs select-none ${
+                              hasAcknowledged
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/90 hover:bg-emerald-100 hover:border-emerald-300'
+                                : 'bg-[#004AC6] text-white hover:bg-[#003594] hover:shadow-xs active:scale-95'
+                            } disabled:opacity-60 disabled:pointer-events-none`}
+                            title={
+                              hasAcknowledged
+                                ? 'Click to undo acknowledgment'
+                                : 'Click to acknowledge reading this announcement'
+                            }
+                          >
+                            {isAcknowledging ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Updating...</span>
+                              </>
+                            ) : hasAcknowledged ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
+                                <span>Acknowledged</span>
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-white/90" />
+                                <span>Acknowledge</span>
+                              </>
+                            )}
+                          </button>
                         </div>
                       )}
                     </div>
@@ -1178,11 +1516,51 @@ export default function AnnouncementsPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Personnel Acknowledgment Section */}
+                <div className="p-4 bg-slate-50/70 rounded-xl border border-[#E2E8F0]/70 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-[#004AC6]" />
+                      <span className="text-xs font-bold text-[#1E293B]">
+                        Acknowledged by ({viewingAnnouncement.acknowledgments?.length || 0})
+                      </span>
+                    </div>
+                    <AcknowledgmentAvatarStack
+                      acknowledgments={viewingAnnouncement.acknowledgments}
+                      size="w-7 h-7"
+                    />
+                  </div>
+
+                  {viewingAnnouncement.acknowledgments && viewingAnnouncement.acknowledgments.length > 0 ? (
+                    <div className="pt-2 border-t border-slate-200/60 max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                      {viewingAnnouncement.acknowledgments.map((ack) => (
+                        <div
+                          key={ack.id}
+                          className="flex items-center justify-between text-xs py-1.5 px-2.5 rounded-lg bg-white border border-slate-200/60"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <AcknowledgmentAvatar ack={ack} size="w-5 h-5" />
+                            <span className="font-semibold text-[#1E293B] truncate">{ack.userName}</span>
+                            <span className="text-[10px] text-[#505F76] bg-slate-100 px-1.5 py-0.5 rounded">
+                              {ack.userRole || 'Personnel'}
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-[#757680] shrink-0">{ack.createdAt}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-[#94A3B8] italic">
+                      No personnel have acknowledged this announcement yet.
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Modal Footer */}
               <div className="flex items-center justify-between p-4 sm:p-5 border-t border-[#E2E8F0] bg-slate-50/50">
-                <div>
+                <div className="flex items-center gap-2">
                   {canUserModify(viewingAnnouncement) ? (
                     <SecondaryButton
                       size="sm"
@@ -1199,13 +1577,66 @@ export default function AnnouncementsPage() {
                   )}
                 </div>
 
-                <PrimaryButton
-                  size="md"
-                  pill
-                  onClick={() => setViewingAnnouncement(null)}
-                >
-                  Close
-                </PrimaryButton>
+                <div className="flex items-center gap-2">
+                  {/* Acknowledge button inside modal for non-creators */}
+                  {(() => {
+                    const currentUserId = user?.id || profile?.id || '';
+                    const isModalCreator = Boolean(
+                      currentUserId &&
+                      (viewingAnnouncement.createdById === currentUserId ||
+                       viewingAnnouncement.createdById === user?.id ||
+                       viewingAnnouncement.createdById === profile?.id)
+                    );
+                    if (isModalCreator) return null;
+
+                    const hasModalAcked = Boolean(
+                      currentUserId &&
+                      viewingAnnouncement.acknowledgments?.some(
+                        (a) => a.userId === currentUserId || a.userId === user?.id || a.userId === profile?.id
+                      )
+                    );
+                    const isModalAcking = Boolean(acknowledgingIds[viewingAnnouncement.id]);
+
+                    return (
+                      <button
+                        type="button"
+                        disabled={isModalAcking}
+                        onClick={() => handleToggleAcknowledge(viewingAnnouncement.id)}
+                        className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-2xs select-none ${
+                          hasModalAcked
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
+                            : 'bg-[#004AC6] text-white hover:bg-[#003594] active:scale-95'
+                        } disabled:opacity-60 disabled:pointer-events-none`}
+                        title={hasModalAcked ? 'Click to undo acknowledgment' : 'Click to acknowledge reading'}
+                      >
+                        {isModalAcking ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Updating...</span>
+                          </>
+                        ) : hasModalAcked ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
+                            <span>Acknowledged</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5 text-white/90" />
+                            <span>Acknowledge</span>
+                          </>
+                        )}
+                      </button>
+                    );
+                  })()}
+
+                  <PrimaryButton
+                    size="md"
+                    pill
+                    onClick={() => setViewingAnnouncement(null)}
+                  >
+                    Close
+                  </PrimaryButton>
+                </div>
               </div>
             </motion.div>
           </div>
