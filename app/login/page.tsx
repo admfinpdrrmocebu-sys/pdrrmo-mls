@@ -167,6 +167,16 @@ export default function LoginPage() {
             </p>
           </div>
         </GeneralCard>
+
+        {/* Public Compliance Links */}
+        <div className="text-center text-xs text-[#757680] pt-1">
+          <Link
+            href="/terms-and-conditions"
+            className="text-[#505F76] hover:text-[#004AC6] hover:underline font-medium transition-colors"
+          >
+            Privacy Policy &amp; Terms of Service
+          </Link>
+        </div>
       </div>
     </main>
   );

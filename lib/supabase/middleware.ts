@@ -88,14 +88,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // 2. Unauthenticated user at root / -> redirect to /login
-  if (!user && pathname === '/') {
-    const url = request.nextUrl.clone();
-    url.pathname = '/login';
-    return NextResponse.redirect(url);
-  }
-
-  // 3. Authenticated user trying to access auth pages or root / -> redirect to /dashboard
+  // 2. Authenticated user trying to access auth pages or root / -> redirect to /dashboard
   if (user && (isAuthRoute(pathname) || pathname === '/')) {
     const redirectedFrom = request.nextUrl.searchParams.get('redirectedFrom');
     const url = request.nextUrl.clone();
