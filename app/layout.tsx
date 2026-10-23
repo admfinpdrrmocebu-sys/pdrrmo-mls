@@ -64,7 +64,10 @@ export const metadata: Metadata = {
     apple: "/logo.png",
   },
   verification: {
-    google: "AYj2qq5Y9ZxHq9SOPNXZ2UkkbHXUdaSQuin_PCyAQEM",
+    google: [
+      "AYj2qq5Y9ZxHq9SOPNXZ2UkkbHXUdaSQuin_PCyAQEM",
+      "TYvChdWDcV1vd2haZKvCHC0_gl4wrRsVyRcnEbTapZs",
+    ],
   },
 };
 
