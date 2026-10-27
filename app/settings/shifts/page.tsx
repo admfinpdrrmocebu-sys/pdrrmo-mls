@@ -196,6 +196,7 @@ export default function ShiftScheduleCalendarPage() {
   const [scheduleMonth, setScheduleMonth] = useState(format(currentMonth, 'yyyy-MM'));
   const [selectedShiftScheduleId, setSelectedShiftScheduleId] = useState<string>('');
   const [selectedPersonnelIds, setSelectedPersonnelIds] = useState<string[]>([]);
+  const [showAllPersonnel, setShowAllPersonnel] = useState<boolean>(false);
 
   // Selected multi-dates for Duty Schedule and Day Off
   const [selectedDutyDates, setSelectedDutyDates] = useState<string[]>([]);
@@ -508,51 +509,46 @@ export default function ShiftScheduleCalendarPage() {
     }
   }, [isAddScheduleModalOpen, shiftSchedules, selectedShiftScheduleId]);
 
-  // Filter personnel by chosen shift schedule in modal
-  const visiblePersonnel = useMemo(() => {
+  // Filter personnel strictly according to the chosen shift schedule in modal
+  const filteredPersonnel = useMemo(() => {
+    if (!selectedShiftScheduleId) return profiles;
     const targetSched = shiftSchedules.find((s) => s.id === selectedShiftScheduleId);
     if (!targetSched) return profiles;
 
-    // 1. If target_role is set on shift schedule, filter profiles by target role
-    if (targetSched.targetRole && targetSched.targetRole !== 'ALL') {
-      const roleMatches = profiles.filter((p) => matchesRole(p, targetSched.targetRole!));
-      if (roleMatches.length > 0) return roleMatches;
-    }
+    const targetName = (targetSched.name || '').trim().toLowerCase();
 
-    // 2. If profile has default_shift matching schedule name
-    const shiftMatches = profiles.filter(
-      (p) => p.defaultShift && p.defaultShift.toLowerCase() === targetSched.name.toLowerCase()
-    );
-    if (shiftMatches.length > 0) return shiftMatches;
-
-    // 3. Fallback: all active profiles
-    return profiles;
+    // Only display personnel whose defaultShift matches the selected shift schedule
+    return profiles.filter((p) => {
+      const pShift = (p.defaultShift || '').trim().toLowerCase();
+      if (!pShift || !targetName) return false;
+      return pShift === targetName || pShift.startsWith(targetName) || targetName.startsWith(pShift);
+    });
   }, [profiles, selectedShiftScheduleId, shiftSchedules]);
 
-  // Handle shift schedule change: auto-select personnel matching the shift
+  // If user opts to show all personnel, display all profiles; otherwise display strictly matching personnel
+  const visiblePersonnel = useMemo(() => {
+    if (showAllPersonnel) return profiles;
+    return filteredPersonnel;
+  }, [showAllPersonnel, profiles, filteredPersonnel]);
+
+  // Handle shift schedule change: update selected shift schedule and reset showAllPersonnel
   const handleShiftScheduleChange = (newSchedId: string) => {
     setSelectedShiftScheduleId(newSchedId);
-    const targetSched = shiftSchedules.find((s) => s.id === newSchedId);
-    if (targetSched) {
-      let matching: OfficerAssignment[] = [];
-      if (targetSched.targetRole && targetSched.targetRole !== 'ALL') {
-        matching = profiles.filter((p) => matchesRole(p, targetSched.targetRole!));
-      }
-      if (matching.length === 0) {
-        matching = profiles.filter(
-          (p) => p.defaultShift && p.defaultShift.toLowerCase() === targetSched.name.toLowerCase()
-        );
-      }
-      setSelectedPersonnelIds(matching.length > 0 ? matching.map((m) => m.id) : visiblePersonnel.map((p) => p.id));
-    }
   };
 
-  // When modal opens or shift changes, auto-select matching personnel
+  // Reset showAllPersonnel when modal is opened
   useEffect(() => {
-    if (isAddScheduleModalOpen && visiblePersonnel.length > 0) {
+    if (isAddScheduleModalOpen) {
+      setShowAllPersonnel(false);
+    }
+  }, [isAddScheduleModalOpen]);
+
+  // When modal opens or visiblePersonnel changes, auto-select matching personnel
+  useEffect(() => {
+    if (isAddScheduleModalOpen) {
       setSelectedPersonnelIds(visiblePersonnel.map((p) => p.id));
     }
-  }, [isAddScheduleModalOpen, selectedShiftScheduleId, visiblePersonnel]);
+  }, [isAddScheduleModalOpen, visiblePersonnel]);
 
   // Toggle single personnel selection
   const handleTogglePersonnel = (id: string) => {
@@ -2271,6 +2267,24 @@ export default function ShiftScheduleCalendarPage() {
                       Assigned Personnel ({visiblePersonnel.length} available)
                     </label>
                     <div className="flex items-center gap-2 text-xs">
+                      {showAllPersonnel ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllPersonnel(false)}
+                          className="text-[#004AC6] font-semibold hover:underline cursor-pointer"
+                        >
+                          Filter by Shift ({filteredPersonnel.length})
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllPersonnel(true)}
+                          className="text-[#505F76] hover:underline cursor-pointer"
+                        >
+                          Show All ({profiles.length})
+                        </button>
+                      )}
+                      <span className="text-slate-300">•</span>
                       <button
                         type="button"
                         onClick={() => handleToggleAllPersonnel(true)}
@@ -2293,7 +2307,6 @@ export default function ShiftScheduleCalendarPage() {
                     {visiblePersonnel.length > 0 ? (
                       visiblePersonnel.map((officer) => {
                         const isChecked = selectedPersonnelIds.includes(officer.id);
-                        const badge = getRoleBadge(officer.userRole);
                         return (
                           <label
                             key={officer.id}
@@ -2321,12 +2334,9 @@ export default function ShiftScheduleCalendarPage() {
                             </div>
 
                             <div className="flex items-center gap-1 shrink-0 ml-1">
-                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${badge.badgeClass}`}>
-                                {badge.label}
-                              </span>
                               {officer.defaultShift && (
-                                <span className="text-[10px] font-bold text-[#004AC6] bg-blue-50 px-2 py-0.5 rounded">
-                                  {officer.defaultShift.split(' ')[0]}
+                                <span className="text-[10px] font-bold text-[#004AC6] bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded">
+                                  {officer.defaultShift}
                                 </span>
                               )}
                             </div>
@@ -2334,8 +2344,15 @@ export default function ShiftScheduleCalendarPage() {
                         );
                       })
                     ) : (
-                      <div className="col-span-full py-4 text-center text-xs text-slate-500">
-                        No active personnel registered in system.
+                      <div className="col-span-full py-5 text-center text-xs text-slate-500 space-y-1">
+                        <p>No personnel currently assigned to this shift schedule.</p>
+                        <button
+                          type="button"
+                          onClick={() => setShowAllPersonnel(true)}
+                          className="text-[#004AC6] font-semibold hover:underline cursor-pointer"
+                        >
+                          Show all registered personnel ({profiles.length})
+                        </button>
                       </div>
                     )}
                   </div>

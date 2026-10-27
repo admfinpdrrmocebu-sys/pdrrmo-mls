@@ -1,6 +1,72 @@
 import { jsPDF } from 'jspdf';
 import { supabase } from './supabase/client';
-import { CAPITOL_LOGO_BASE64, PDRRMO_LOGO_BASE64 } from './header-logos';
+import { CAPITOL_LOGO_BASE64, PDRRMO_LOGO_BASE64, BAGONG_PILIPINAS_LOGO_BASE64 } from './header-logos';
+
+export type PaperSize = 'a4' | 'short' | 'legal' | 'folio';
+export type RollCallTemplateType = 'official_table' | 'net_calling';
+
+export const PAPER_DIMENSIONS: Record<PaperSize, { width: number; height: number; label: string; shortLabel: string }> = {
+  a4: { width: 210, height: 297, label: 'A4 (210 × 297 mm)', shortLabel: 'A4' },
+  short: { width: 215.9, height: 279.4, label: 'Short / Letter (8.5 × 11 in)', shortLabel: 'SHORT' },
+  folio: { width: 215.9, height: 330.2, label: 'Folio / Long (8.5 × 13 in)', shortLabel: 'FOLIO' },
+  legal: { width: 215.9, height: 355.6, label: 'Legal (8.5 × 14 in)', shortLabel: 'LEGAL' },
+};
+
+export const CANONICAL_CEBU_LGUS: Array<{ name: string; hasPort: boolean; portName?: string }> = [
+  { name: 'ALCANTARA', hasPort: false },
+  { name: 'ALCOY', hasPort: false },
+  { name: 'ALEGRIA', hasPort: false },
+  { name: 'ALOGUINSAN', hasPort: false },
+  { name: 'ARGAO', hasPort: true, portName: 'Taloot port' },
+  { name: 'ASTURIAS', hasPort: false },
+  { name: 'BADIAN', hasPort: false },
+  { name: 'BALAMBAN', hasPort: false },
+  { name: 'BANTAYAN', hasPort: true, portName: 'Bantayan port' },
+  { name: 'BARILI', hasPort: false },
+  { name: 'BOGO', hasPort: true, portName: 'Polambato port' },
+  { name: 'BOLJOON', hasPort: false },
+  { name: 'BORBON', hasPort: false },
+  { name: 'CARCAR CITY', hasPort: false },
+  { name: 'CARMEN', hasPort: true, portName: 'Isabel leyte port' },
+  { name: 'CATMON', hasPort: false },
+  { name: 'CEBU CITY', hasPort: false },
+  { name: 'COMPOSTELA', hasPort: false },
+  { name: 'CONSOLACION', hasPort: false },
+  { name: 'CORDOVA', hasPort: true, portName: 'Cordova port' },
+  { name: 'DAANBANTAYAN', hasPort: true, portName: 'Malapascua port' },
+  { name: 'DALAGUETE', hasPort: false },
+  { name: 'DANAO', hasPort: true, portName: 'Danao port' },
+  { name: 'DUMANJUG', hasPort: true, portName: 'Tangil port' },
+  { name: 'GINATILAN', hasPort: false },
+  { name: 'LAPU LAPU CITY', hasPort: true, portName: 'Lapu_Lapu Port' },
+  { name: 'LILOAN', hasPort: true, portName: 'pier 88' },
+  { name: 'MADRIDEJOS', hasPort: false },
+  { name: 'MALABUYOC', hasPort: false },
+  { name: 'MANDAUE CITY', hasPort: false },
+  { name: 'MEDELLIN', hasPort: true, portName: 'Medellin port' },
+  { name: 'MINGLANILLA', hasPort: false },
+  { name: 'MOALBOAL', hasPort: false },
+  { name: 'NAGA CITY', hasPort: false },
+  { name: 'OSLOB', hasPort: true, portName: 'Oslob port' },
+  { name: 'PILAR', hasPort: true, portName: 'Pilar port' },
+  { name: 'PINAMUNGAJAN', hasPort: false },
+  { name: 'PORO', hasPort: true, portName: 'Poro port' },
+  { name: 'RONDA', hasPort: false },
+  { name: 'SAMBOAN', hasPort: true, portName: 'Bato port' },
+  { name: 'SAN FERNANDO', hasPort: false },
+  { name: 'SAN FRANCISCO', hasPort: true, portName: 'Consuelo port' },
+  { name: 'SAN REMIGIO', hasPort: true, portName: 'Hagnaya port' },
+  { name: 'SANTA FE', hasPort: true, portName: 'Santa Fe port' },
+  { name: 'SANTANDER', hasPort: true, portName: 'liloan port' },
+  { name: 'SIBONGA', hasPort: false },
+  { name: 'SOGOD', hasPort: false },
+  { name: 'TABOGON', hasPort: false },
+  { name: 'TABUELAN', hasPort: true, portName: 'Tabuelan port' },
+  { name: 'TALISAY', hasPort: false },
+  { name: 'TOLEDO CITY', hasPort: true, portName: 'Toledo city port' },
+  { name: 'TUBURAN', hasPort: true, portName: 'Tuburan Port' },
+  { name: 'TUDELA', hasPort: true, portName: 'Jagutapay Port' },
+];
 
 export interface RollCallStationItem {
   name: string;
@@ -32,6 +98,8 @@ export interface RollCallPdfData {
   entries: RollCallStationItem[];
   fileHash: string;
   snapshotPayload?: any;
+  paperSize?: PaperSize;
+  templateType?: RollCallTemplateType;
 }
 
 export interface DailyLogShiftItem {
@@ -276,13 +344,541 @@ export async function resolveSignatureBase64(urlOrPath: string | null | undefine
 }
 
 /**
- * Generates an official certified PDF for Roll Call following Template-Example-FileFormat-MLS.docx
+ * Formats a session time string (e.g., "1600H", "16:00", "4:00 PM") into a clean Net Call hour label (e.g., "4PM")
  */
-export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob: Blob; sizeBytes: number; hash: string }> {
+export function formatNetCallHourLabel(timeStr?: string): string {
+  if (!timeStr) return '4PM';
+  const raw = timeStr.trim().toUpperCase();
+  if (raw.includes('1600') || raw.includes('16:00') || raw === '4PM' || raw === '4:00 PM' || raw === '04:00 PM') return '4PM';
+  if (raw.includes('0800') || raw.includes('08:00') || raw === '8AM' || raw === '8:00 AM' || raw === '08:00 AM') return '8AM';
+  if (raw.includes('1200') || raw.includes('12:00') || raw === '12NN' || raw === '12PM') return '12NN';
+  if (raw.includes('2000') || raw.includes('20:00') || raw === '8PM' || raw === '8:00 PM') return '8PM';
+  return raw;
+}
+
+/**
+ * Normalizes and merges provided station entries into the full 53-LGU Cebu Net Calling list
+ */
+export function buildNetCallingStationList(rawEntries: RollCallStationItem[]): RollCallStationItem[] {
+  const norm = (s: string) =>
+    (s || '')
+      .toUpperCase()
+      .replace(/[-_]/g, ' ')
+      .replace(/\bCITY\b/g, '')
+      .replace(/\bSTATION\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const entryMap = new Map<string, RollCallStationItem>();
+  (rawEntries || []).forEach((item) => {
+    const key = norm(item.name);
+    if (key) {
+      entryMap.set(key, item);
+    }
+  });
+
+  return CANONICAL_CEBU_LGUS.map((canon) => {
+    const key = norm(canon.name);
+    const matched = entryMap.get(key);
+    const hasPort = matched?.hasPort !== undefined ? Boolean(matched.hasPort || canon.hasPort) : canon.hasPort;
+    const portName =
+      matched?.portName && matched.portName !== 'None' && matched.portName !== 'N/A'
+        ? matched.portName
+        : canon.portName;
+
+    return {
+      name: canon.name,
+      code: matched?.code,
+      attendance: matched?.attendance ?? null,
+      weatherStatus: matched?.weatherStatus ?? null,
+      portStatus: matched?.portStatus ?? null,
+      hasPort,
+      portName,
+      timeResponded: matched?.timeResponded ?? null,
+      dutyOperator: matched?.dutyOperator ?? undefined,
+    };
+  });
+}
+
+/**
+ * Generates the 2-Column Single-Page "FOR NET CALL - PDRRMO OPCEN" PDF matching For NET CALLING.pdf
+ * Optimized for A4, SHORT (Letter), FOLIO (8.5x13), and LEGAL (8.5x14) paper sizes.
+ */
+export async function generateNetCallingPDF(
+  data: RollCallPdfData,
+  options?: { paperSize?: PaperSize }
+): Promise<{ blob: Blob; sizeBytes: number; hash: string }> {
+  const paperSize: PaperSize = options?.paperSize || data.paperSize || 'a4';
+  const dim = PAPER_DIMENSIONS[paperSize] || PAPER_DIMENSIONS.a4;
+
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: [dim.width, dim.height],
+    compress: true,
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  // Adaptive vertical & typography metrics per paper size
+  const isShort = paperSize === 'short';
+  const isA4 = paperSize === 'a4';
+  const isFolio = paperSize === 'folio';
+  const isLegal = paperSize === 'legal';
+
+  const marginX = isA4 ? 10 : 11;
+  const marginTop = isShort ? 5.5 : isA4 ? 6.5 : isFolio ? 8.5 : 10;
+  const logoSize = isShort ? 17.5 : isA4 ? 19 : isFolio ? 21 : 22;
+  const headerH = logoSize + (isShort ? 2.5 : isA4 ? 3 : 4);
+  const footerReserveH = isShort ? 19.5 : isA4 ? 22 : isFolio ? 27 : 31;
+
+  // 1. HEADER: Capitol Seal + PDRRMO Seal (Left), Title (Center), Bagong Pilipinas (Right)
+  const logoY = marginTop;
+  try {
+    if (CAPITOL_LOGO_BASE64) {
+      doc.addImage(CAPITOL_LOGO_BASE64, 'PNG', marginX + 2, logoY, logoSize, logoSize);
+    }
+  } catch (err) {
+    console.warn('Could not draw Capitol logo:', err);
+  }
+
+  try {
+    if (PDRRMO_LOGO_BASE64) {
+      doc.addImage(PDRRMO_LOGO_BASE64, 'PNG', marginX + 2 + logoSize + 2.5, logoY, logoSize, logoSize);
+    }
+  } catch (err) {
+    console.warn('Could not draw PDRRMO logo:', err);
+  }
+
+  try {
+    if (BAGONG_PILIPINAS_LOGO_BASE64) {
+      const bpW = logoSize * 1.07;
+      const bpH = logoSize;
+      doc.addImage(BAGONG_PILIPINAS_LOGO_BASE64, 'PNG', pageWidth - marginX - 10 - bpW, logoY, bpW, bpH);
+    }
+  } catch (err) {
+    console.warn('Could not draw Bagong Pilipinas logo:', err);
+  }
+
+  // Center Title ("FOR NET CALL / PDRRMO OPCEN")
+  const titleFontSize = isShort ? 13.5 : isA4 ? 14.5 : 15.5;
+  doc.setFont('times', 'bold');
+  doc.setFontSize(titleFontSize);
+  doc.setTextColor(15, 23, 42);
+  const centerTitleX = pageWidth / 2 + 4;
+  doc.text('FOR NET CALL', centerTitleX, logoY + logoSize * 0.42, { align: 'center' });
+  doc.text('PDRRMO OPCEN', centerTitleX, logoY + logoSize * 0.78, { align: 'center' });
+
+  // 2. PREPARE 53 STATIONS LIST (1-26 Left, 27-53 Right)
+  const rawInputEntries: RollCallStationItem[] = (
+    data.entries && data.entries.length > 0
+      ? data.entries
+      : data.snapshotPayload?.entries || data.snapshotPayload?.records || []
+  ).map((stn: any) => ({
+    name: stn.name || stn.area_name || stn.municipality || 'Station',
+    code: stn.code || stn.area_code,
+    attendance: stn.attendance || stn.status || null,
+    weatherStatus: stn.weatherStatus || stn.weather_status || stn.weather || null,
+    portStatus: stn.portStatus || stn.port_status || stn.port || null,
+    hasPort: stn.hasPort,
+    portName: stn.portName || stn.port_name,
+    timeResponded: stn.timeResponded || stn.time_responded || stn.time,
+    dutyOperator: stn.dutyOperator || stn.duty_operator,
+  }));
+
+  const allStations = buildNetCallingStationList(rawInputEntries);
+  const leftStations = allStations.slice(0, 26); // 1 to 26 (ALCANTARA to LAPU LAPU CITY)
+  const rightStations = allStations.slice(26, 53); // 27 to 53 (LILOAN to TUDELA)
+
+  // Column horizontal geometry
+  const centerGap = isA4 ? 10 : 12;
+  const colTableWidth = (pageWidth - marginX * 2 - centerGap) / 2;
+  const leftTableX = marginX;
+  const rightTableX = marginX + colTableWidth + centerGap;
+
+  // Sub-columns inside each table: # | LEAGUE OF DRRMO'S | ✔ | ✖
+  const wNum = 7.5;
+  const wCheck = 10.5;
+  const wCross = 10.5;
+  const wStation = colTableWidth - wNum - wCheck - wCross;
+
+  const bodyStartY = marginTop + headerH;
+  const bodyAvailableH = pageHeight - bodyStartY - footerReserveH;
+
+  // 3. INTRO TEXT BLOCK (Top of Left Column)
+  const netHourLabel = formatNetCallHourLabel(data.sessionTime);
+  const rawOfficer = sanitizePdfText(data.conductedBy || '');
+  const officerDisplay =
+    rawOfficer && rawOfficer.toLowerCase() !== 'monitoring officer'
+      ? rawOfficer.toUpperCase()
+      : '(STATE YOUR NAME)';
+
+  const introFontSize = isShort ? 7.8 : isA4 ? 8.2 : 8.8;
+  const introLineH = isShort ? 3.3 : isA4 ? 3.55 : isFolio ? 3.9 : 4.1;
+  const introBlockH = introLineH * 4 + (isShort ? 1.5 : 2.2);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(introFontSize);
+  doc.setTextColor(15, 23, 42);
+
+  let introY = bodyStartY + introLineH * 0.85;
+  doc.text('ATTENTION ALL STATIONS, PLEASE DO STANDBY', leftTableX, introY);
+  introY += introLineH;
+
+  // Line 2 with bold "4PM" and bold "(STATE YOUR"
+  doc.setFont('helvetica', 'normal');
+  doc.text(`FOR THE ${netHourLabel} NET CALL. THIS IS `, leftTableX, introY);
+  const prefixW = doc.getTextWidth(`FOR THE ${netHourLabel} NET CALL. THIS IS `);
+  doc.setFont('helvetica', 'bold');
+  const nameTokens = officerDisplay.split(' ');
+  const firstPartName = nameTokens.length > 2 ? nameTokens.slice(0, 2).join(' ') : officerDisplay;
+  const secondPartName = nameTokens.length > 2 ? nameTokens.slice(2).join(' ') : '';
+  doc.text(firstPartName, leftTableX + prefixW, introY);
+  introY += introLineH;
+
+  // Line 3
+  let line3Offset = 0;
+  if (secondPartName) {
+    doc.setFont('helvetica', 'bold');
+    doc.text(`${secondPartName}, `, leftTableX, introY);
+    line3Offset = doc.getTextWidth(`${secondPartName}, `);
+  }
+  doc.setFont('helvetica', 'normal');
+  doc.text(
+    `${secondPartName ? '' : ', '}YOUR OPCEN MONITORING PERSONNEL`.replace(/^,\s*/, secondPartName ? '' : ''),
+    leftTableX + line3Offset,
+    introY
+  );
+  introY += introLineH;
+
+  // Line 4
+  doc.text('ON DUTY. LET US START WITH LGU', leftTableX, introY);
+
+  // Vector icon helpers for Checkmark (✔) and Cross (✖)
+  const drawCheckmarkVector = (
+    cx: number,
+    cy: number,
+    size: number,
+    color: [number, number, number] = [22, 101, 52],
+    lineW = 0.55
+  ) => {
+    doc.setDrawColor(color[0], color[1], color[2]);
+    doc.setLineWidth(lineW);
+    doc.line(cx - size * 0.45, cy + size * 0.05, cx - size * 0.1, cy + size * 0.42);
+    doc.line(cx - size * 0.1, cy + size * 0.42, cx + size * 0.48, cy - size * 0.42);
+  };
+
+  const drawCrossVector = (
+    cx: number,
+    cy: number,
+    size: number,
+    color: [number, number, number] = [185, 28, 28],
+    lineW = 0.55
+  ) => {
+    doc.setDrawColor(color[0], color[1], color[2]);
+    doc.setLineWidth(lineW);
+    const r = size * 0.36;
+    doc.line(cx - r, cy - r, cx + r, cy + r);
+    doc.line(cx + r, cy - r, cx - r, cy + r);
+  };
+
+  // 4. LEFT TABLE HEADER (# | LEAGUE OF DRRMO'S | ✔ | ✖)
+  const tableHeaderH = isShort ? 4.4 : isA4 ? 4.8 : isFolio ? 5.2 : 5.5;
+  const leftTableStartY = bodyStartY + introBlockH;
+
+  doc.setDrawColor(30, 41, 59);
+  doc.setLineWidth(0.22);
+  doc.rect(leftTableX, leftTableStartY, colTableWidth, tableHeaderH, 'S');
+  doc.line(leftTableX + wNum, leftTableStartY, leftTableX + wNum, leftTableStartY + tableHeaderH);
+  doc.line(leftTableX + wNum + wStation, leftTableStartY, leftTableX + wNum + wStation, leftTableStartY + tableHeaderH);
+  doc.line(
+    leftTableX + wNum + wStation + wCheck,
+    leftTableStartY,
+    leftTableX + wNum + wStation + wCheck,
+    leftTableStartY + tableHeaderH
+  );
+
+  const cellFontSize = isShort ? 6.0 : isA4 ? 6.35 : isFolio ? 6.8 : 7.1;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(cellFontSize);
+  doc.setTextColor(15, 23, 42);
+  doc.text('#', leftTableX + wNum / 2, leftTableStartY + tableHeaderH * 0.72, { align: 'center' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.text("LEAGUE OF DRRMO'S", leftTableX + wNum + 1.5, leftTableStartY + tableHeaderH * 0.72);
+
+  // Header ✔ and ✖ icons
+  drawCheckmarkVector(
+    leftTableX + wNum + wStation + wCheck / 2,
+    leftTableStartY + tableHeaderH / 2,
+    2.6,
+    [30, 41, 59],
+    0.45
+  );
+  drawCrossVector(
+    leftTableX + wNum + wStation + wCheck + wCross / 2,
+    leftTableStartY + tableHeaderH / 2,
+    2.6,
+    [15, 23, 42],
+    0.55
+  );
+
+  // Helper to compute line units for a station row (3 if has port, 2 if no port, except Cebu City = 1.4)
+  const getStationUnits = (stn: RollCallStationItem): number => {
+    if (stn.hasPort && stn.portName) return 3.0;
+    if (stn.name.toUpperCase() === 'CEBU CITY' && !stn.weatherStatus) return 1.45;
+    return 2.05;
+  };
+
+  // Compute exact proportional row heights for Left Column & Right Column so both align at bodyStartY + bodyAvailableH
+  const leftRowsAvailableH = bodyAvailableH - introBlockH - tableHeaderH;
+  const totalLeftUnits = leftStations.reduce((acc, s) => acc + getStationUnits(s), 0);
+  const leftUnitH = leftRowsAvailableH / totalLeftUnits;
+
+  const rightRowsAvailableH = bodyAvailableH;
+  const totalRightUnits = rightStations.reduce((acc, s) => acc + getStationUnits(s), 0);
+  const rightUnitH = rightRowsAvailableH / totalRightUnits;
+
+  // Row drawer function
+  const drawStationColumn = (
+    stations: RollCallStationItem[],
+    startIndex: number,
+    tableX: number,
+    startY: number,
+    unitH: number
+  ) => {
+    let curY = startY;
+
+    stations.forEach((stn, idx) => {
+      const stnNumber = startIndex + idx;
+      const units = getStationUnits(stn);
+      const rowH = units * unitH;
+
+      // Cell borders
+      doc.setDrawColor(51, 65, 85);
+      doc.setLineWidth(0.2);
+      doc.rect(tableX, curY, colTableWidth, rowH, 'S');
+      doc.line(tableX + wNum, curY, tableX + wNum, curY + rowH);
+      doc.line(tableX + wNum + wStation, curY, tableX + wNum + wStation, curY + rowH);
+      doc.line(tableX + wNum + wStation + wCheck, curY, tableX + wNum + wStation + wCheck, curY + rowH);
+
+      const isSingleLine = stn.name.toUpperCase() === 'CEBU CITY' && !stn.weatherStatus && !stn.hasPort;
+      const hasPortLine = Boolean(stn.hasPort && stn.portName);
+      const lineCount = isSingleLine ? 1 : hasPortLine ? 3 : 2;
+      const lineStep = rowH / (lineCount + 0.35);
+
+      // Col 1: Station Number (#)
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(cellFontSize);
+      doc.setTextColor(15, 23, 42);
+      const numY =
+        lineCount === 3
+          ? curY + lineStep * 2.05
+          : lineCount === 2
+          ? curY + lineStep * 1.1
+          : curY + rowH * 0.68;
+      doc.text(String(stnNumber), tableX + wNum / 2, numY, { align: 'center' });
+
+      // Col 2: Station Name + Weather + Optional Port
+      const textX = tableX + wNum + 1.5;
+      let textY = curY + lineStep * 0.98;
+
+      // Line 1: Station Name (Bold Uppercase)
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(cellFontSize);
+      doc.setTextColor(15, 23, 42);
+      doc.text(sanitizePdfText(stn.name.toUpperCase()), textX, textY);
+
+      const isPresent = stn.attendance === 'Present';
+      const isAbsent = stn.attendance === 'Absent';
+      const isExempted = stn.attendance === 'Exempted';
+
+      // Line 2: Weather
+      if (!isSingleLine) {
+        textY += lineStep;
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(cellFontSize - 0.15);
+        doc.setTextColor(15, 23, 42);
+        doc.text('Weather:', textX, textY);
+
+        if (isPresent && stn.weatherStatus && stn.weatherStatus !== 'N/A' && stn.weatherStatus !== 'None') {
+          const lblW = doc.getTextWidth('Weather: ');
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(30, 41, 59);
+          doc.text(sanitizePdfText(stn.weatherStatus), textX + lblW, textY);
+        }
+      }
+
+      // Line 3: Port (if coastal station with port)
+      if (hasPortLine && stn.portName) {
+        textY += lineStep;
+        const cleanPortLabel = stn.portName.endsWith(':')
+          ? stn.portName
+          : stn.name.toUpperCase() === 'ARGAO'
+          ? stn.portName
+          : `${stn.portName}:`;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(cellFontSize - 0.2);
+        doc.setTextColor(15, 23, 42);
+        doc.text(sanitizePdfText(cleanPortLabel), textX, textY);
+
+        if (isPresent && stn.portStatus && stn.portStatus !== 'N/A' && stn.portStatus !== 'None') {
+          const portLblW = doc.getTextWidth(`${sanitizePdfText(cleanPortLabel)} `);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(30, 41, 59);
+          doc.text(sanitizePdfText(stn.portStatus), textX + portLblW, textY);
+        }
+      }
+
+      // Col 3 (✔) & Col 4 (✖)
+      const checkCenterX = tableX + wNum + wStation + wCheck / 2;
+      const crossCenterX = tableX + wNum + wStation + wCheck + wCross / 2;
+      const iconCenterY = curY + rowH / 2;
+      const iconSize = Math.min(2.8, rowH * 0.35);
+
+      if (isPresent) {
+        drawCheckmarkVector(checkCenterX, iconCenterY, iconSize, [22, 101, 52], 0.55);
+      } else if (isAbsent) {
+        drawCrossVector(crossCenterX, iconCenterY, iconSize, [185, 28, 28], 0.55);
+      } else if (isExempted) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(cellFontSize - 0.5);
+        doc.setTextColor(180, 83, 9);
+        doc.text('EX', checkCenterX, iconCenterY + 0.8, { align: 'center' });
+      }
+
+      curY += rowH;
+    });
+
+    return curY;
+  };
+
+  // Draw Left Column (1 to 26) and Right Column (27 to 53)
+  const leftEndY = drawStationColumn(leftStations, 1, leftTableX, leftTableStartY + tableHeaderH, leftUnitH);
+  const rightEndY = drawStationColumn(rightStations, 27, rightTableX, bodyStartY, rightUnitH);
+
+  // 5. FOOTER: Closing Script & Sign-off Block
+  const footerStartY = Math.max(leftEndY, rightEndY) + (isShort ? 3.2 : isA4 ? 4.0 : isFolio ? 5.5 : 6.5);
+  const footerX = leftTableX + 12;
+  const footerFontSize = isShort ? 6.5 : isA4 ? 7.0 : 7.5;
+  const footerLineH = isShort ? 3.1 : isA4 ? 3.5 : 4.0;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(footerFontSize);
+  doc.setTextColor(15, 23, 42);
+
+  // Line 1: FOR CLOSING: That ends our 4PM Net Call,
+  const closePrefix = 'FOR CLOSING: That ends our ';
+  doc.text(closePrefix, footerX, footerStartY);
+  const closePrefixW = doc.getTextWidth(closePrefix);
+  doc.setFont('helvetica', 'bold');
+  doc.text(netHourLabel, footerX + closePrefixW, footerStartY);
+  const hourW = doc.getTextWidth(netHourLabel);
+  doc.line(footerX + closePrefixW, footerStartY + 0.5, footerX + closePrefixW + hourW, footerStartY + 0.5);
+  doc.setFont('helvetica', 'normal');
+  doc.text(' Net Call,', footerX + closePrefixW + hourW, footerStartY);
+
+  // Line 2: Once again this is your net controller (state your name). Please do standby for any possible Contact. Thank You. Amping Tanan!
+  const closeLine2Y = footerStartY + footerLineH;
+  const controllerLabel =
+    rawOfficer && rawOfficer.toLowerCase() !== 'monitoring officer' ? rawOfficer : '(state your name)';
+  doc.text(
+    `Once again this is your net controller ${controllerLabel}. Please do standby for any possible Contact. Thank You. Amping Tanan!`,
+    footerX,
+    closeLine2Y
+  );
+
+  // Sign-off row: ON DUTY PERSONNEL : _______________________   Time/Date : _______________________________
+  const signRowY = closeLine2Y + (isShort ? 5.2 : isA4 ? 6.2 : isFolio ? 8.0 : 9.0);
+  const signFontSize = isShort ? 7.5 : isA4 ? 8.0 : 8.5;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(signFontSize);
+  doc.setTextColor(15, 23, 42);
+
+  const dutyLabel = 'ON DUTY PERSONNEL : ';
+  doc.text(dutyLabel, footerX, signRowY);
+  const dutyLabelW = doc.getTextWidth(dutyLabel);
+  const dutyLineStartX = footerX + dutyLabelW + 1;
+  const dutyLineEndX = dutyLineStartX + 46;
+
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.3);
+  doc.line(dutyLineStartX, signRowY + 0.6, dutyLineEndX, signRowY + 0.6);
+
+  // Render Officer Name on the line if provided
+  if (rawOfficer) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(signFontSize - 0.5);
+    doc.text(rawOfficer.toUpperCase(), (dutyLineStartX + dutyLineEndX) / 2, signRowY - 0.4, { align: 'center' });
+  }
+
+  // Render Time/Date field
+  const timeDateX = rightTableX + 6;
+  const timeDateLabel = 'Time/Date : ';
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(signFontSize);
+  doc.text(timeDateLabel, timeDateX, signRowY);
+  const timeDateLabelW = doc.getTextWidth(timeDateLabel);
+  const tdLineStartX = timeDateX + timeDateLabelW + 1;
+  const tdLineEndX = pageWidth - marginX - 4;
+
+  doc.line(tdLineStartX, signRowY + 0.6, tdLineEndX, signRowY + 0.6);
+
+  const formattedDateTime = `${formatHeaderDate(data.sessionDate)} · ${data.sessionTime || '1600H'}`;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(signFontSize - 0.5);
+  doc.text(sanitizePdfText(formattedDateTime), (tdLineStartX + tdLineEndX) / 2, signRowY - 0.4, { align: 'center' });
+
+  // Subtle SHA-256 Digest watermark at bottom edge
+  if (data.fileHash) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5.2);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      `Certified Net Call Sheet (${dim.shortLabel}) · SHA-256: ${data.fileHash}`,
+      pageWidth / 2,
+      pageHeight - 2.2,
+      { align: 'center' }
+    );
+  }
+
+  doc.setDocumentProperties({
+    title: data.filename,
+    subject: `PDRRMO OPCEN Net Call Sheet (${dim.shortLabel}) - ${data.sessionDate}`,
+    author: data.conductedBy,
+    creator: 'PDRRMO Monitoring & Logging System',
+    keywords: JSON.stringify(data.snapshotPayload || {}),
+  });
+
+  const blob = doc.output('blob');
+  return {
+    blob,
+    sizeBytes: blob.size,
+    hash: data.fileHash,
+  };
+}
+
+/**
+ * Generates an official certified PDF for Roll Call following either:
+ * - 'official_table' (Template-Example-FileFormat-MLS.docx)
+ * - 'net_calling' (For NET CALLING.pdf 2-Column Single-Page Sheet)
+ * Supports A4, SHORT, FOLIO, and LEGAL paper sizes.
+ */
+export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob: Blob; sizeBytes: number; hash: string }> {
+  if (data.templateType === 'net_calling') {
+    return generateNetCallingPDF(data, { paperSize: data.paperSize });
+  }
+
+  const paperSize: PaperSize = data.paperSize || 'a4';
+  const dim = PAPER_DIMENSIONS[paperSize] || PAPER_DIMENSIONS.a4;
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: [dim.width, dim.height],
     compress: true,
   });
 

@@ -38,6 +38,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   RefreshCw,
+  Download,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -59,7 +60,12 @@ import { RollCallTableSkeleton, Skeleton } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
-import { generateRollCallPDF } from '@/lib/pdf-generator';
+import {
+  generateRollCallPDF,
+  PAPER_DIMENSIONS,
+  type PaperSize,
+  type RollCallTemplateType,
+} from '@/lib/pdf-generator';
 import { format } from 'date-fns';
 
 // =============================================================================
@@ -342,6 +348,8 @@ export default function RollCallPage() {
   const [areasList, setAreasList] = useState<MunicipalityRow[]>([]);
   const [municipalities, setMunicipalities] = useState<MunicipalityRow[]>([]);
   const [activeSession, setActiveSession] = useState<RollCallSessionRecord | null>(null);
+  const [stationsPage, setStationsPage] = useState(1);
+  const stationsPerPage = 10;
 
   // Analytics History Sessions
   const [analyticsSessions, setAnalyticsSessions] = useState<RollCallHistorySession[]>([]);
@@ -384,6 +392,8 @@ export default function RollCallPage() {
   const [isRecordPreviewModalOpen, setIsRecordPreviewModalOpen] = useState(false);
   const [previewFilter, setPreviewFilter] = useState<'all' | 'Present' | 'Absent' | 'Exempted' | 'incomplete'>('all');
   const [previewSearchQuery, setPreviewSearchQuery] = useState('');
+  const [selectedTemplateType, setSelectedTemplateType] = useState<RollCallTemplateType>('net_calling');
+  const [selectedPaperSize, setSelectedPaperSize] = useState<PaperSize>('a4');
 
   // Success Confirmation State & Summary Storage
   const [showSaveToast, setShowSaveToast] = useState(false);
@@ -912,6 +922,13 @@ export default function RollCallPage() {
   const exemptedCount = municipalities.filter((m) => m.attendance === 'Exempted').length;
   const recordedCount = presentCount + absentCount + exemptedCount;
 
+  // Pagination for Monitoring Stations & LGUs Table (Max 10 per page)
+  const totalStationPages = Math.max(1, Math.ceil(totalCount / stationsPerPage));
+  const paginatedMunicipalities = useMemo(() => {
+    const start = (stationsPage - 1) * stationsPerPage;
+    return municipalities.slice(start, start + stationsPerPage);
+  }, [municipalities, stationsPage, stationsPerPage]);
+
   // Filter analytics sessions by selected month
   const currentMonthKey = useMemo(() => format(new Date(), 'yyyy-MM'), []);
   const currentMonthName = useMemo(() => format(new Date(), 'MMMM yyyy'), []);
@@ -1210,6 +1227,11 @@ export default function RollCallPage() {
 
       if (nextIncompleteMun) {
         setAutoAdvancingNotice(`Auto-advancing to ${nextIncompleteMun.name}...`);
+        const nextMunIndex = municipalities.findIndex((m) => m.id === nextIncompleteMun.id);
+        if (nextMunIndex !== -1) {
+          const targetPage = Math.floor(nextMunIndex / stationsPerPage) + 1;
+          setStationsPage((prev) => (prev !== targetPage ? targetPage : prev));
+        }
         autoAdvanceTimerRef.current = setTimeout(() => {
           const el = document.getElementById(`station-row-${nextIncompleteMun.id}`);
           if (el) {
@@ -1226,6 +1248,7 @@ export default function RollCallPage() {
   // Start Live Roll Call Session
   const handleStartRollCall = async () => {
     if (isRollCallViewOnly) return;
+    setStationsPage(1);
     setIsSubmitting(true);
     try {
       const now = new Date();
@@ -1555,7 +1578,7 @@ export default function RollCallPage() {
 
       const archiveFilename = `ROLLCALL-REPORT-${dateFormatted.replace(/-/g, '')}-${timeFormatted}.pdf`;
 
-      // 2. Generate PDF document (no digital signature, line for physical in-person signing)
+      // 2. Generate PDF document (using selected Template Format & Paper Size)
       const { blob: pdfBlob, sizeBytes: pdfSize } = await generateRollCallPDF({
         filename: archiveFilename,
         sessionDate: dateFormatted,
@@ -1572,7 +1595,13 @@ export default function RollCallPage() {
         weatherSummary: weatherSummaryText,
         entries: entriesList,
         fileHash: fileHash,
-        snapshotPayload: snapshotPayload,
+        snapshotPayload: {
+          ...snapshotPayload,
+          templateType: selectedTemplateType,
+          paperSize: selectedPaperSize,
+        },
+        templateType: selectedTemplateType,
+        paperSize: selectedPaperSize,
       });
 
       // 3. Upload to storage bucket 'archive-documents'
@@ -1689,6 +1718,74 @@ export default function RollCallPage() {
       alert(`Could not save record: ${err.message || err}`);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Immediate PDF Export / Download for Selected Template & Paper Size
+  const handleQuickExportPDF = async (
+    templateOverride?: RollCallTemplateType,
+    paperOverride?: PaperSize
+  ) => {
+    try {
+      const tpl = templateOverride || selectedTemplateType;
+      const pSize = paperOverride || selectedPaperSize;
+      const now = new Date();
+      const dateFormatted = activeSession?.session_date || now.toISOString().split('T')[0];
+      const timeFormatted = activeSession?.session_time || format(now, 'HHmm') + 'H';
+      const officerName = activeSession?.conducted_by_name || profile?.full_name || 'Monitoring Officer';
+      const officerRole = activeSession?.conducted_by_role || profile?.position_title || 'Duty Operations Officer';
+
+      const entriesList = municipalities.map((m) => ({
+        name: m.name,
+        code: m.code,
+        attendance: m.attendance || 'Absent',
+        weatherStatus: m.weatherStatus || null,
+        portStatus: m.portStatus || null,
+        hasPort: m.hasPort,
+        portName: m.portName,
+        timeResponded: m.timeResponded || null,
+      }));
+
+      const tplTag = tpl === 'net_calling' ? 'NETCALL' : 'OFFICIAL';
+      const sizeTag = pSize.toUpperCase();
+      const filename = `ROLLCALL-${tplTag}-${sizeTag}-${dateFormatted.replace(/-/g, '')}-${timeFormatted}.pdf`;
+
+      const { blob } = await generateRollCallPDF({
+        filename,
+        sessionDate: dateFormatted,
+        sessionTime: timeFormatted,
+        frequency: activeSession?.frequency || '142.500 MHz Primary VHF Net',
+        radioScript: activeSession?.radio_script || radioScript,
+        conductedBy: officerName,
+        conductedByRole: officerRole,
+        signatureUrl: null,
+        totalStations: totalCount,
+        present: presentCount,
+        absent: absentCount,
+        exempted: exemptedCount,
+        weatherSummary: `${presentCount} Present · ${absentCount} Absent · ${exemptedCount} Exempted`,
+        entries: entriesList,
+        fileHash: `PREVIEW-${Date.now()}`,
+        templateType: tpl,
+        paperSize: pSize,
+      });
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+      setSaveToastMessage({
+        title: 'Roll Call PDF Exported',
+        subtitle: `Downloaded ${tpl === 'net_calling' ? 'Net Calling Sheet' : 'Official MLS Table'} (${PAPER_DIMENSIONS[pSize].shortLabel}).`,
+      });
+      setShowSaveToast(true);
+    } catch (err) {
+      console.error('Error exporting roll call PDF:', err);
     }
   };
 
@@ -2117,12 +2214,12 @@ export default function RollCallPage() {
 
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-semibold text-[#505F76]">
-                        Progress: <strong className="text-[#1E293B]">{recordedCount} / {totalCount}</strong>
+                        Page Progress: <strong className="text-[#1E293B]">{stationsPage} / {totalStationPages}</strong>
                       </span>
-                      <div className="w-24 h-2 rounded-full bg-slate-200 overflow-hidden">
+                      <div className="w-24 h-2 rounded-full bg-slate-200 overflow-hidden" title={`Page ${stationsPage} of ${totalStationPages}`}>
                         <div
                           className="h-full bg-[#004AC6] transition-all duration-300"
-                          style={{ width: `${totalCount > 0 ? (recordedCount / totalCount) * 100 : 0}%` }}
+                          style={{ width: `${totalStationPages > 0 ? (stationsPage / totalStationPages) * 100 : 0}%` }}
                         />
                       </div>
                     </div>
@@ -2140,7 +2237,7 @@ export default function RollCallPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {municipalities.map((mun) => {
+                        {paginatedMunicipalities.map((mun) => {
                           const isComplete = isRowComplete(mun);
                           return (
                             <tr
@@ -2154,23 +2251,18 @@ export default function RollCallPage() {
                                   : ''
                               }`}
                             >
-                              {/* Station Name & Code */}
+                              {/* Station Name */}
                               <td className="py-3.5 px-4 sm:px-6">
-                                <div className="flex items-center gap-2.5">
-                                  <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-[#505F76] border border-slate-200 shrink-0">
-                                    {mun.code}
+                                <div>
+                                  <span className="font-bold text-[#1E293B] block">
+                                    {mun.name}
                                   </span>
-                                  <div>
-                                    <span className="font-bold text-[#1E293B] block">
-                                      {mun.name}
+                                  {mun.hasPort && (
+                                    <span className="text-[10px] text-sky-700 font-medium flex items-center gap-1">
+                                      <Anchor className="w-2.5 h-2.5" />
+                                      {mun.portName || 'Coastal Port'}
                                     </span>
-                                    {mun.hasPort && (
-                                      <span className="text-[10px] text-sky-700 font-medium flex items-center gap-1">
-                                        <Anchor className="w-2.5 h-2.5" />
-                                        {mun.portName || 'Coastal Port'}
-                                      </span>
-                                    )}
-                                  </div>
+                                  )}
                                 </div>
                               </td>
 
@@ -2256,6 +2348,78 @@ export default function RollCallPage() {
                         })}
                       </tbody>
                     </table>
+                  </div>
+
+                  {/* Pagination Footer (Max 10 per page) */}
+                  <div className="p-4 sm:p-5 border-t border-[#E2E8F0] flex flex-col sm:flex-row items-center justify-between gap-3 bg-[#F8FAFC]/80">
+                    <span className="text-xs text-[#505F76] font-medium">
+                      Showing{' '}
+                      <strong className="text-[#1E293B]">
+                        {totalCount > 0 ? (stationsPage - 1) * stationsPerPage + 1 : 0}
+                      </strong>{' '}
+                      to{' '}
+                      <strong className="text-[#1E293B]">
+                        {Math.min(stationsPage * stationsPerPage, totalCount)}
+                      </strong>{' '}
+                      of <strong className="text-[#1E293B]">{totalCount}</strong> stations
+                    </span>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={stationsPage === 1}
+                        onClick={() => setStationsPage((p) => Math.max(1, p - 1))}
+                        className="w-8 h-8 rounded-full border border-[#E2E8F0] bg-white flex items-center justify-center text-[#505F76] hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-2xs"
+                        title="Previous page"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+
+                      {Array.from({ length: totalStationPages }).map((_, i) => {
+                        const pageNum = i + 1;
+                        if (
+                          totalStationPages <= 7 ||
+                          pageNum === 1 ||
+                          pageNum === totalStationPages ||
+                          Math.abs(pageNum - stationsPage) <= 1
+                        ) {
+                          return (
+                            <button
+                              key={pageNum}
+                              type="button"
+                              onClick={() => setStationsPage(pageNum)}
+                              className={`w-8 h-8 rounded-full text-xs font-semibold flex items-center justify-center transition-all cursor-pointer ${
+                                stationsPage === pageNum
+                                  ? 'bg-[#004AC6] text-white shadow-xs font-bold'
+                                  : 'border border-[#E2E8F0] bg-white text-[#505F76] hover:bg-slate-50 shadow-2xs'
+                              }`}
+                            >
+                              {pageNum}
+                            </button>
+                          );
+                        } else if (
+                          (pageNum === 2 && stationsPage > 3) ||
+                          (pageNum === totalStationPages - 1 && stationsPage < totalStationPages - 2)
+                        ) {
+                          return (
+                            <span key={pageNum} className="px-1 text-slate-400 font-bold select-none">
+                              ...
+                            </span>
+                          );
+                        }
+                        return null;
+                      })}
+
+                      <button
+                        type="button"
+                        disabled={stationsPage === totalStationPages || totalStationPages === 0}
+                        onClick={() => setStationsPage((p) => Math.min(totalStationPages, p + 1))}
+                        className="w-8 h-8 rounded-full border border-[#E2E8F0] bg-white flex items-center justify-center text-[#505F76] hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-2xs"
+                        title="Next page"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3037,6 +3201,62 @@ export default function RollCallPage() {
                   </div>
                 </div>
 
+                {/* Template Format & Paper Size Selector Strip */}
+                <div className="px-5 sm:px-8 py-2.5 bg-white border-b border-[#E2E8F0] flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-[#505F76] uppercase tracking-wider text-[10px]">
+                      PDF Template:
+                    </span>
+                    <div className="flex items-center bg-[#F1F5F9] p-0.5 rounded-full border border-[#E2E8F0]">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTemplateType('net_calling')}
+                        className={`px-3 py-1 rounded-full font-bold transition-all cursor-pointer ${
+                          selectedTemplateType === 'net_calling'
+                            ? 'bg-[#004AC6] text-white shadow-xs'
+                            : 'text-[#505F76] hover:text-[#1E293B]'
+                        }`}
+                      >
+                        For Net Calling (2-Column)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTemplateType('official_table')}
+                        className={`px-3 py-1 rounded-full font-bold transition-all cursor-pointer ${
+                          selectedTemplateType === 'official_table'
+                            ? 'bg-[#004AC6] text-white shadow-xs'
+                            : 'text-[#505F76] hover:text-[#1E293B]'
+                        }`}
+                      >
+                        Official MLS Table
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-[#505F76] uppercase tracking-wider text-[10px]">
+                      Paper Size:
+                    </span>
+                    <div className="flex items-center bg-[#F1F5F9] p-0.5 rounded-full border border-[#E2E8F0]">
+                      {(['a4', 'short', 'folio', 'legal'] as PaperSize[]).map((sizeKey) => (
+                        <button
+                          key={sizeKey}
+                          type="button"
+                          onClick={() => setSelectedPaperSize(sizeKey)}
+                          title={PAPER_DIMENSIONS[sizeKey].label}
+                          className={`px-2.5 py-1 rounded-full font-bold transition-all cursor-pointer uppercase text-[11px] ${
+                            selectedPaperSize === sizeKey
+                              ? 'bg-emerald-600 text-white shadow-xs'
+                              : 'text-[#505F76] hover:text-[#1E293B]'
+                          }`}
+                        >
+                          {PAPER_DIMENSIONS[sizeKey].shortLabel}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 {/* Filter Tabs & Search Bar */}
                 <div className="px-4 sm:px-8 py-3.5 border-b border-[#E2E8F0] flex flex-col sm:flex-row justify-between items-center gap-3">
                   <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto">
@@ -3131,26 +3351,38 @@ export default function RollCallPage() {
                 </div>
 
                 {/* Footer */}
-                <div className="px-4 sm:px-8 py-4 sm:py-4.5 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 flex flex-col sm:flex-row justify-end items-center gap-3">
+                <div className="px-4 sm:px-8 py-4 sm:py-4.5 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 flex flex-col sm:flex-row justify-between items-center gap-3">
                   <SecondaryButton
                     size="md"
                     pill
-                    onClick={() => setIsRecordPreviewModalOpen(false)}
+                    onClick={() => handleQuickExportPDF(selectedTemplateType, selectedPaperSize)}
+                    leftIcon={<Download className="w-4 h-4" />}
                     className="w-full sm:w-auto justify-center"
                   >
-                    Continue Editing
+                    Export PDF ({PAPER_DIMENSIONS[selectedPaperSize].shortLabel})
                   </SecondaryButton>
 
-                  <PrimaryButton
-                    size="md"
-                    pill
-                    disabled={isSubmitting || recordedCount === 0}
-                    onClick={handleFinalizeSaveRecord}
-                    leftIcon={isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    className="w-full sm:w-auto justify-center"
-                  >
-                    {isSubmitting ? 'Archiving...' : 'Confirm & Finalize Record'}
-                  </PrimaryButton>
+                  <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full sm:w-auto">
+                    <SecondaryButton
+                      size="md"
+                      pill
+                      onClick={() => setIsRecordPreviewModalOpen(false)}
+                      className="w-full sm:w-auto justify-center"
+                    >
+                      Continue Editing
+                    </SecondaryButton>
+
+                    <PrimaryButton
+                      size="md"
+                      pill
+                      disabled={isSubmitting || recordedCount === 0}
+                      onClick={handleFinalizeSaveRecord}
+                      leftIcon={isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      className="w-full sm:w-auto justify-center"
+                    >
+                      {isSubmitting ? 'Archiving...' : 'Confirm & Finalize Record'}
+                    </PrimaryButton>
+                  </div>
                 </div>
               </motion.div>
             </div>

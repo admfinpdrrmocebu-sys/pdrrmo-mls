@@ -471,7 +471,10 @@ export default function AnnouncementsPage() {
       const existingAck = target.acknowledgments?.find(
         (a) => a.userId === currentUserId || a.userId === user?.id || a.userId === profile?.id
       );
-      const isCurrentlyAcked = !!existingAck;
+      // Once acknowledged, it cannot be clicked back or unacknowledged
+      if (existingAck) {
+        return;
+      }
 
       // Mark button as loading
       setAcknowledgingIds((prev) => ({ ...prev, [announcementId]: true }));
@@ -481,22 +484,17 @@ export default function AnnouncementsPage() {
       const currentUserRole = profile?.role || profile?.position_title || 'Officer';
       const currentUserAvatar = profile?.avatar_url || null;
 
-      const updatedAcks: AnnouncementAcknowledgment[] = isCurrentlyAcked
-        ? target.acknowledgments.filter(
-            (a) => a.userId !== currentUserId && a.userId !== user?.id && a.userId !== profile?.id
-          )
-        : [
-            ...target.acknowledgments,
-            {
-              id: 'temp-' + Date.now(),
-              announcementId,
-              userId: currentUserId,
-              userName: currentUserName,
-              userAvatarUrl: currentUserAvatar,
-              userRole: currentUserRole,
-              createdAt: 'Just now',
-            },
-          ];
+      const newAck: AnnouncementAcknowledgment = {
+        id: 'temp-' + Date.now(),
+        announcementId,
+        userId: currentUserId,
+        userName: currentUserName,
+        userAvatarUrl: currentUserAvatar,
+        userRole: currentUserRole,
+        createdAt: 'Just now',
+      };
+
+      const updatedAcks: AnnouncementAcknowledgment[] = [...target.acknowledgments, newAck];
 
       setAnnouncements((prev) =>
         prev.map((a) => (a.id === announcementId ? { ...a, acknowledgments: updatedAcks } : a))
@@ -506,35 +504,19 @@ export default function AnnouncementsPage() {
       );
 
       try {
-        if (isCurrentlyAcked) {
-          const { error } = await supabase
-            .from('announcement_acknowledgments')
-            .delete()
-            .eq('announcement_id', announcementId)
-            .eq('user_id', currentUserId);
+        const { error } = await supabase
+          .from('announcement_acknowledgments')
+          .insert({
+            announcement_id: announcementId,
+            user_id: currentUserId,
+          });
 
-          if (error) {
-            console.error('Error removing acknowledgment:', error);
-            showToast('Failed to update acknowledgment', error.message, 'error');
-            fetchAnnouncements(false);
-          } else {
-            showToast('Acknowledgment removed', 'You have unacknowledged this announcement', 'info');
-          }
+        if (error) {
+          console.error('Error saving acknowledgment:', error);
+          showToast('Failed to acknowledge', error.message, 'error');
+          fetchAnnouncements(false);
         } else {
-          const { error } = await supabase
-            .from('announcement_acknowledgments')
-            .insert({
-              announcement_id: announcementId,
-              user_id: currentUserId,
-            });
-
-          if (error) {
-            console.error('Error saving acknowledgment:', error);
-            showToast('Failed to acknowledge', error.message, 'error');
-            fetchAnnouncements(false);
-          } else {
-            showToast('Announcement Acknowledged', 'Your acknowledgment has been recorded', 'success');
-          }
+          showToast('Announcement Acknowledged', 'Your acknowledgment has been recorded', 'success');
         }
       } catch (err: any) {
         console.error('Unexpected error toggling acknowledgment:', err);
@@ -1100,19 +1082,21 @@ export default function AnnouncementsPage() {
                         <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
                           <button
                             type="button"
-                            disabled={isAcknowledging}
+                            disabled={isAcknowledging || hasAcknowledged}
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleToggleAcknowledge(item.id);
+                              if (!hasAcknowledged) {
+                                handleToggleAcknowledge(item.id);
+                              }
                             }}
-                            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-2xs select-none ${
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all select-none ${
                               hasAcknowledged
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/90 hover:bg-emerald-100 hover:border-emerald-300'
-                                : 'bg-[#004AC6] text-white hover:bg-[#003594] hover:shadow-xs active:scale-95'
-                            } disabled:opacity-60 disabled:pointer-events-none`}
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/90 cursor-default opacity-95'
+                                : 'bg-[#004AC6] text-white hover:bg-[#003594] hover:shadow-xs active:scale-95 cursor-pointer disabled:opacity-60 disabled:pointer-events-none'
+                            }`}
                             title={
                               hasAcknowledged
-                                ? 'Click to undo acknowledgment'
+                                ? 'You have acknowledged this announcement'
                                 : 'Click to acknowledge reading this announcement'
                             }
                           >
@@ -1600,14 +1584,22 @@ export default function AnnouncementsPage() {
                     return (
                       <button
                         type="button"
-                        disabled={isModalAcking}
-                        onClick={() => handleToggleAcknowledge(viewingAnnouncement.id)}
-                        className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-2xs select-none ${
+                        disabled={isModalAcking || hasModalAcked}
+                        onClick={() => {
+                          if (!hasModalAcked) {
+                            handleToggleAcknowledge(viewingAnnouncement.id);
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all select-none ${
                           hasModalAcked
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
-                            : 'bg-[#004AC6] text-white hover:bg-[#003594] active:scale-95'
-                        } disabled:opacity-60 disabled:pointer-events-none`}
-                        title={hasModalAcked ? 'Click to undo acknowledgment' : 'Click to acknowledge reading'}
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-default opacity-95'
+                            : 'bg-[#004AC6] text-white hover:bg-[#003594] active:scale-95 cursor-pointer disabled:opacity-60 disabled:pointer-events-none'
+                        }`}
+                        title={
+                          hasModalAcked
+                            ? 'You have acknowledged this announcement'
+                            : 'Click to acknowledge reading this announcement'
+                        }
                       >
                         {isModalAcking ? (
                           <>

@@ -257,41 +257,53 @@ export interface PresentOfficerCardProps {
   member: OfficerMember;
 }
 
-export const PresentOfficerCard = React.memo(function PresentOfficerCard({ member }: PresentOfficerCardProps) {
-  const badge = getRoleBadge(member.userRole);
-  return (
-    <div className="p-3.5 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-2xs space-y-2.5">
-      <div className="flex items-center gap-3">
-        <OfficerAvatar officer={member} size="md" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
-              {member.name}
-            </h4>
-            {member.isLead && (
-              <span className="text-[9px] font-bold bg-blue-100 text-[#004AC6] px-1.5 py-0.2 rounded shrink-0">
-                LEAD
-              </span>
-            )}
+export const PresentOfficerCard = React.memo(
+  function PresentOfficerCard({ member }: PresentOfficerCardProps) {
+    const badge = getRoleBadge(member.userRole);
+    return (
+      <div className="p-3.5 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-2xs space-y-2.5">
+        <div className="flex items-center gap-3">
+          <OfficerAvatar officer={member} size="md" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+                {member.name}
+              </h4>
+              {member.isLead && (
+                <span className="text-[9px] font-bold bg-blue-100 text-[#004AC6] px-1.5 py-0.2 rounded shrink-0">
+                  LEAD
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-[#757680] truncate font-medium">
+              {member.role}
+            </p>
           </div>
-          <p className="text-[11px] text-[#757680] truncate font-medium">
-            {member.role}
-          </p>
+          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
+            {badge.label}
+          </span>
         </div>
-        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
-          {badge.label}
-        </span>
-      </div>
 
-      <div className="pt-2 border-t border-slate-100 text-[11px] text-[#505F76] flex items-center justify-between">
-        <span className="text-[#757680]">Status:</span>
-        <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px]">
-          Present / On-Duty
-        </span>
+        <div className="pt-2 border-t border-slate-100 text-[11px] text-[#505F76] flex items-center justify-between">
+          <span className="text-[#757680]">Status:</span>
+          <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px]">
+            Present / On-Duty
+          </span>
+        </div>
       </div>
-    </div>
-  );
-});
+    );
+  },
+  (prev, next) => {
+    return (
+      prev.member.id === next.member.id &&
+      prev.member.name === next.member.name &&
+      prev.member.role === next.member.role &&
+      prev.member.isLead === next.member.isLead &&
+      prev.member.avatarUrl === next.member.avatarUrl &&
+      prev.member.userRole === next.member.userRole
+    );
+  }
+);
 
 export interface AbsentOfficerCardProps {
   person: OfficerMember;
@@ -299,65 +311,210 @@ export interface AbsentOfficerCardProps {
   onSetPresent: (id: string) => void;
 }
 
-export const AbsentOfficerCard = React.memo(function AbsentOfficerCard({
-  person,
-  isShiftViewOnly,
-  onSetPresent,
-}: AbsentOfficerCardProps) {
-  return (
-    <div className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs space-y-2.5">
-      <div className="flex items-center gap-3">
-        <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
-        <div className="min-w-0 flex-1">
-          <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
-            {person.name}
-          </h4>
-          <p className="text-[11px] text-rose-700 truncate font-medium">
-            {person.role}
-          </p>
+export const AbsentOfficerCard = React.memo(
+  function AbsentOfficerCard({
+    person,
+    isShiftViewOnly,
+    onSetPresent,
+  }: AbsentOfficerCardProps) {
+    return (
+      <div className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs space-y-2.5">
+        <div className="flex items-center gap-3">
+          <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
+          <div className="min-w-0 flex-1">
+            <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+              {person.name}
+            </h4>
+            <p className="text-[11px] text-rose-700 truncate font-medium">
+              {person.role}
+            </p>
+          </div>
         </div>
-      </div>
 
-      <div className="pt-2 border-t border-rose-200/60 text-[11px] text-[#505F76] flex items-center justify-between">
-        <span className="text-[#757680]">Status:</span>
-        <span className="font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full text-[10px]">
-          Reported Absent
-        </span>
-      </div>
+        <div className="pt-2 border-t border-rose-200/60 text-[11px] text-[#505F76] flex items-center justify-between">
+          <span className="text-[#757680]">Status:</span>
+          <span className="font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full text-[10px]">
+            Reported Absent
+          </span>
+        </div>
 
-      {!isShiftViewOnly && (
-        <button
-          type="button"
-          onClick={() => onSetPresent(person.id)}
-          className="w-full py-1.5 px-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
-        >
-          <Check className="w-3.5 h-3.5" />
-          Mark as Present
-        </button>
-      )}
-    </div>
-  );
-});
+        {!isShiftViewOnly && (
+          <button
+            type="button"
+            onClick={() => onSetPresent(person.id)}
+            className="w-full py-1.5 px-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
+          >
+            <Check className="w-3.5 h-3.5" />
+            Mark as Present
+          </button>
+        )}
+      </div>
+    );
+  },
+  (prev, next) => {
+    return (
+      prev.person.id === next.person.id &&
+      prev.person.name === next.person.name &&
+      prev.person.role === next.person.role &&
+      prev.person.avatarUrl === next.person.avatarUrl &&
+      prev.isShiftViewOnly === next.isShiftViewOnly &&
+      prev.onSetPresent === next.onSetPresent
+    );
+  }
+);
 
 export interface RestDayOfficerCardProps {
   person: OfficerMember;
 }
 
-export const RestDayOfficerCard = React.memo(function RestDayOfficerCard({ person }: RestDayOfficerCardProps) {
-  const badge = getRoleBadge(person.userRole);
-  return (
-    <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3 shadow-2xs">
-      <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-bold text-[#1E293B] truncate">{person.name}</p>
-        <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
+export const RestDayOfficerCard = React.memo(
+  function RestDayOfficerCard({ person }: RestDayOfficerCardProps) {
+    const badge = getRoleBadge(person.userRole);
+    return (
+      <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3 shadow-2xs">
+        <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-bold text-[#1E293B] truncate">{person.name}</p>
+          <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
+        </div>
+        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
+          {badge.label}
+        </span>
       </div>
-      <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
-        {badge.label}
-      </span>
+    );
+  },
+  (prev, next) => {
+    return (
+      prev.person.id === next.person.id &&
+      prev.person.name === next.person.name &&
+      prev.person.role === next.person.role &&
+      prev.person.avatarUrl === next.person.avatarUrl &&
+      prev.person.userRole === next.person.userRole
+    );
+  }
+);
+
+/**
+ * Optimized Paginated Personnel List:
+ * - Maximum 5 personnel per page
+ * - Simple '<' and '>' controls
+ * - Lazy Page Mounting: Data is NOT rendered if not viewed yet
+ * - Persistent Page Nodes: Once viewed, pages remain in the DOM so they do NOT re-render
+ */
+export function PaginatedPersonnelList<T extends { id: string }>({
+  items,
+  pageSize = 5,
+  page,
+  onPageChange,
+  renderItem,
+  emptyState,
+  containerClassName = 'space-y-3',
+}: {
+  items: T[];
+  pageSize?: number;
+  page: number;
+  onPageChange: (newPage: number) => void;
+  renderItem: (item: T) => React.ReactNode;
+  emptyState: React.ReactNode;
+  containerClassName?: string;
+}) {
+  const [visitedPages, setVisitedPages] = useState<Set<number>>(() => new Set([1]));
+
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+
+  // If item IDs change (e.g. role filter changed, item removed/added), reset visited pages to current page
+  const itemsSignature = useMemo(() => items.map((i) => i.id).join(','), [items]);
+  useEffect(() => {
+    setVisitedPages(new Set([safePage]));
+  }, [itemsSignature, safePage]);
+
+  // Track newly visited page
+  useEffect(() => {
+    setVisitedPages((prev) => {
+      if (prev.has(safePage)) return prev;
+      const next = new Set(prev);
+      next.add(safePage);
+      return next;
+    });
+  }, [safePage]);
+
+  // Pre-chunk into pages of max 5
+  const pagesData = useMemo(() => {
+    const chunks: T[][] = [];
+    for (let p = 0; p < totalPages; p++) {
+      chunks.push(items.slice(p * pageSize, (p + 1) * pageSize));
+    }
+    return chunks;
+  }, [items, totalPages, pageSize]);
+
+  if (items.length === 0) {
+    return <>{emptyState}</>;
+  }
+
+  const startIdx = (safePage - 1) * pageSize + 1;
+  const endIdx = Math.min(safePage * pageSize, items.length);
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0 justify-between">
+      {/* Pages Container: Only pages that have been viewed are rendered in the DOM */}
+      <div className={containerClassName}>
+        {pagesData.map((pageItems, idx) => {
+          const pageNum = idx + 1;
+          // Unviewed pages are NOT rendered in the DOM
+          if (!visitedPages.has(pageNum)) {
+            return null;
+          }
+
+          const isActive = pageNum === safePage;
+          return (
+            <div
+              key={pageNum}
+              className={isActive ? containerClassName : 'hidden'}
+              aria-hidden={!isActive}
+            >
+              {pageItems.map((item) => renderItem(item))}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Pagination Bar (< 1 / 3 >) */}
+      {totalPages > 1 && (
+        <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-between text-xs text-[#757680] mt-3 shrink-0 select-none">
+          <span className="text-[11px] font-medium font-mono text-[#757680]">
+            {startIdx}–{endIdx} of {items.length}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => onPageChange(Math.max(1, safePage - 1))}
+              className="w-7 h-7 rounded-lg flex items-center justify-center border border-[#E2E8F0] bg-white hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none cursor-pointer text-[#1E293B] transition-colors shadow-2xs"
+              aria-label="Previous page"
+              title="Previous page"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-xs font-bold text-[#1E293B] px-1 font-mono min-w-9 text-center select-none">
+              {safePage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={safePage >= totalPages}
+              onClick={() => onPageChange(Math.min(totalPages, safePage + 1))}
+              className="w-7 h-7 rounded-lg flex items-center justify-center border border-[#E2E8F0] bg-white hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none cursor-pointer text-[#1E293B] transition-colors shadow-2xs"
+              aria-label="Next page"
+              title="Next page"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
-});
+}
 
 export interface CalendarDayCellProps {
   cell: {
@@ -383,7 +540,7 @@ export const CalendarDayCell = React.memo(function CalendarDayCell({ cell, onSel
     <button
       type="button"
       onClick={() => onSelectDate(cell.date)}
-      className={`min-h-[85px] p-2 rounded-2xl text-left border flex flex-col justify-between transition-all cursor-pointer relative ${
+      className={`min-h-[52px] sm:min-h-[85px] p-1.5 sm:p-2 rounded-xl sm:rounded-2xl text-left border flex flex-col justify-between transition-all cursor-pointer relative ${
         !cell.isCurrentMonth
           ? 'opacity-35 bg-slate-50/50 border-slate-100'
           : cell.isSelected
@@ -408,29 +565,46 @@ export const CalendarDayCell = React.memo(function CalendarDayCell({ cell, onSel
         </span>
 
         {cell.isCurrentDay && !cell.isSelected && (
-          <span className="text-[9px] font-bold text-[#004AC6]">Today</span>
+          <span className="hidden sm:inline text-[9px] font-bold text-[#004AC6]">Today</span>
         )}
       </div>
 
       {/* Shift Badge on Day */}
-      <div className="mt-1">
+      <div className="mt-1 w-full">
         {isDuty ? (
-          <div
-            style={{
-              color: shiftColor,
-              backgroundColor: `${shiftColor}15`,
-              borderColor: `${shiftColor}30`,
-            }}
-            className="px-1.5 py-0.5 rounded-lg text-[10px] font-bold border leading-tight truncate"
-          >
-            {cell.assignment.shift?.name ? cell.assignment.shift.name.split(' ')[0] : 'Duty'}
-          </div>
+          <>
+            {/* Mobile screen: colored circle indicator */}
+            <div className="flex justify-center sm:hidden py-0.5">
+              <span
+                style={{ backgroundColor: shiftColor }}
+                className="w-2.5 h-2.5 rounded-full shadow-2xs"
+              />
+            </div>
+            {/* PC screen: badge with shift name */}
+            <div
+              style={{
+                color: shiftColor,
+                backgroundColor: `${shiftColor}15`,
+                borderColor: `${shiftColor}30`,
+              }}
+              className="hidden sm:block px-1.5 py-0.5 rounded-lg text-[10px] font-bold border leading-tight truncate"
+            >
+              {cell.assignment.shift?.name ? cell.assignment.shift.name.split(' ')[0] : 'Duty'}
+            </div>
+          </>
         ) : isRest ? (
-          <div className="px-1.5 py-0.5 rounded-lg text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200/60 leading-tight truncate">
-            Rest Day
-          </div>
+          <>
+            {/* Mobile screen: colored circle indicator */}
+            <div className="flex justify-center sm:hidden py-0.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-2xs" />
+            </div>
+            {/* PC screen: badge with Rest Day */}
+            <div className="hidden sm:block px-1.5 py-0.5 rounded-lg text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200/60 leading-tight truncate">
+              Rest Day
+            </div>
+          </>
         ) : (
-          <div className="text-[10px] text-slate-300 italic px-1">
+          <div className="hidden sm:block text-[10px] text-slate-300 italic px-1">
             —
           </div>
         )}
@@ -438,6 +612,164 @@ export const CalendarDayCell = React.memo(function CalendarDayCell({ cell, onSel
     </button>
   );
 });
+
+interface DutyInspectorContentProps {
+  selectedDate: Date;
+  selectedDayInfo: {
+    assignment: {
+      type: 'DUTY' | 'REST' | 'NONE';
+      shift?: {
+        id?: string;
+        name: string;
+        color?: string;
+        duration?: string;
+        time?: string;
+      } | null;
+      isLead?: boolean;
+    };
+    teammates: OfficerMember[];
+  };
+  onClose?: () => void;
+  isModal?: boolean;
+}
+
+export function DutyInspectorContent({
+  selectedDate,
+  selectedDayInfo,
+  onClose,
+  isModal = false,
+}: DutyInspectorContentProps) {
+  const [teammatePage, setTeammatePage] = useState<number>(1);
+
+  // Reset pagination when selectedDate or assigned shift changes
+  useEffect(() => {
+    setTeammatePage(1);
+  }, [selectedDate, selectedDayInfo.assignment.shift?.id]);
+
+  return (
+    <div className={isModal ? 'flex flex-col h-full overflow-hidden' : 'space-y-5'}>
+      {/* Header */}
+      <div className={`pb-3 border-b border-[#E2E8F0] ${isModal ? 'p-5 bg-slate-50/70 flex items-start justify-between shrink-0' : ''}`}>
+        <div>
+          <span className="text-[11px] font-bold text-[#004AC6] uppercase tracking-wider block">
+            Duty Day Inspector
+          </span>
+          <h3 className="text-base font-bold text-[#1E293B] mt-0.5">
+            {format(selectedDate, 'EEEE, MMMM dd, yyyy')}
+          </h3>
+          {isToday(selectedDate) && (
+            <span className="inline-block mt-1 text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+              Today&apos;s Date
+            </span>
+          )}
+        </div>
+        {isModal && onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-9 h-9 rounded-full flex items-center justify-center bg-white border border-slate-200 hover:bg-slate-100 text-[#505F76] transition-colors cursor-pointer shadow-2xs"
+            aria-label="Close Inspector"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className={isModal ? 'p-5 flex-1 overflow-y-auto space-y-5' : 'space-y-5'}>
+        {selectedDayInfo.assignment.type === 'DUTY' && selectedDayInfo.assignment.shift ? (
+          <div className="space-y-4">
+            {/* Shift Banner */}
+            <div
+              style={{
+                backgroundColor: `${selectedDayInfo.assignment.shift.color || '#004AC6'}10`,
+                borderColor: `${selectedDayInfo.assignment.shift.color || '#004AC6'}30`,
+              }}
+              className="p-4 rounded-2xl border space-y-2"
+            >
+              <div className="flex items-center justify-between">
+                <span
+                  className="text-xs font-bold"
+                  style={{ color: selectedDayInfo.assignment.shift.color || '#004AC6' }}
+                >
+                  {selectedDayInfo.assignment.shift.name}
+                </span>
+                <span
+                  style={{ backgroundColor: selectedDayInfo.assignment.shift.color || '#004AC6' }}
+                  className="text-[10px] font-bold text-white px-2 py-0.5 rounded-full shadow-2xs"
+                >
+                  {selectedDayInfo.assignment.shift.duration || '8 Hours'}
+                </span>
+              </div>
+              <p className="text-sm font-bold text-[#1E293B]">
+                {selectedDayInfo.assignment.shift.time}
+              </p>
+            </div>
+
+            {/* Fellow Shift Teammates */}
+            <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">
+              <span className="text-xs font-bold text-[#1E293B] block">
+                Shift Teammates On Duty With You ({selectedDayInfo.teammates.length}):
+              </span>
+              <PaginatedPersonnelList<OfficerMember>
+                items={selectedDayInfo.teammates}
+                pageSize={5}
+                page={teammatePage}
+                onPageChange={setTeammatePage}
+                containerClassName="space-y-1.5"
+                renderItem={(mate) => (
+                  <div
+                    key={mate.id}
+                    className="flex items-center justify-between p-2 rounded-xl bg-slate-50/70 border border-slate-100"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-6 h-6 rounded-full bg-[#004AC6] text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                        {mate.avatarInitials}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-[#1E293B] truncate">{mate.name}</p>
+                        <p className="text-[10px] text-[#757680] truncate">{mate.role}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                emptyState={
+                  <div className="py-2 text-center text-xs text-slate-400 italic">
+                    No other teammates assigned to this shift on this date.
+                  </div>
+                }
+              />
+            </div>
+          </div>
+        ) : selectedDayInfo.assignment.type === 'REST' ? (
+          <div className="p-6 rounded-2xl bg-amber-50/40 border border-amber-200/60 text-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+              <Coffee className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-[#1E293B]">Rest Day / Off-Duty</h4>
+              <p className="text-xs text-[#757680] mt-1">
+                You have a scheduled rest day on this date.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+              <CalendarDays className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-[#1E293B]">No Scheduled Assignment</h4>
+              <p className="text-xs text-[#757680] mt-1">
+                No duty assignment is recorded for you on this date.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // COMPONENT: SHIFT SCHEDULE OPERATIONS SCREEN (100% DYNAMIC DATABASE DATA)
 // =============================================================================
@@ -463,6 +795,17 @@ export default function ShiftSchedulePage() {
   // Role Filter State
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('ALL');
 
+  // Card Pagination States (Max 5 people per page, lazy/keep-alive rendering)
+  const [presentPage, setPresentPage] = useState<number>(1);
+  const [absentPage, setAbsentPage] = useState<number>(1);
+  const [restPage, setRestPage] = useState<number>(1);
+
+  // Reset pagination when role filter changes
+  useEffect(() => {
+    setPresentPage(1);
+    setAbsentPage(1);
+  }, [selectedRoleFilter]);
+
   // Attendance State (Tracks absent officers for the active shift)
   const [absentOfficerIds, setAbsentOfficerIds] = useState<string[]>([]);
   const [tempAbsentOfficerIds, setTempAbsentOfficerIds] = useState<string[]>([]);
@@ -471,6 +814,7 @@ export default function ShiftSchedulePage() {
   // "My Schedule" Calendar State
   const [calendarMonth, setCalendarMonth] = useState<Date>(new Date());
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [isMobileInspectorOpen, setIsMobileInspectorOpen] = useState<boolean>(false);
 
   // Toast Notification State
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -891,6 +1235,7 @@ export default function ShiftSchedulePage() {
   // Select Date in Calendar
   const handleSelectDate = useCallback((date: Date) => {
     setSelectedDate(date);
+    setIsMobileInspectorOpen(true);
   }, []);
 
   // Save Modal Attendance Changes to Database
@@ -1331,41 +1676,52 @@ export default function ShiftSchedulePage() {
                 </div>
 
                 {/* Present Officers List */}
-                <div className="flex-1 overflow-y-auto max-h-[640px] pr-1 space-y-3">
+                <div className="flex-1 flex flex-col justify-between min-h-0">
                   {isLoading ? (
-                    Array.from({ length: 3 }).map((_, i) => (
-                      <div key={i} className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3">
-                        <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <Skeleton variant="rounded" className="h-3.5 w-24" />
-                          <Skeleton variant="rounded" className="h-2.5 w-16" />
+                    <div className="space-y-3">
+                      {Array.from({ length: 3 }).map((_, i) => (
+                        <div key={i} className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3">
+                          <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <Skeleton variant="rounded" className="h-3.5 w-24" />
+                            <Skeleton variant="rounded" className="h-2.5 w-16" />
+                          </div>
                         </div>
-                      </div>
-                    ))
-                  ) : filteredPresentOfficers.length > 0 ? (
-                    filteredPresentOfficers.map((member) => (
-                      <PresentOfficerCard key={member.id} member={member} />
-                    ))
-                  ) : presentOfficers.length > 0 && selectedRoleFilter !== 'ALL' ? (
-                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
-                      <Shield className="w-6 h-6 text-slate-400 mx-auto" />
-                      <p className="text-xs font-bold text-[#1E293B]">
-                        No {selectedRoleFilter.toUpperCase()} Present
-                      </p>
-                      <p className="text-[11px] text-[#757680]">
-                        No officers with role &quot;{selectedRoleFilter}&quot; on duty.
-                      </p>
+                      ))}
                     </div>
                   ) : (
-                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
-                      <AlertCircle className="w-6 h-6 text-slate-400 mx-auto" />
-                      <p className="text-xs font-bold text-[#1E293B]">
-                        No Officers On Duty
-                      </p>
-                      <p className="text-[11px] text-[#757680]">
-                        No duty assignments found for current shift.
-                      </p>
-                    </div>
+                    <PaginatedPersonnelList
+                      items={filteredPresentOfficers}
+                      pageSize={5}
+                      page={presentPage}
+                      onPageChange={setPresentPage}
+                      renderItem={(member) => (
+                        <PresentOfficerCard key={member.id} member={member} />
+                      )}
+                      emptyState={
+                        presentOfficers.length > 0 && selectedRoleFilter !== 'ALL' ? (
+                          <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5 my-auto">
+                            <Shield className="w-6 h-6 text-slate-400 mx-auto" />
+                            <p className="text-xs font-bold text-[#1E293B]">
+                              No {selectedRoleFilter.toUpperCase()} Present
+                            </p>
+                            <p className="text-[11px] text-[#757680]">
+                              No officers with role &quot;{selectedRoleFilter}&quot; on duty.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5 my-auto">
+                            <AlertCircle className="w-6 h-6 text-slate-400 mx-auto" />
+                            <p className="text-xs font-bold text-[#1E293B]">
+                              No Officers On Duty
+                            </p>
+                            <p className="text-[11px] text-[#757680]">
+                              No duty assignments found for current shift.
+                            </p>
+                          </div>
+                        )
+                      }
+                    />
                   )}
                 </div>
               </div>
@@ -1402,36 +1758,45 @@ export default function ShiftSchedulePage() {
                 </div>
 
                 {/* Absent Officers List */}
-                <div className="flex-1 overflow-y-auto max-h-[640px] pr-1 space-y-3">
+                <div className="flex-1 flex flex-col justify-between min-h-0">
                   {isLoading ? (
-                    Array.from({ length: 2 }).map((_, i) => (
-                      <div key={i} className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/30 flex items-center gap-3">
-                        <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <Skeleton variant="rounded" className="h-3.5 w-24" />
-                          <Skeleton variant="rounded" className="h-2.5 w-16" />
+                    <div className="space-y-3">
+                      {Array.from({ length: 2 }).map((_, i) => (
+                        <div key={i} className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/30 flex items-center gap-3">
+                          <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <Skeleton variant="rounded" className="h-3.5 w-24" />
+                            <Skeleton variant="rounded" className="h-2.5 w-16" />
+                          </div>
                         </div>
-                      </div>
-                    ))
-                  ) : filteredAbsentOfficers.length > 0 ? (
-                    filteredAbsentOfficers.map((person) => (
-                      <AbsentOfficerCard
-                        key={person.id}
-                        person={person}
-                        isShiftViewOnly={isShiftViewOnly}
-                        onSetPresent={handleSetPresent}
-                      />
-                    ))
-                  ) : (
-                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
-                      <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
-                      <p className="text-xs font-bold text-[#1E293B]">
-                        No Absent Personnel
-                      </p>
-                      <p className="text-[11px] text-[#757680]">
-                        All scheduled personnel are on-duty or accounted for.
-                      </p>
+                      ))}
                     </div>
+                  ) : (
+                    <PaginatedPersonnelList
+                      items={filteredAbsentOfficers}
+                      pageSize={5}
+                      page={absentPage}
+                      onPageChange={setAbsentPage}
+                      renderItem={(person) => (
+                        <AbsentOfficerCard
+                          key={person.id}
+                          person={person}
+                          isShiftViewOnly={isShiftViewOnly}
+                          onSetPresent={handleSetPresent}
+                        />
+                      )}
+                      emptyState={
+                        <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5 my-auto">
+                          <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
+                          <p className="text-xs font-bold text-[#1E293B]">
+                            No Absent Personnel
+                          </p>
+                          <p className="text-[11px] text-[#757680]">
+                            All scheduled personnel are on-duty or accounted for.
+                          </p>
+                        </div>
+                      }
+                    />
                   )}
                 </div>
               </div>
@@ -1468,31 +1833,40 @@ export default function ShiftSchedulePage() {
                 </div>
 
                 {/* Rest Day Officers List */}
-                <div className="flex-1 overflow-y-auto max-h-[640px] pr-1 space-y-3">
+                <div className="flex-1 flex flex-col justify-between min-h-0">
                   {isLoading ? (
-                    Array.from({ length: 3 }).map((_, i) => (
-                      <div key={i} className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3">
-                        <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <Skeleton variant="rounded" className="h-3.5 w-24" />
-                          <Skeleton variant="rounded" className="h-2.5 w-16" />
+                    <div className="space-y-3">
+                      {Array.from({ length: 3 }).map((_, i) => (
+                        <div key={i} className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3">
+                          <Skeleton variant="circular" className="w-9 h-9 shrink-0" />
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <Skeleton variant="rounded" className="h-3.5 w-24" />
+                            <Skeleton variant="rounded" className="h-2.5 w-16" />
+                          </div>
                         </div>
-                      </div>
-                    ))
-                  ) : todayRestPersonnel.length > 0 ? (
-                    todayRestPersonnel.map((person) => (
-                      <RestDayOfficerCard key={person.id} person={person} />
-                    ))
-                  ) : (
-                    <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
-                      <Coffee className="w-6 h-6 text-slate-400 mx-auto" />
-                      <p className="text-xs font-bold text-[#1E293B]">
-                        No Rest Day Personnel
-                      </p>
-                      <p className="text-[11px] text-[#757680]">
-                        No personnel scheduled for rest day today.
-                      </p>
+                      ))}
                     </div>
+                  ) : (
+                    <PaginatedPersonnelList
+                      items={todayRestPersonnel}
+                      pageSize={5}
+                      page={restPage}
+                      onPageChange={setRestPage}
+                      renderItem={(person) => (
+                        <RestDayOfficerCard key={person.id} person={person} />
+                      )}
+                      emptyState={
+                        <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5 my-auto">
+                          <Coffee className="w-6 h-6 text-slate-400 mx-auto" />
+                          <p className="text-xs font-bold text-[#1E293B]">
+                            No Rest Day Personnel
+                          </p>
+                          <p className="text-[11px] text-[#757680]">
+                            No personnel scheduled for rest day today.
+                          </p>
+                        </div>
+                      }
+                    />
                   )}
                 </div>
               </div>
@@ -1653,122 +2027,56 @@ export default function ShiftSchedulePage() {
                 )}
               </div>
 
-              {/* Right 1 Col: Selected Day Duty Inspector Card */}
-              {isLoading ? (
-                <PersonalDayDetailSkeleton />
-              ) : (
-                <div className="bg-white border border-[#E2E8F0] rounded-3xl p-6 shadow-xs space-y-5">
-                  <div className="pb-3 border-b border-[#E2E8F0]">
-                  <span className="text-[11px] font-bold text-[#004AC6] uppercase tracking-wider block">
-                    Duty Day Inspector
-                  </span>
-                  <h3 className="text-base font-bold text-[#1E293B] mt-0.5">
-                    {format(selectedDate, 'EEEE, MMMM dd, yyyy')}
-                  </h3>
-                  {isToday(selectedDate) && (
-                    <span className="inline-block mt-1 text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
-                      Today&apos;s Date
-                    </span>
-                  )}
-                </div>
-
-                {selectedDayInfo.assignment.type === 'DUTY' && selectedDayInfo.assignment.shift ? (
-                  <div className="space-y-4">
-                    {/* Shift Banner */}
-                    <div
-                      style={{
-                        backgroundColor: `${selectedDayInfo.assignment.shift.color || '#004AC6'}10`,
-                        borderColor: `${selectedDayInfo.assignment.shift.color || '#004AC6'}30`,
-                      }}
-                      className="p-4 rounded-2xl border space-y-2"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span
-                          className="text-xs font-bold"
-                          style={{ color: selectedDayInfo.assignment.shift.color || '#004AC6' }}
-                        >
-                          {selectedDayInfo.assignment.shift.name}
-                        </span>
-                        <span
-                          style={{ backgroundColor: selectedDayInfo.assignment.shift.color || '#004AC6' }}
-                          className="text-[10px] font-bold text-white px-2 py-0.5 rounded-full shadow-2xs"
-                        >
-                          {selectedDayInfo.assignment.shift.duration || '8 Hours'}
-                        </span>
-                      </div>
-                      <p className="text-sm font-bold text-[#1E293B]">
-                        {selectedDayInfo.assignment.shift.time}
-                      </p>
-                    </div>
-
-                    {/* Fellow Shift Teammates */}
-                    <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">
-                      <span className="text-xs font-bold text-[#1E293B] block">
-                        Shift Teammates On Duty With You ({selectedDayInfo.teammates.length}):
-                      </span>
-                      {selectedDayInfo.teammates.length > 0 ? (
-                        <div className="space-y-1.5">
-                          {selectedDayInfo.teammates.map((mate) => {
-                            const badge = getRoleBadge(mate.userRole);
-                            return (
-                              <div
-                                key={mate.id}
-                                className="flex items-center justify-between p-2 rounded-xl bg-slate-50/70 border border-slate-100"
-                              >
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  <div className="w-6 h-6 rounded-full bg-[#004AC6] text-white flex items-center justify-center text-[10px] font-bold shrink-0">
-                                    {mate.avatarInitials}
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <p className="text-xs font-bold text-[#1E293B] truncate">{mate.name}</p>
-                                    <p className="text-[10px] text-[#757680] truncate">{mate.role}</p>
-                                  </div>
-                                </div>
-                                <span className={`text-[9px] font-semibold px-1.5 py-0.2 rounded border ${badge.badgeClass}`}>
-                                  {badge.label}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="py-2 text-center text-xs text-slate-400 italic">
-                          No other teammates assigned to this shift on this date.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : selectedDayInfo.assignment.type === 'REST' ? (
-                  <div className="p-6 rounded-2xl bg-amber-50/40 border border-amber-200/60 text-center space-y-3">
-                    <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
-                      <Coffee className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-bold text-[#1E293B]">Rest Day / Off-Duty</h4>
-                      <p className="text-xs text-[#757680] mt-1">
-                        You have a scheduled rest day on this date.
-                      </p>
-                    </div>
-                  </div>
+              {/* Right 1 Col: Selected Day Duty Inspector Card (Desktop screen only) */}
+              <div className="hidden lg:block">
+                {isLoading ? (
+                  <PersonalDayDetailSkeleton />
                 ) : (
-                  <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-3">
-                    <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
-                      <CalendarDays className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-bold text-[#1E293B]">No Scheduled Assignment</h4>
-                      <p className="text-xs text-[#757680] mt-1">
-                        No duty assignment is recorded for you on this date.
-                      </p>
-                    </div>
+                  <div className="bg-white border border-[#E2E8F0] rounded-3xl p-6 shadow-xs">
+                    <DutyInspectorContent
+                      selectedDate={selectedDate}
+                      selectedDayInfo={selectedDayInfo}
+                    />
                   </div>
                 )}
-                </div>
-              )}
+              </div>
             </div>
           </motion.div>
         )}
       </div>
+
+      {/* ========================================================================= */}
+      {/* MOBILE FULL-SCREEN MODAL: DUTY DAY INSPECTOR (Mobile screen only) */}
+      {/* ========================================================================= */}
+      <AnimatePresence>
+        {isMobileInspectorOpen && (
+          <div className="fixed inset-0 z-50 lg:hidden flex flex-col bg-slate-900/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, y: '100%' }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: '100%' }}
+              transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+              className="w-full h-full bg-white flex flex-col overflow-hidden"
+            >
+              <DutyInspectorContent
+                selectedDate={selectedDate}
+                selectedDayInfo={selectedDayInfo}
+                onClose={() => setIsMobileInspectorOpen(false)}
+                isModal={true}
+              />
+              <div className="p-4 border-t border-[#E2E8F0] bg-white shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsMobileInspectorOpen(false)}
+                  className="w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-[#1E293B] font-bold text-sm transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* ========================================================================= */}
       {/* 4. MODAL: EDIT ATTENDANCE (PRESENT / ABSENT OPTION) */}

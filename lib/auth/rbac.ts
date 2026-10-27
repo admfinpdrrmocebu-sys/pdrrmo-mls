@@ -180,24 +180,25 @@ export function matchUserRole(
     return defaultBuiltInRoles[0];
   }
 
-  // 1. Match by code in available dynamic roles
-  if (queryRole) {
-    const byCode = availableRoles.find((r) => r.code.toLowerCase() === queryRole);
-    if (byCode) return byCode;
-
-    // 2. Match by name
-    const byName = availableRoles.find((r) => r.name.toLowerCase() === queryRole);
-    if (byName) return byName;
-  }
-
-  // 3. Match by position title
+  // 1. Match by position title in available dynamic roles first
   if (queryPos) {
     const byPos = availableRoles.find(
       (r) =>
         r.name.toLowerCase() === queryPos ||
-        r.code.toLowerCase() === queryPos
+        r.code.toLowerCase() === queryPos ||
+        r.name.toLowerCase().replace(/[\s-_]+/g, '') === queryPos.replace(/[\s-_]+/g, '') ||
+        r.code.toLowerCase().replace(/[\s-_]+/g, '') === queryPos.replace(/[\s-_]+/g, '')
     );
     if (byPos) return byPos;
+  }
+
+  // 2. Match by role code or name in available dynamic roles
+  if (queryRole) {
+    const byCode = availableRoles.find((r) => r.code.toLowerCase() === queryRole);
+    if (byCode) return byCode;
+
+    const byName = availableRoles.find((r) => r.name.toLowerCase() === queryRole);
+    if (byName) return byName;
   }
 
   // 4. Default fallback: Staff or Monitoring Officer

@@ -98,10 +98,11 @@ export function VerticalNav({
     ? {
         name: profile.full_name,
         role:
+          profile.position_title ||
           currentRole?.name ||
           (profile.role === 'admin'
             ? 'System Administrator'
-            : profile.position_title || 'Monitoring Officer'),
+            : 'Duty Officer'),
         division: profile.division,
         initials: profile.full_name
           ? profile.full_name
@@ -111,15 +112,15 @@ export function VerticalNav({
               .join('')
               .slice(0, 2)
               .toUpperCase()
-          : 'MO',
+          : 'DO',
         avatarUrl: profile.avatar_url,
         isOnline: true,
       }
     : propUser || {
-        name: 'Monitoring Officer',
+        name: 'Duty Officer',
         role: 'Operations',
         division: 'Provincial Disaster Risk Reduction Management Office',
-        initials: 'MO',
+        initials: 'DO',
         isOnline: true,
       };
 

@@ -34,6 +34,7 @@ import { Skeleton } from '@/components/skeleton';
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
+import { format } from 'date-fns';
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -43,7 +44,11 @@ interface ActiveShiftInfo {
   id: string;
   shift_label: string;
   lead_officer_name: string;
+  lead_officer_role?: string;
+  lead_officer_avatar?: string | null;
   started_at: string;
+  start_time?: string;
+  status: 'active' | 'inactive';
 }
 
 interface ShiftLogRow {
@@ -137,34 +142,86 @@ function parseLogHour(logTime: string, createdAt: string): number {
   return 12; // default midday
 }
 
+// Helper: Compute initials from full name
+function getInitials(name: string): string {
+  if (!name) return 'MO';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+// Helper: Format shift start time concisely
+function formatShiftStartTime(startedAt?: string | null, startTime?: string | null): string {
+  if (startedAt) {
+    try {
+      const d = new Date(startedAt);
+      if (!isNaN(d.getTime())) {
+        return format(d, 'h:mm a');
+      }
+    } catch (_) {}
+  }
+  if (startTime) {
+    const cleaned = startTime.replace(/H$/i, '').trim();
+    if (cleaned.includes(':')) {
+      const [h, m] = cleaned.split(':').map(Number);
+      if (!isNaN(h) && !isNaN(m)) {
+        const dummy = new Date();
+        dummy.setHours(h, m, 0, 0);
+        return format(dummy, 'h:mm a');
+      }
+    }
+    return startTime;
+  }
+  return 'Recently';
+}
+
 // =============================================================================
 // SKELETON PLACEHOLDER COMPONENTS
 // =============================================================================
 
 function DashboardSummarySkeleton() {
   return (
-    <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
-      {[1, 2, 3].map((i) => (
-        <div
-          key={i}
-          className="relative bg-white rounded-[1.75rem] p-6 sm:p-7 border border-[#E2E8F0] shadow-sm flex flex-col justify-between overflow-hidden"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-3">
-              <Skeleton variant="rounded" className="h-4 w-24" />
-              <div className="flex items-baseline gap-3 pt-1">
-                <Skeleton variant="rounded" className="h-9 w-28" />
-                <Skeleton variant="pill" className="h-5 w-14" />
-              </div>
-            </div>
-            <Skeleton variant="circular" className="w-12 h-12 rounded-full shrink-0" />
-          </div>
-          <div className="mt-4 pt-3 border-t border-slate-100">
-            <Skeleton variant="rounded" className="h-3 w-40" />
+    <div className="space-y-6">
+      {/* Full-width Shift Status Card Skeleton */}
+      <div className="w-full bg-white rounded-2xl sm:rounded-[1.75rem] p-4 sm:p-5 border border-[#E2E8F0] shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <Skeleton variant="circular" className="w-12 h-12 rounded-full" />
+          <div className="space-y-1.5">
+            <Skeleton variant="rounded" className="h-4 w-36" />
+            <Skeleton variant="rounded" className="h-3 w-48" />
           </div>
         </div>
-      ))}
-    </section>
+        <div className="flex items-center gap-4">
+          <Skeleton variant="pill" className="h-7 w-28" />
+          <Skeleton variant="rounded" className="h-5 w-24" />
+        </div>
+      </div>
+
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {[1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="relative bg-white rounded-[1.75rem] p-6 sm:p-7 border border-[#E2E8F0] shadow-sm flex flex-col justify-between overflow-hidden"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-3">
+                <Skeleton variant="rounded" className="h-4 w-24" />
+                <div className="flex items-baseline gap-3 pt-1">
+                  <Skeleton variant="rounded" className="h-9 w-28" />
+                  <Skeleton variant="pill" className="h-5 w-14" />
+                </div>
+              </div>
+              <Skeleton variant="circular" className="w-12 h-12 rounded-full shrink-0" />
+            </div>
+            <div className="mt-4 pt-3 border-t border-slate-100">
+              <Skeleton variant="rounded" className="h-3 w-40" />
+            </div>
+          </div>
+        ))}
+      </section>
+    </div>
   );
 }
 
@@ -355,7 +412,7 @@ export default function DashboardPage() {
         // 8. Active Shift
         supabase
           .from('shifts')
-          .select('id, shift_label, lead_officer_id, started_at')
+          .select('id, shift_label, lead_officer_id, started_at, start_time')
           .eq('status', 'active')
           .order('started_at', { ascending: false })
           .limit(1)
@@ -406,23 +463,33 @@ export default function DashboardPage() {
       const shiftData = activeShiftRes.data;
       if (shiftData) {
         let leadOfficerName = 'Lead Officer';
+        let leadOfficerRole = 'Monitoring Officer';
+        let leadOfficerAvatar: string | null = null;
+
         if (shiftData.lead_officer_id) {
           const { data: leadProf } = await supabase
             .from('profiles')
-            .select('full_name')
+            .select('full_name, position_title, role, avatar_url')
             .eq('id', shiftData.lead_officer_id)
             .maybeSingle();
-          if (leadProf?.full_name) {
-            leadOfficerName = leadProf.full_name;
+          if (leadProf) {
+            leadOfficerName = leadProf.full_name || leadOfficerName;
+            leadOfficerRole = leadProf.position_title || (leadProf.role === 'admin' ? 'System Administrator' : 'Monitoring Officer');
+            leadOfficerAvatar = leadProf.avatar_url || null;
           }
         }
         setActiveShift({
           id: shiftData.id,
-          shift_label: shiftData.shift_label,
+          shift_label: shiftData.shift_label || 'Current Shift',
           lead_officer_name: leadOfficerName,
+          lead_officer_role: leadOfficerRole,
+          lead_officer_avatar: leadOfficerAvatar,
           started_at: shiftData.started_at,
+          start_time: shiftData.start_time,
+          status: 'active',
         });
       } else {
+        // Inactive: No active shift in progress
         setActiveShift(null);
       }
 
@@ -734,31 +801,120 @@ export default function DashboardPage() {
               transition={{ duration: 0.3 }}
               className="space-y-6"
             >
-              {/* Header Info Status Bar */}
-              <div className="flex items-center gap-2 flex-wrap">
-                {activeShift ? (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold shadow-2xs">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600" />
-                    </span>
-                    Started by {activeShift.lead_officer_name || 'Lead Officer'}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-[#505F76] border border-slate-200 text-xs font-semibold">
-                    <Clock className="w-3.5 h-3.5" />
-                    Shift Inactive
-                  </span>
-                )}
+              {/* Active Shift & Logs Starter Card (Full-width) */}
+              {(() => {
+                const isShiftActive = Boolean(activeShift && activeShift.status === 'active');
 
-                {/* Assigned Schedule Info */}
-                {profile?.default_shift && (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-50 border border-slate-200/80 px-2 py-0.5 rounded-full">
-                    <Info className="w-3 h-3 text-[#004AC6]" />
-                    Assigned: <span className="font-semibold text-slate-700">{profile.default_shift}</span>
-                  </span>
-                )}
-              </div>
+                if (isShiftActive && activeShift) {
+                  const officerName = activeShift.lead_officer_name || 'Lead Officer';
+                  const officerRole = activeShift.lead_officer_role || 'Monitoring Officer';
+                  const officerAvatar = activeShift.lead_officer_avatar;
+                  const shiftTitle = activeShift.shift_label || 'Current Shift';
+                  const startTimeFormatted = formatShiftStartTime(activeShift.started_at, activeShift.start_time);
+
+                  return (
+                    <div className="w-full bg-white rounded-2xl sm:rounded-[1.75rem] border border-[#E2E8F0] p-4 sm:p-5 shadow-sm transition-all hover:shadow-md">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        {/* Left: Who started the logs (Profile | Name | Role) */}
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          {/* Profile Avatar */}
+                          <div className="relative w-12 h-12 rounded-full bg-slate-100 border border-slate-200 p-0.5 flex items-center justify-center shrink-0 shadow-2xs overflow-hidden">
+                            {officerAvatar ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={officerAvatar}
+                                alt={officerName}
+                                className="w-full h-full rounded-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full rounded-full bg-[#004AC6] text-white flex items-center justify-center font-bold text-xs sm:text-sm">
+                                {getInitials(officerName)}
+                              </div>
+                            )}
+                            <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white" />
+                          </div>
+
+                          {/* Name | Role | Shift Subtitle */}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h2 className="text-sm sm:text-base font-bold text-[#1E293B] truncate">
+                                {officerName}
+                              </h2>
+                              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#004AC6]/10 text-[#004AC6] border border-[#004AC6]/15 shrink-0">
+                                {officerRole}
+                              </span>
+                            </div>
+                            <p className="text-xs text-[#505F76] mt-0.5 font-medium truncate">
+                              Started shift logs • <strong className="text-[#1E293B]">{shiftTitle}</strong>
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Right: Status of logs (Started) + Time started */}
+                        <div className="flex items-center gap-3 sm:gap-5 shrink-0 justify-between sm:justify-end border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-100">
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold shadow-2xs">
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600" />
+                            </span>
+                            Shift Started
+                          </span>
+
+                          <div className="text-right">
+                            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1E293B]">
+                              <Clock className="w-3.5 h-3.5 text-[#004AC6]" />
+                              <span>Started at {startTimeFormatted}</span>
+                            </div>
+                            <span className="text-[10px] text-[#757680] block font-medium">
+                              Live Log Session
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Inactive State: No person/user showed
+                return (
+                  <div className="w-full bg-white rounded-2xl sm:rounded-[1.75rem] border border-[#E2E8F0] p-4 sm:p-5 shadow-sm transition-all hover:shadow-md">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      {/* Left: General Inactive Indicator (No person/user showed) */}
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <div className="w-12 h-12 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0 text-slate-400 shadow-2xs">
+                          <Clock className="w-5 h-5 text-slate-500" />
+                        </div>
+                        <div className="min-w-0">
+                          <h2 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                            No Shift In Progress
+                          </h2>
+                          <p className="text-xs text-[#505F76] mt-0.5 font-medium">
+                            Logs have not been started • Standby mode
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Right: Status (Shift Inactive) + Logs Inactive */}
+                      <div className="flex items-center gap-3 sm:gap-5 shrink-0 justify-between sm:justify-end border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-100">
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-[#505F76] border border-slate-200 text-xs font-semibold">
+                          <Clock className="w-3.5 h-3.5 text-slate-400" />
+                          Shift Inactive
+                        </span>
+
+                        <div className="text-right">
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-[#1E293B]">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Logs Inactive</span>
+                          </div>
+                          <span className="text-[10px] text-[#757680] block font-medium">
+                            Standby / Awaiting Shift
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* ========================================================================= */}
               {/* 1. SUMMARY METRIC CARDS ROW */}

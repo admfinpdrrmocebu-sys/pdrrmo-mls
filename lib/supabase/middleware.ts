@@ -80,11 +80,13 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // 1. Unauthenticated user trying to access protected routes
-  if (!user && !isAuthRoute(pathname) && pathname !== '/') {
+  // 1. Unauthenticated user trying to access protected routes or root / -> redirect to /login
+  if (!user && !isAuthRoute(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
-    url.searchParams.set('redirectedFrom', pathname + request.nextUrl.search);
+    if (pathname !== '/') {
+      url.searchParams.set('redirectedFrom', pathname + request.nextUrl.search);
+    }
     return NextResponse.redirect(url);
   }
 

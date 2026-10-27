@@ -124,10 +124,11 @@ export function HeaderNav({
     ? {
         name: profile.full_name,
         role:
+          profile.position_title ||
           currentRole?.name ||
           (profile.role === 'admin'
             ? 'System Admin'
-            : profile.position_title || 'Monitoring Officer'),
+            : 'Duty Officer'),
         initials: profile.full_name
           ? profile.full_name
               .split(' ')
@@ -136,14 +137,14 @@ export function HeaderNav({
               .join('')
               .slice(0, 2)
               .toUpperCase()
-          : 'MO',
+          : 'DO',
         avatarUrl: profile.avatar_url,
         isOnline: true,
       }
     : propUser || {
-        name: 'Monitoring Officer',
+        name: 'Duty Officer',
         role: 'Operations',
-        initials: 'MO',
+        initials: 'DO',
         isOnline: true,
       };
 

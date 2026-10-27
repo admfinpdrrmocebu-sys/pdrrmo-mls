@@ -57,10 +57,11 @@ export function AppLayoutShell({
     ? {
         name: profile.full_name,
         role:
+          profile.position_title ||
           currentRole?.name ||
           (profile.role === 'admin'
             ? 'System Administrator'
-            : profile.position_title || 'Monitoring Officer'),
+            : 'Duty Officer'),
         division: profile.division,
         initials: profile.full_name
           ? profile.full_name
@@ -70,7 +71,7 @@ export function AppLayoutShell({
               .join('')
               .slice(0, 2)
               .toUpperCase()
-          : 'MO',
+          : 'DO',
         avatarUrl: profile.avatar_url,
         isOnline: true,
       }

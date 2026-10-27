@@ -51,8 +51,17 @@ import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
 import { decompressPayload } from '@/lib/compression';
-import { generateRollCallPDF, generateDailyLogsPDF, sortLogsChronologically } from '@/lib/pdf-generator';
-import { CAPITOL_LOGO_BASE64, PDRRMO_LOGO_BASE64 } from '@/lib/header-logos';
+import {
+  generateRollCallPDF,
+  generateDailyLogsPDF,
+  sortLogsChronologically,
+  buildNetCallingStationList,
+  formatNetCallHourLabel,
+  PAPER_DIMENSIONS,
+  type PaperSize,
+  type RollCallTemplateType,
+} from '@/lib/pdf-generator';
+import { CAPITOL_LOGO_BASE64, PDRRMO_LOGO_BASE64, BAGONG_PILIPINAS_LOGO_BASE64 } from '@/lib/header-logos';
 
 export interface ShiftPersonnelInfo {
   name: string;
@@ -727,6 +736,8 @@ export default function ArchivesPage() {
   const printIframeRef = useRef<HTMLIFrameElement | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
+  const [rcTemplateType, setRcTemplateType] = useState<RollCallTemplateType>('net_calling');
+  const [rcPaperSize, setRcPaperSize] = useState<PaperSize>('a4');
 
   // Toast State
   const [toastNotification, setToastNotification] = useState<{
@@ -981,24 +992,14 @@ export default function ArchivesPage() {
     return () => window.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  // Open Preview Modal and fetch/generate actual PDF file for embed
-  const handleSelectFileForPreview = useCallback(async (file: ArchivedFile) => {
-    setSelectedFileForPreview(file);
-    setIsPreviewLoading(true);
-    setPreviewError(null);
+  // Helper to build RollCallPdfData from an ArchivedFile
+  const buildRollCallPdfPayload = useCallback(
+    (file: ArchivedFile, templateOverride?: RollCallTemplateType, paperOverride?: PaperSize) => {
+      const dateStr = file.createdAt ? file.createdAt.split('·')[0].trim() : '09/27/2026';
+      const rcOfficer = profileMap.get(file.leadOfficer?.toLowerCase().trim()) || profile;
 
-    // Revoke previous blob URL if any
-    if (previewPdfBlobUrl) {
-      URL.revokeObjectURL(previewPdfBlobUrl);
-      setPreviewPdfBlobUrl(null);
-    }
-
-    try {
-      if (file.category === 'roll-call') {
-        const dateStr = file.createdAt ? file.createdAt.split('·')[0].trim() : '09/27/2026';
-        const rcOfficer = profileMap.get(file.leadOfficer?.toLowerCase().trim()) || profile;
-
-        const entriesToRender = (file.rollCallEntries && file.rollCallEntries.length > 0)
+      const entriesToRender =
+        file.rollCallEntries && file.rollCallEntries.length > 0
           ? file.rollCallEntries.map((e) => ({
               name: e.municipality || e.station,
               attendance: e.status,
@@ -1020,29 +1021,53 @@ export default function ArchivesPage() {
               dutyOperator: e.dutyOperator || e.duty_operator || 'Station Duty Officer',
             }));
 
-        const pdf = await generateRollCallPDF({
-          filename: file.filename,
-          sessionDate: dateStr,
-          sessionTime: file.shiftHours || '1600H',
-          frequency: file.rollCallStats?.frequency || '142.500 MHz Primary VHF Net',
-          radioScript: file.monitoringBriefing,
-          conductedBy: file.leadOfficer || 'Monitoring Officer',
-          conductedByRole: file.leadOfficerRole || rcOfficer?.position_title || 'Net Controller',
-          signatureUrl: null,
-          totalStations: file.rollCallStats?.totalAreas || file.itemCount || entriesToRender.length || 8,
-          present: file.rollCallStats?.present ?? 0,
-          absent: file.rollCallStats?.absent ?? 0,
-          exempted: file.rollCallStats?.exempted ?? 0,
-          weatherSummary: file.rollCallStats?.weatherSummary || 'Normal weather conditions reported across active stations.',
-          entries: entriesToRender,
-          fileHash: file.hash,
-          snapshotPayload: file.rawSnapshotData || {},
-        });
-        const objectUrl = URL.createObjectURL(pdf.blob);
-        setPreviewPdfBlobUrl(objectUrl);
-        setIsPreviewLoading(false);
-        return;
-      } else if (file.logEntries && file.logEntries.length > 0) {
+      return {
+        filename: file.filename,
+        sessionDate: dateStr,
+        sessionTime: file.shiftHours || '1600H',
+        frequency: file.rollCallStats?.frequency || '142.500 MHz Primary VHF Net',
+        radioScript: file.monitoringBriefing,
+        conductedBy: file.leadOfficer || 'Monitoring Officer',
+        conductedByRole: file.leadOfficerRole || rcOfficer?.position_title || 'Net Controller',
+        signatureUrl: null,
+        totalStations: file.rollCallStats?.totalAreas || file.itemCount || entriesToRender.length || 53,
+        present: file.rollCallStats?.present ?? 0,
+        absent: file.rollCallStats?.absent ?? 0,
+        exempted: file.rollCallStats?.exempted ?? 0,
+        weatherSummary:
+          file.rollCallStats?.weatherSummary || 'Normal weather conditions reported across active stations.',
+        entries: entriesToRender,
+        fileHash: file.hash,
+        snapshotPayload: file.rawSnapshotData || {},
+        templateType: templateOverride ?? rcTemplateType,
+        paperSize: paperOverride ?? rcPaperSize,
+      };
+    },
+    [profileMap, profile, rcTemplateType, rcPaperSize]
+  );
+
+  // Open Preview Modal and fetch/generate actual PDF file for embed
+  const handleSelectFileForPreview = useCallback(
+    async (file: ArchivedFile, templateOverride?: RollCallTemplateType, paperOverride?: PaperSize) => {
+      setSelectedFileForPreview(file);
+      setIsPreviewLoading(true);
+      setPreviewError(null);
+
+      // Revoke previous blob URL if any
+      if (previewPdfBlobUrl) {
+        URL.revokeObjectURL(previewPdfBlobUrl);
+        setPreviewPdfBlobUrl(null);
+      }
+
+      try {
+        if (file.category === 'roll-call') {
+          const payload = buildRollCallPdfPayload(file, templateOverride, paperOverride);
+          const pdf = await generateRollCallPDF(payload);
+          const objectUrl = URL.createObjectURL(pdf.blob);
+          setPreviewPdfBlobUrl(objectUrl);
+          setIsPreviewLoading(false);
+          return;
+        } else if (file.logEntries && file.logEntries.length > 0) {
         const dateStr = file.dailyReportDate || (file.createdAt ? file.createdAt.split('·')[0].trim() : '09/27/2026');
         const finalOfficerProfile = profileMap.get(file.leadOfficer?.toLowerCase().trim()) || profile;
 
@@ -1121,7 +1146,19 @@ export default function ArchivesPage() {
       setPreviewError('Unable to load document preview from secure storage.');
       setIsPreviewLoading(false);
     }
-  }, [previewPdfBlobUrl, profileMap, profile]);
+  }, [previewPdfBlobUrl, profileMap, profile, buildRollCallPdfPayload]);
+
+  // Switch Roll Call Template or Paper Size in Preview Modal and re-generate PDF immediately
+  const handleSwitchRollCallFormat = useCallback(
+    async (newTemplate: RollCallTemplateType, newPaper: PaperSize) => {
+      setRcTemplateType(newTemplate);
+      setRcPaperSize(newPaper);
+      if (selectedFileForPreview && selectedFileForPreview.category === 'roll-call') {
+        await handleSelectFileForPreview(selectedFileForPreview, newTemplate, newPaper);
+      }
+    },
+    [selectedFileForPreview, handleSelectFileForPreview]
+  );
 
   // Close Preview Modal and revoke object URL
   const handleClosePreview = () => {
@@ -1270,9 +1307,34 @@ export default function ArchivesPage() {
     setActiveMenuId(null);
   }, []);
 
-  // Download export handler (Supabase Storage download with JSON fallback)
+  // Download export handler (Roll Call multi-template/paper PDF, Supabase Storage download, with JSON fallback)
   const handleDownloadFile = useCallback(async (file: ArchivedFile) => {
     try {
+      // 0. If Roll Call record, generate and download the PDF with currently selected Template & Paper Size
+      if (file.category === 'roll-call') {
+        const payload = buildRollCallPdfPayload(file, rcTemplateType, rcPaperSize);
+        const pdf = await generateRollCallPDF(payload);
+        const url = window.URL.createObjectURL(pdf.blob);
+        const downloadAnchor = document.createElement('a');
+        downloadAnchor.href = url;
+        const baseName = file.filename.replace(/\.(pdf|json)$/i, '');
+        const tplTag = rcTemplateType === 'net_calling' ? 'NETCALL' : 'OFFICIAL';
+        const sizeTag = rcPaperSize.toUpperCase();
+        downloadAnchor.download = `${baseName}-${tplTag}-${sizeTag}.pdf`;
+        document.body.appendChild(downloadAnchor);
+        downloadAnchor.click();
+        downloadAnchor.remove();
+        window.URL.revokeObjectURL(url);
+
+        setToastNotification({
+          type: 'success',
+          message: 'Roll Call PDF Downloaded',
+          submessage: `Exported as ${rcTemplateType === 'net_calling' ? 'Net Calling Sheet' : 'Official MLS Table'} (${PAPER_DIMENSIONS[rcPaperSize].shortLabel}).`,
+        });
+        setActiveMenuId(null);
+        return;
+      }
+
       // 1. Try downloading directly from Supabase Storage bucket if storagePath is present
       if (file.storagePath) {
         const { data: blobData, error: downloadErr } = await supabase.storage
@@ -1332,7 +1394,7 @@ export default function ArchivesPage() {
       console.error('Download error:', err);
     }
     setActiveMenuId(null);
-  }, []);
+  }, [buildRollCallPdfPayload, rcTemplateType, rcPaperSize]);
 
   // Print ONLY the bucket PDF file itself
   const handlePrintDocument = () => {
@@ -2017,13 +2079,76 @@ export default function ArchivesPage() {
                 </div>
               </div>
 
+              {/* Roll Call Template & Paper Size Selector Bar */}
+              {selectedFileForPreview.category === 'roll-call' && (
+                <div className="px-4 sm:px-6 py-2.5 bg-white border-b border-[#E2E8F0] flex flex-wrap items-center justify-between gap-3 text-xs">
+                  {/* Template Selector */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-[#505F76] uppercase tracking-wider text-[10px]">
+                      Document Template:
+                    </span>
+                    <div className="flex items-center bg-[#F1F5F9] p-0.5 rounded-full border border-[#E2E8F0]">
+                      <button
+                        type="button"
+                        onClick={() => handleSwitchRollCallFormat('net_calling', rcPaperSize)}
+                        className={`px-3 py-1 rounded-full font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          rcTemplateType === 'net_calling'
+                            ? 'bg-[#004AC6] text-white shadow-xs'
+                            : 'text-[#505F76] hover:text-[#1E293B]'
+                        }`}
+                      >
+                        <span>For Net Calling (2-Column)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSwitchRollCallFormat('official_table', rcPaperSize)}
+                        className={`px-3 py-1 rounded-full font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          rcTemplateType === 'official_table'
+                            ? 'bg-[#004AC6] text-white shadow-xs'
+                            : 'text-[#505F76] hover:text-[#1E293B]'
+                        }`}
+                      >
+                        <span>Official MLS Table</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Paper Size Selector */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-[#505F76] uppercase tracking-wider text-[10px]">
+                      Paper Size:
+                    </span>
+                    <div className="flex items-center bg-[#F1F5F9] p-0.5 rounded-full border border-[#E2E8F0]">
+                      {(['a4', 'short', 'folio', 'legal'] as PaperSize[]).map((sizeKey) => (
+                        <button
+                          key={sizeKey}
+                          type="button"
+                          onClick={() => handleSwitchRollCallFormat(rcTemplateType, sizeKey)}
+                          title={PAPER_DIMENSIONS[sizeKey].label}
+                          className={`px-2.5 py-1 rounded-full font-bold transition-all cursor-pointer uppercase text-[11px] ${
+                            rcPaperSize === sizeKey
+                              ? 'bg-emerald-600 text-white shadow-xs'
+                              : 'text-[#505F76] hover:text-[#1E293B]'
+                          }`}
+                        >
+                          {PAPER_DIMENSIONS[sizeKey].shortLabel}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="hidden md:inline-block text-[11px] text-[#757680] font-medium">
+                      ({PAPER_DIMENSIONS[rcPaperSize].label})
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Document PDF Viewer Container */}
               <div className="flex-1 bg-slate-100 p-2 sm:p-4 flex flex-col items-center relative overflow-y-auto custom-scrollbar">
                 {isPreviewLoading ? (
                   <div className="flex-1 flex flex-col items-center justify-center gap-3 text-[#505F76] my-auto">
                     <Loader2 className="w-8 h-8 animate-spin text-[#004AC6]" />
                     <p className="text-sm font-semibold text-[#1E293B]">Loading official file from storage bucket...</p>
-                    <p className="text-xs text-[#757680]">Rendering verified PDF document</p>
+                    <p className="text-xs text-[#757680]">Rendering verified PDF document ({PAPER_DIMENSIONS[rcPaperSize].shortLabel})</p>
                   </div>
                 ) : previewError ? (
                   <div className="my-auto flex flex-col items-center justify-center gap-3 text-rose-600 p-6 bg-white rounded-2xl border border-rose-200 shadow-sm max-w-md text-center">
@@ -2033,6 +2158,230 @@ export default function ArchivesPage() {
                       Try Again
                     </SecondaryButton>
                   </div>
+                ) : previewViewMode === 'document' &&
+                  selectedFileForPreview.category === 'roll-call' &&
+                  rcTemplateType === 'net_calling' ? (
+                  /* 2-Column Net Calling Sheet Document View (matching For NET CALLING.pdf) */
+                  (() => {
+                    const rawEntries =
+                      selectedFileForPreview.rollCallEntries && selectedFileForPreview.rollCallEntries.length > 0
+                        ? selectedFileForPreview.rollCallEntries.map((e) => ({
+                            name: e.municipality || e.station,
+                            attendance: e.status,
+                            weatherStatus: e.weatherCondition,
+                            portStatus: e.seaPortStatus,
+                            hasPort: e.hasPort,
+                            portName: e.portName,
+                            timeResponded: e.timeResponded !== '—' ? e.timeResponded : null,
+                            dutyOperator: e.dutyOperator,
+                          }))
+                        : (selectedFileForPreview.rawSnapshotData?.entries ||
+                            selectedFileForPreview.rawSnapshotData?.records ||
+                            []).map((e: any) => ({
+                            name: e.name || e.area_name || e.municipality || 'Station',
+                            attendance: e.attendance || e.status || null,
+                            weatherStatus: e.weatherStatus || e.weather_status || e.weather || null,
+                            portStatus: e.portStatus || e.port_status || e.port || null,
+                            hasPort: e.hasPort,
+                            portName: e.portName || e.port_name,
+                            timeResponded: e.timeResponded || e.time_responded || e.time,
+                            dutyOperator: e.dutyOperator || e.duty_operator,
+                          }));
+
+                    const all53 = buildNetCallingStationList(rawEntries);
+                    const left26 = all53.slice(0, 26);
+                    const right27 = all53.slice(26, 53);
+                    const hourLabel = formatNetCallHourLabel(selectedFileForPreview.shiftHours);
+                    const officerName =
+                      selectedFileForPreview.leadOfficer &&
+                      selectedFileForPreview.leadOfficer.toLowerCase() !== 'monitoring officer'
+                        ? selectedFileForPreview.leadOfficer
+                        : '(STATE YOUR NAME)';
+
+                    const renderStationRow = (stn: (typeof all53)[0], num: number) => {
+                      const isPresent = stn.attendance === 'Present';
+                      const isAbsent = stn.attendance === 'Absent';
+                      const isExempted = stn.attendance === 'Exempted';
+                      const isSingleLine =
+                        stn.name.toUpperCase() === 'CEBU CITY' && !stn.weatherStatus && !stn.hasPort;
+                      const cleanPortLabel = stn.portName
+                        ? stn.portName.endsWith(':')
+                          ? stn.portName
+                          : stn.name.toUpperCase() === 'ARGAO'
+                          ? stn.portName
+                          : `${stn.portName}:`
+                        : null;
+
+                      return (
+                        <tr key={num} className="border-b border-slate-500 text-[11px] leading-tight">
+                          <td className="w-8 border-r border-slate-500 text-center font-medium text-slate-900 py-1 px-1 align-middle">
+                            {num}
+                          </td>
+                          <td className="border-r border-slate-500 py-1 px-2 text-slate-900">
+                            <div className="font-bold uppercase tracking-tight">{stn.name}</div>
+                            {!isSingleLine && (
+                              <div>
+                                <span className="font-bold">Weather:</span>{' '}
+                                {isPresent &&
+                                stn.weatherStatus &&
+                                stn.weatherStatus !== 'N/A' &&
+                                stn.weatherStatus !== 'None' ? (
+                                  <span className="font-normal text-slate-800">{stn.weatherStatus}</span>
+                                ) : null}
+                              </div>
+                            )}
+                            {stn.hasPort && cleanPortLabel && (
+                              <div>
+                                <span className="font-bold">{cleanPortLabel}</span>{' '}
+                                {isPresent &&
+                                stn.portStatus &&
+                                stn.portStatus !== 'N/A' &&
+                                stn.portStatus !== 'None' ? (
+                                  <span className="font-normal text-slate-800">{stn.portStatus}</span>
+                                ) : null}
+                              </div>
+                            )}
+                          </td>
+                          <td className="w-9 border-r border-slate-500 text-center align-middle font-bold text-emerald-700">
+                            {isPresent ? '✔' : isExempted ? <span className="text-[9px] text-amber-700">EX</span> : ''}
+                          </td>
+                          <td className="w-9 text-center align-middle font-bold text-rose-700">
+                            {isAbsent ? '✖' : ''}
+                          </td>
+                        </tr>
+                      );
+                    };
+
+                    return (
+                      <div className="w-full max-w-4xl bg-white rounded-2xl shadow-md border border-[#CBD5E1] p-5 sm:p-8 space-y-4 text-slate-900 my-auto sm:my-2">
+                        {/* Paper Size Info Strip */}
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 border-b border-slate-100 pb-2">
+                          <span className="font-semibold text-[#004AC6]">
+                            Template: FOR NET CALL — PDRRMO OPCEN (53 LGUs 2-Column Sheet)
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold">
+                            {PAPER_DIMENSIONS[rcPaperSize].label}
+                          </span>
+                        </div>
+
+                        {/* 3-Logo Header */}
+                        <div className="flex items-center justify-between gap-3 pb-2">
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            {CAPITOL_LOGO_BASE64 && (
+                              <img
+                                src={CAPITOL_LOGO_BASE64}
+                                alt="Province of Cebu Official Seal"
+                                className="w-14 h-14 sm:w-16 sm:h-16 object-contain"
+                              />
+                            )}
+                            {PDRRMO_LOGO_BASE64 && (
+                              <img
+                                src={PDRRMO_LOGO_BASE64}
+                                alt="PDRRMO Seal"
+                                className="w-14 h-14 sm:w-16 sm:h-16 object-contain"
+                              />
+                            )}
+                          </div>
+
+                          <div className="flex-1 text-center font-serif">
+                            <h2 className="text-base sm:text-xl font-bold text-slate-950 tracking-wide leading-tight">
+                              FOR NET CALL
+                            </h2>
+                            <h3 className="text-base sm:text-xl font-bold text-slate-950 tracking-wide leading-tight">
+                              PDRRMO OPCEN
+                            </h3>
+                          </div>
+
+                          <div className="shrink-0 pr-1 sm:pr-4">
+                            {BAGONG_PILIPINAS_LOGO_BASE64 && (
+                              <img
+                                src={BAGONG_PILIPINAS_LOGO_BASE64}
+                                alt="Bagong Pilipinas"
+                                className="w-14 h-14 sm:w-16 sm:h-16 object-contain"
+                              />
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 2-Column Split Grid */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 items-start">
+                          {/* Left Column: Intro Script + Header + Stations 1-26 */}
+                          <div className="space-y-2">
+                            <div className="text-xs leading-snug text-slate-900 font-sans">
+                              <p>ATTENTION ALL STATIONS, PLEASE DO STANDBY</p>
+                              <p>
+                                FOR THE <strong>{hourLabel}</strong> NET CALL. THIS IS{' '}
+                                <strong className="uppercase">{officerName}</strong>, YOUR OPCEN MONITORING PERSONNEL
+                              </p>
+                              <p>ON DUTY. LET US START WITH LGU</p>
+                            </div>
+
+                            <div className="border border-slate-600">
+                              <table className="w-full border-collapse">
+                                <thead>
+                                  <tr className="border-b border-slate-600 bg-slate-50 text-[11px]">
+                                    <th className="w-8 border-r border-slate-500 py-1 px-1 text-center font-normal">
+                                      #
+                                    </th>
+                                    <th className="border-r border-slate-500 py-1 px-2 text-left font-bold">
+                                      LEAGUE OF DRRMO&apos;S
+                                    </th>
+                                    <th className="w-9 border-r border-slate-500 py-1 text-center font-bold">✔</th>
+                                    <th className="w-9 py-1 text-center font-bold">✖</th>
+                                  </tr>
+                                </thead>
+                                <tbody>{left26.map((stn, i) => renderStationRow(stn, i + 1))}</tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          {/* Right Column: Stations 27-53 */}
+                          <div className="border border-slate-600">
+                            <table className="w-full border-collapse">
+                              <tbody>{right27.map((stn, i) => renderStationRow(stn, i + 27))}</tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Closing Script & Sign-off Footer */}
+                        <div className="pt-3 pl-2 sm:pl-6 space-y-4 text-xs text-slate-900">
+                          <div className="space-y-0.5">
+                            <p>
+                              FOR CLOSING: That ends our <strong className="underline">{hourLabel}</strong> Net Call,
+                            </p>
+                            <p>
+                              Once again this is your net controller{' '}
+                              <strong>
+                                {selectedFileForPreview.leadOfficer &&
+                                selectedFileForPreview.leadOfficer.toLowerCase() !== 'monitoring officer'
+                                  ? selectedFileForPreview.leadOfficer
+                                  : '(state your name)'}
+                              </strong>
+                              . Please do standby for any possible Contact. Thank You. Amping Tanan!
+                            </p>
+                          </div>
+
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2 font-bold text-xs sm:text-sm">
+                            <div className="flex items-baseline gap-2">
+                              <span>ON DUTY PERSONNEL :</span>
+                              <span className="inline-block min-w-48 border-b border-slate-900 text-center pb-0.5 uppercase">
+                                {selectedFileForPreview.leadOfficer || ''}
+                              </span>
+                            </div>
+                            <div className="flex items-baseline gap-2">
+                              <span>Time/Date :</span>
+                              <span className="inline-block min-w-52 border-b border-slate-900 text-center pb-0.5 font-normal">
+                                {formatFileDate(
+                                  selectedFileForPreview.dailyReportDate || selectedFileForPreview.createdAt
+                                )}{' '}
+                                · {selectedFileForPreview.shiftHours || '1600H'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()
                 ) : previewViewMode === 'document' ? (
                   /* Responsive Official Document Sheet */
                   <div className="w-full max-w-4xl bg-white rounded-2xl shadow-md border border-[#CBD5E1] p-5 sm:p-8 space-y-5 text-slate-800 my-auto sm:my-2">
