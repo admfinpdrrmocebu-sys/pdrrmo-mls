@@ -315,7 +315,7 @@ export const PresentOfficerCard = React.memo(
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {member.isTravelOrder && (
-            <span className="text-[9px] font-bold bg-purple-100 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
+            <span className="text-[9px] font-bold bg-purple-500/15 text-purple-700 border border-purple-300/80 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
               <Plane className="w-2.5 h-2.5" />
               Travel Order
             </span>
@@ -626,7 +626,7 @@ export const CalendarDayCell = React.memo(function CalendarDayCell({ cell, onSel
               <span className="w-2.5 h-2.5 rounded-full bg-purple-600 shadow-2xs" />
             </div>
             {/* PC screen: badge with Travel Order */}
-            <div className="hidden sm:block px-1.5 py-0.5 rounded-lg text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200/60 leading-tight truncate">
+            <div className="hidden sm:block px-1.5 py-0.5 rounded-lg text-[10px] font-bold bg-purple-500/15 text-purple-700 border border-purple-300/60 leading-tight truncate">
               Travel Order
             </div>
           </>
@@ -769,8 +769,8 @@ export function DutyInspectorContent({
             </div>
           </div>
         ) : selectedDayInfo.assignment.type === 'TRAVEL' ? (
-          <div className="p-6 rounded-2xl bg-purple-50/50 border border-purple-200/80 text-center space-y-3">
-            <div className="w-12 h-12 rounded-full bg-purple-100 text-purple-700 flex items-center justify-center mx-auto">
+          <div className="p-6 rounded-2xl bg-purple-500/10 border border-purple-300/60 text-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-purple-500/15 text-purple-700 border border-purple-300/60 flex items-center justify-center mx-auto">
               <Plane className="w-6 h-6" />
             </div>
             <div>
@@ -778,7 +778,7 @@ export function DutyInspectorContent({
               <p className="text-xs text-purple-700 font-medium mt-1">
                 You are on official business / travel order for this date.
               </p>
-              <span className="inline-block mt-2 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
+              <span className="inline-block mt-2 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 border border-purple-300/80">
                 Automatically Present On-Duty
               </span>
             </div>
@@ -1984,7 +1984,7 @@ export default function ShiftSchedulePage() {
                   <div
                     className={`w-12 h-12 rounded-2xl flex items-center justify-center border shrink-0 shadow-2xs ${
                       isMyTravelOrder
-                        ? 'bg-purple-50 text-purple-600 border-purple-200'
+                        ? 'bg-purple-500/15 text-purple-600 border-purple-300/80'
                         : isMyRestDay
                           ? 'bg-amber-50 text-amber-600 border-amber-200'
                           : isCheckedIn
@@ -2009,7 +2009,7 @@ export default function ShiftSchedulePage() {
                         Duty Attendance Check-In Terminal
                       </h2>
                       {isMyTravelOrder ? (
-                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 border border-purple-300/80">
                           <Plane className="w-3 h-3" />
                           Travel Order
                         </span>

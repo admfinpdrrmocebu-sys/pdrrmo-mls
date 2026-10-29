@@ -1613,7 +1613,7 @@ export default function ShiftScheduleCalendarPage() {
                             const primaryTravel = matchingTravel[0];
                             const extraTravel = matchingTravel.slice(1);
                             return (
-                              <div className="p-1.5 rounded-lg border bg-purple-50/80 border-purple-200 text-[11px] leading-tight transition-all hover:brightness-95">
+                              <div className="p-1.5 rounded-lg border bg-purple-500/10 border-purple-300/60 text-[11px] leading-tight transition-all hover:brightness-95">
                                 <div className="flex items-center justify-between text-[10px] font-bold mb-0.5 text-purple-700">
                                   <span className="truncate flex items-center gap-1">
                                     <Plane className="w-2.5 h-2.5 shrink-0" />
@@ -1875,7 +1875,7 @@ export default function ShiftScheduleCalendarPage() {
 
                     {/* Travel Order Card */}
                     {selectedDaySchedule.travelOrderPersonnel.length > 0 && (
-                      <div className="p-4 rounded-2xl bg-purple-50/60 border border-purple-200 space-y-2">
+                      <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-300/60 space-y-2">
                         <span className="text-xs font-bold text-purple-800 uppercase tracking-wider flex items-center gap-1.5">
                           <Plane className="w-3.5 h-3.5" />
                           Travel Order Personnel
@@ -1888,10 +1888,10 @@ export default function ShiftScheduleCalendarPage() {
                               return (
                                 <span
                                   key={person.id}
-                                  className="text-xs font-semibold bg-white border border-purple-200 px-3 py-1.5 rounded-xl text-slate-800 shadow-2xs flex items-center gap-2"
+                                  className="text-xs font-semibold bg-white border border-purple-200/80 px-3 py-1.5 rounded-xl text-slate-800 shadow-2xs flex items-center gap-2"
                                 >
                                   <span>{person.name} ({person.role})</span>
-                                  <span className="text-[9px] font-bold bg-purple-100 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded">
+                                  <span className="text-[9px] font-bold bg-purple-500/15 text-purple-700 border border-purple-300/80 px-1.5 py-0.5 rounded">
                                     Travel Order
                                   </span>
                                   <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${badge.badgeClass}`}>
@@ -2249,7 +2249,7 @@ export default function ShiftScheduleCalendarPage() {
                 </div>
 
                 {/* 3. Travel Order Section */}
-                <div className="p-4 rounded-2xl bg-purple-50/60 border border-purple-200/80 space-y-3">
+                <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-300/60 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Plane className="w-4 h-4 text-purple-700" />
@@ -2257,7 +2257,7 @@ export default function ShiftScheduleCalendarPage() {
                         Travel Order Personnel
                       </h4>
                     </div>
-                    <span className="text-xs font-bold text-purple-800 bg-white px-2.5 py-0.5 rounded-full border border-purple-200">
+                    <span className="text-xs font-bold text-purple-800 bg-white px-2.5 py-0.5 rounded-full border border-purple-200/80">
                       {
                         editingDayAssignments.filter((a) => a.assignmentType === 'travel')
                           .length
@@ -2653,7 +2653,7 @@ export default function ShiftScheduleCalendarPage() {
                         className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
                           datePickerMode === 'TRAVEL_ORDER'
                             ? 'bg-white/20 text-white'
-                            : 'bg-purple-100 text-purple-800'
+                            : 'bg-purple-500/15 text-purple-700'
                         }`}
                       >
                         {selectedTravelOrderDates.length}
@@ -2668,7 +2668,7 @@ export default function ShiftScheduleCalendarPage() {
                         ? 'bg-blue-50/90 border-blue-200 text-[#004AC6]'
                         : datePickerMode === 'DAY_OFF'
                         ? 'bg-amber-50/90 border-amber-200 text-amber-800'
-                        : 'bg-purple-50/90 border-purple-200 text-purple-800'
+                        : 'bg-purple-500/10 border-purple-300/60 text-purple-800'
                     }`}
                   >
                     <div className="flex items-center gap-2">

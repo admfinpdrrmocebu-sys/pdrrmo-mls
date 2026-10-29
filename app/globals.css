@@ -422,6 +422,51 @@ body {
     border-color: rgba(244, 63, 94, 0.35) !important;
   }
 
+  /* 12b. Purple / Travel Order Status */
+  html.dark .bg-purple-50\/40,
+  html.dark .bg-purple-50\/50,
+  html.dark .bg-purple-50\/60,
+  html.dark .bg-purple-500\/10,
+  html.dark .bg-purple-600\/10 {
+    background-color: rgba(168, 85, 247, 0.1) !important;
+  }
+
+  html.dark .bg-purple-50,
+  html.dark .bg-purple-50\/95,
+  html.dark .bg-purple-50\/90,
+  html.dark .bg-purple-50\/80,
+  html.dark .bg-purple-50\/70,
+  html.dark .bg-purple-100,
+  html.dark .bg-purple-100\/80,
+  html.dark .bg-purple-100\/70,
+  html.dark .bg-purple-500\/15,
+  html.dark .bg-purple-500\/20,
+  html.dark .bg-purple-600\/15,
+  html.dark .bg-purple-600\/20 {
+    background-color: rgba(168, 85, 247, 0.16) !important;
+  }
+
+  html.dark .text-purple-600,
+  html.dark .text-purple-700,
+  html.dark .text-purple-800,
+  html.dark .text-purple-800\/80,
+  html.dark .text-purple-900,
+  html.dark .text-purple-950 {
+    color: #c084fc !important;
+  }
+
+  html.dark .border-purple-100,
+  html.dark .border-purple-200,
+  html.dark .border-purple-200\/80,
+  html.dark .border-purple-200\/60,
+  html.dark .border-purple-300,
+  html.dark .border-purple-300\/80,
+  html.dark .border-purple-300\/60,
+  html.dark .border-purple-500\/30,
+  html.dark .border-purple-500\/40 {
+    border-color: rgba(168, 85, 247, 0.35) !important;
+  }
+
   /* 13. Form Controls (Inputs, Selects, Textareas) */
   html.dark input:not([type="checkbox"]):not([type="radio"]),
   html.dark textarea,
