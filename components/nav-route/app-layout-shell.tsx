@@ -7,6 +7,7 @@ import { ProtectedRoute } from '@/components/auth';
 import { useAuth } from '@/lib/auth';
 import { ScreenName } from '@/lib/auth/rbac';
 import { twMerge } from 'tailwind-merge';
+import { AnnouncementNotificationProvider } from '@/components/announcements/announcement-notification-provider';
 
 export interface AppLayoutShellProps {
   children: React.ReactNode;
@@ -111,12 +112,18 @@ export function AppLayoutShell({
         requiredPermission={requiredPermission}
         requiredRole={requiredRole}
       >
-        {shellContent}
+        <AnnouncementNotificationProvider>
+          {shellContent}
+        </AnnouncementNotificationProvider>
       </ProtectedRoute>
     );
   }
 
-  return shellContent;
+  return (
+    <AnnouncementNotificationProvider>
+      {shellContent}
+    </AnnouncementNotificationProvider>
+  );
 }
 
 export default AppLayoutShell;

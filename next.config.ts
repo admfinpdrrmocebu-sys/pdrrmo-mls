@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  env: {
+    mapbox_token: process.env.mapbox_token || process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "",
+  },
 };
 
 export default nextConfig;

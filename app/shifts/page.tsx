@@ -23,6 +23,12 @@ import {
   RefreshCw,
   Shield,
   Layers,
+  MapPin,
+  LocateFixed,
+  LogIn,
+  LogOut,
+  Compass,
+  Plane,
 } from 'lucide-react';
 import {
   format,
@@ -46,6 +52,16 @@ import { CustomDropdown, CustomDropdownOption } from '@/components/input';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
+import {
+  GeofenceConfig,
+  DEFAULT_GEOFENCE_CONFIG,
+  UserCoordinates,
+  checkGeofenceCoverage,
+  formatDistance,
+  getUserCoordinates,
+  loadGeofenceCache,
+  saveGeofenceCache,
+} from '@/lib/geo/geofence';
 
 // =============================================================================
 // TYPES & ROSTER MODELS
@@ -63,6 +79,22 @@ export interface OfficerMember {
   defaultShift?: string;
   avatarUrl?: string | null;
   isLead?: boolean;
+  isTravelOrder?: boolean;
+  checkInTime?: string | null;
+  checkOutTime?: string | null;
+  attendanceStatus?: 'checked_in' | 'checked_out' | 'absent';
+}
+
+export interface DutyAttendanceRecord {
+  id?: string;
+  profile_id: string;
+  duty_date: string;
+  shift_schedule_id?: string | null;
+  geofence_id?: string | null;
+  check_in_time: string;
+  check_out_time?: string | null;
+  status: 'checked_in' | 'checked_out';
+  notes?: string | null;
 }
 
 export interface ShiftScheduleItem {
@@ -82,7 +114,7 @@ export interface DutyRosterAssignmentRecord {
   profile_id: string;
   shift_schedule_id?: string | null;
   duty_date: string;
-  assignment_type: 'duty' | 'rest';
+  assignment_type: 'duty' | 'rest' | 'travel';
   is_lead: boolean;
   notes?: string | null;
   created_by?: string | null;
@@ -260,9 +292,10 @@ export interface PresentOfficerCardProps {
 export const PresentOfficerCard = React.memo(
   function PresentOfficerCard({ member }: PresentOfficerCardProps) {
     const badge = getRoleBadge(member.userRole);
+
     return (
-      <div className="p-3.5 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-2xs space-y-2.5">
-        <div className="flex items-center gap-3">
+      <div className="p-3.5 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-2xs flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <OfficerAvatar officer={member} size="md" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
@@ -279,15 +312,16 @@ export const PresentOfficerCard = React.memo(
               {member.role}
             </p>
           </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {member.isTravelOrder && (
+            <span className="text-[9px] font-bold bg-purple-100 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
+              <Plane className="w-2.5 h-2.5" />
+              Travel Order
+            </span>
+          )}
           <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
             {badge.label}
-          </span>
-        </div>
-
-        <div className="pt-2 border-t border-slate-100 text-[11px] text-[#505F76] flex items-center justify-between">
-          <span className="text-[#757680]">Status:</span>
-          <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px]">
-            Present / On-Duty
           </span>
         </div>
       </div>
@@ -299,6 +333,7 @@ export const PresentOfficerCard = React.memo(
       prev.member.name === next.member.name &&
       prev.member.role === next.member.role &&
       prev.member.isLead === next.member.isLead &&
+      prev.member.isTravelOrder === next.member.isTravelOrder &&
       prev.member.avatarUrl === next.member.avatarUrl &&
       prev.member.userRole === next.member.userRole
     );
@@ -307,19 +342,15 @@ export const PresentOfficerCard = React.memo(
 
 export interface AbsentOfficerCardProps {
   person: OfficerMember;
-  isShiftViewOnly: boolean;
-  onSetPresent: (id: string) => void;
 }
 
 export const AbsentOfficerCard = React.memo(
-  function AbsentOfficerCard({
-    person,
-    isShiftViewOnly,
-    onSetPresent,
-  }: AbsentOfficerCardProps) {
+  function AbsentOfficerCard({ person }: AbsentOfficerCardProps) {
+    const badge = getRoleBadge(person.userRole);
+
     return (
-      <div className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs space-y-2.5">
-        <div className="flex items-center gap-3">
+      <div className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
           <div className="min-w-0 flex-1">
             <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
@@ -330,24 +361,9 @@ export const AbsentOfficerCard = React.memo(
             </p>
           </div>
         </div>
-
-        <div className="pt-2 border-t border-rose-200/60 text-[11px] text-[#505F76] flex items-center justify-between">
-          <span className="text-[#757680]">Status:</span>
-          <span className="font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full text-[10px]">
-            Reported Absent
-          </span>
-        </div>
-
-        {!isShiftViewOnly && (
-          <button
-            type="button"
-            onClick={() => onSetPresent(person.id)}
-            className="w-full py-1.5 px-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
-          >
-            <Check className="w-3.5 h-3.5" />
-            Mark as Present
-          </button>
-        )}
+        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
+          {badge.label}
+        </span>
       </div>
     );
   },
@@ -357,8 +373,7 @@ export const AbsentOfficerCard = React.memo(
       prev.person.name === next.person.name &&
       prev.person.role === next.person.role &&
       prev.person.avatarUrl === next.person.avatarUrl &&
-      prev.isShiftViewOnly === next.isShiftViewOnly &&
-      prev.onSetPresent === next.onSetPresent
+      prev.person.userRole === next.person.userRole
     );
   }
 );
@@ -523,7 +538,7 @@ export interface CalendarDayCellProps {
     isCurrentDay: boolean;
     isSelected: boolean;
     assignment: {
-      type: 'DUTY' | 'REST' | 'NONE';
+      type: 'DUTY' | 'REST' | 'TRAVEL' | 'NONE';
       shift?: ShiftScheduleItem | null;
       isLead?: boolean;
     };
@@ -534,6 +549,7 @@ export interface CalendarDayCellProps {
 export const CalendarDayCell = React.memo(function CalendarDayCell({ cell, onSelectDate }: CalendarDayCellProps) {
   const isDuty = cell.assignment.type === 'DUTY';
   const isRest = cell.assignment.type === 'REST';
+  const isTravel = cell.assignment.type === 'TRAVEL';
   const shiftColor = cell.assignment.shift?.color || '#004AC6';
 
   return (
@@ -603,6 +619,17 @@ export const CalendarDayCell = React.memo(function CalendarDayCell({ cell, onSel
               Rest Day
             </div>
           </>
+        ) : isTravel ? (
+          <>
+            {/* Mobile screen: colored circle indicator */}
+            <div className="flex justify-center sm:hidden py-0.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-purple-600 shadow-2xs" />
+            </div>
+            {/* PC screen: badge with Travel Order */}
+            <div className="hidden sm:block px-1.5 py-0.5 rounded-lg text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200/60 leading-tight truncate">
+              Travel Order
+            </div>
+          </>
         ) : (
           <div className="hidden sm:block text-[10px] text-slate-300 italic px-1">
             —
@@ -617,7 +644,7 @@ interface DutyInspectorContentProps {
   selectedDate: Date;
   selectedDayInfo: {
     assignment: {
-      type: 'DUTY' | 'REST' | 'NONE';
+      type: 'DUTY' | 'REST' | 'TRAVEL' | 'NONE';
       shift?: {
         id?: string;
         name: string;
@@ -741,6 +768,21 @@ export function DutyInspectorContent({
               />
             </div>
           </div>
+        ) : selectedDayInfo.assignment.type === 'TRAVEL' ? (
+          <div className="p-6 rounded-2xl bg-purple-50/50 border border-purple-200/80 text-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-purple-100 text-purple-700 flex items-center justify-center mx-auto">
+              <Plane className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-[#1E293B]">Official Travel Order</h4>
+              <p className="text-xs text-purple-700 font-medium mt-1">
+                You are on official business / travel order for this date.
+              </p>
+              <span className="inline-block mt-2 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
+                Automatically Present On-Duty
+              </span>
+            </div>
+          </div>
         ) : selectedDayInfo.assignment.type === 'REST' ? (
           <div className="p-6 rounded-2xl bg-amber-50/40 border border-amber-200/60 text-center space-y-3">
             <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
@@ -775,8 +817,9 @@ export function DutyInspectorContent({
 // =============================================================================
 
 export default function ShiftSchedulePage() {
-  const { profile, isViewOnly, canWrite } = useAuth();
+  const { user, profile, isViewOnly, canWrite } = useAuth();
   const isShiftViewOnly = isViewOnly('Shifts') || !canWrite('Shifts');
+  const currentUserId = user?.id || profile?.id || '';
 
   // Top Tab Switcher: 'dashboard' (Schedule Dashboard) | 'my-schedule' (My Schedule)
   const [activeTab, setActiveTab] = useState<'dashboard' | 'my-schedule'>('dashboard');
@@ -791,6 +834,14 @@ export default function ShiftSchedulePage() {
   const [dbAssignments, setDbAssignments] = useState<DutyRosterAssignmentRecord[]>([]);
   const [activeShift, setActiveShift] = useState<ActiveShiftRecord | null>(null);
   const [shiftDutyPersonnel, setShiftDutyPersonnel] = useState<ShiftDutyPersonnelRecord[]>([]);
+
+  // GeoFence & Daily Check-In / Check-Out Attendance State
+  const [geofenceConfig, setGeofenceConfig] = useState<GeofenceConfig>(DEFAULT_GEOFENCE_CONFIG);
+  const [todayAttendance, setTodayAttendance] = useState<DutyAttendanceRecord[]>([]);
+  const [userCoords, setUserCoords] = useState<UserCoordinates | null>(null);
+  const [isLocatingGps, setIsLocatingGps] = useState<boolean>(false);
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const [isCheckingInOut, setIsCheckingInOut] = useState<boolean>(false);
 
   // Role Filter State
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('ALL');
@@ -971,6 +1022,74 @@ export default function ShiftSchedulePage() {
           .map((a: any) => a.profile_id);
         setAbsentOfficerIds(rosterAbsent);
       }
+
+      // 5. Fetch GeoFence Security Configuration
+      try {
+        const { data: geoData, error: geoError } = await supabase
+          .from('geofence_settings')
+          .select('*')
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        if (!geoError && geoData) {
+          const loadedGeo: GeofenceConfig = {
+            id: geoData.id,
+            name: geoData.name || DEFAULT_GEOFENCE_CONFIG.name,
+            description: geoData.description || DEFAULT_GEOFENCE_CONFIG.description,
+            latitude: Number(geoData.latitude ?? DEFAULT_GEOFENCE_CONFIG.latitude),
+            longitude: Number(geoData.longitude ?? DEFAULT_GEOFENCE_CONFIG.longitude),
+            radiusMeters: Number(geoData.radius_meters ?? DEFAULT_GEOFENCE_CONFIG.radiusMeters),
+            isActive: Boolean(geoData.is_active ?? true),
+            updatedAt: geoData.updated_at,
+          };
+          setGeofenceConfig(loadedGeo);
+          saveGeofenceCache(loadedGeo);
+        } else {
+          const cached = loadGeofenceCache();
+          if (cached) setGeofenceConfig(cached);
+        }
+      } catch {
+        const cached = loadGeofenceCache();
+        if (cached) setGeofenceConfig(cached);
+      }
+
+      // 6. Fetch Today's Officer Check-In / Check-Out Attendance Records
+      try {
+        const { data: attData, error: attError } = await supabase
+          .from('duty_attendance_records')
+          .select('*')
+          .eq('duty_date', todayStr);
+
+        let localAtt: DutyAttendanceRecord[] = [];
+        try {
+          localAtt = JSON.parse(
+            localStorage.getItem(`pdrrmo_duty_attendance_${todayStr}`) || '[]'
+          );
+        } catch {}
+
+        if (!attError && attData) {
+          const dbMap = new Map<string, DutyAttendanceRecord>();
+          (attData as DutyAttendanceRecord[]).forEach((r) => dbMap.set(r.profile_id, r));
+          localAtt.forEach((r) => {
+            if (!dbMap.has(r.profile_id)) dbMap.set(r.profile_id, r);
+          });
+          const merged = Array.from(dbMap.values());
+          setTodayAttendance(merged);
+          try {
+            localStorage.setItem(`pdrrmo_duty_attendance_${todayStr}`, JSON.stringify(merged));
+          } catch {}
+        } else {
+          setTodayAttendance(localAtt);
+        }
+      } catch {
+        try {
+          const localAtt = JSON.parse(
+            localStorage.getItem(`pdrrmo_duty_attendance_${todayStr}`) || '[]'
+          );
+          setTodayAttendance(localAtt);
+        } catch {}
+      }
     } catch (err) {
       console.error('Error fetching dynamic shift operations data:', err);
     } finally {
@@ -978,12 +1097,33 @@ export default function ShiftSchedulePage() {
     }
   }, [calendarMonth]);
 
+  // Acquire Live GPS Coordinates for Geofence Validation
+  const refreshGpsLocation = useCallback(async () => {
+    setIsLocatingGps(true);
+    setGpsError(null);
+    try {
+      const coords = await getUserCoordinates();
+      setUserCoords(coords);
+      return coords;
+    } catch (err: any) {
+      setGpsError(err.message || 'Unable to acquire GPS signal.');
+      return null;
+    } finally {
+      setIsLocatingGps(false);
+    }
+  }, []);
+
   // Initial load and calendar month change trigger
   useEffect(() => {
     fetchShiftData();
   }, [fetchShiftData]);
 
-  // Realtime subscription for shifts, shift_duty_personnel, duty_roster_assignments, shift_schedules, profiles
+  // Acquire GPS on mount
+  useEffect(() => {
+    refreshGpsLocation();
+  }, [refreshGpsLocation]);
+
+  // Realtime subscription for shifts, shift_duty_personnel, duty_roster_assignments, shift_schedules, profiles, geofence_settings, duty_attendance_records
   useEffect(() => {
     const channel = supabase
       .channel('shift_operations_changes')
@@ -1018,6 +1158,20 @@ export default function ShiftSchedulePage() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles' },
+        () => {
+          fetchShiftData(true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'geofence_settings' },
+        () => {
+          fetchShiftData(true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'duty_attendance_records' },
         () => {
           fetchShiftData(true);
         }
@@ -1091,40 +1245,121 @@ export default function ShiftSchedulePage() {
     return todayAssignments.filter((a) => a.assignment_type === 'rest');
   }, [todayAssignments]);
 
+  // Today's Travel Order assignments
+  const todayTravelAssignments = useMemo(() => {
+    return todayAssignments.filter((a) => a.assignment_type === 'travel');
+  }, [todayAssignments]);
+
+  // Set of profile_ids scheduled on Rest Day today
+  const restOfficerIds = useMemo(() => {
+    return new Set(todayRestAssignments.map((a) => a.profile_id));
+  }, [todayRestAssignments]);
+
+  // Set of profile_ids scheduled on Travel Order today
+  const travelOfficerIds = useMemo(() => {
+    return new Set(todayTravelAssignments.map((a) => a.profile_id));
+  }, [todayTravelAssignments]);
+
   // Officers assigned on Duty for the Current Live Shift
+  // Default status is Absent until the user clicks Check In.
+  // Officers on Travel Order are automatically included as Present On-Duty.
   const liveShiftOfficers = useMemo(() => {
-    if (!liveShiftSchedule) {
-      return todayDutyAssignments.map((a) => ({
-        ...getOfficerById(a.profile_id),
-        isLead: a.is_lead,
-      }));
+    let baseAssigns = todayDutyAssignments.filter((a) => !restOfficerIds.has(a.profile_id));
+
+    if (liveShiftSchedule && baseAssigns.length > 0) {
+      const matchedAssigns = baseAssigns.filter((a) => {
+        if (a.shift_schedule_id === liveShiftSchedule.id) return true;
+        if (!a.shift_schedule_id) {
+          const officer = getOfficerById(a.profile_id);
+          return (
+            officer.defaultShift &&
+            officer.defaultShift.toLowerCase() === liveShiftSchedule.name.toLowerCase()
+          );
+        }
+        return false;
+      });
+      if (matchedAssigns.length > 0) {
+        baseAssigns = matchedAssigns;
+      }
     }
 
-    const matchedAssigns = todayDutyAssignments.filter((a) => {
-      if (a.shift_schedule_id === liveShiftSchedule.id) return true;
-      if (!a.shift_schedule_id) {
-        const officer = getOfficerById(a.profile_id);
-        return officer.defaultShift && officer.defaultShift.toLowerCase() === liveShiftSchedule.name.toLowerCase();
-      }
-      return false;
+    const officerMap = new Map<string, OfficerMember>();
+
+    if (baseAssigns.length > 0) {
+      baseAssigns.forEach((a) => {
+        officerMap.set(a.profile_id, {
+          ...getOfficerById(a.profile_id),
+          isLead: a.is_lead,
+        });
+      });
+    } else {
+      // If no explicit duty assignments exist for today, include all active profiles not on rest day
+      profiles.forEach((p) => {
+        if (!restOfficerIds.has(p.id)) {
+          officerMap.set(p.id, { ...p, isLead: false });
+        }
+      });
+    }
+
+    // Include all officers on Travel Order today
+    todayTravelAssignments.forEach((a) => {
+      officerMap.set(a.profile_id, {
+        ...getOfficerById(a.profile_id),
+        isLead: a.is_lead,
+        isTravelOrder: true,
+      });
     });
 
-    const finalAssigns = matchedAssigns.length > 0 ? matchedAssigns : todayDutyAssignments;
+    // Ensure the current logged-in user (if not on rest day) and anyone who checked in today is included
+    if (currentUserId && !restOfficerIds.has(currentUserId) && !officerMap.has(currentUserId)) {
+      officerMap.set(currentUserId, getOfficerById(currentUserId));
+    }
+    todayAttendance.forEach((att) => {
+      if (!restOfficerIds.has(att.profile_id) && !officerMap.has(att.profile_id)) {
+        officerMap.set(att.profile_id, getOfficerById(att.profile_id));
+      }
+    });
 
-    return finalAssigns.map((a) => ({
-      ...getOfficerById(a.profile_id),
-      isLead: a.is_lead,
-    }));
-  }, [liveShiftSchedule, todayDutyAssignments, getOfficerById]);
+    // Enrich each officer with today's check-in / check-out status (default is 'absent')
+    // Officers on Travel Order are automatically marked as 'checked_in' (Present On-Duty)
+    return Array.from(officerMap.values()).map((officer): OfficerMember => {
+      if (travelOfficerIds.has(officer.id)) {
+        return {
+          ...officer,
+          isTravelOrder: true,
+          attendanceStatus: 'checked_in',
+        };
+      }
+      const att = todayAttendance.find((r) => r.profile_id === officer.id);
+      return {
+        ...officer,
+        checkInTime: att?.check_in_time || null,
+        checkOutTime: att?.check_out_time || null,
+        attendanceStatus: att?.status || 'absent',
+      };
+    });
+  }, [
+    liveShiftSchedule,
+    todayDutyAssignments,
+    todayTravelAssignments,
+    restOfficerIds,
+    travelOfficerIds,
+    profiles,
+    currentUserId,
+    todayAttendance,
+    getOfficerById,
+  ]);
 
-  // Derived Present vs Absent lists for the live shift
+  // Derived Present vs Absent lists for the live shift:
+  // Present = ONLY officers who have clicked Check In (status === 'checked_in')
+  // Absent = Default for all scheduled officers who have NOT checked in (or have Checked Out)
   const presentOfficers = useMemo(() => {
-    return liveShiftOfficers.filter((o) => !absentOfficerIds.includes(o.id));
-  }, [liveShiftOfficers, absentOfficerIds]);
+    return liveShiftOfficers.filter((o) => o.attendanceStatus === 'checked_in');
+  }, [liveShiftOfficers]);
 
   const absentOfficers = useMemo(() => {
-    return liveShiftOfficers.filter((o) => absentOfficerIds.includes(o.id));
-  }, [liveShiftOfficers, absentOfficerIds]);
+    return liveShiftOfficers.filter((o) => o.attendanceStatus !== 'checked_in');
+  }, [liveShiftOfficers]);
 
   // Role-filtered Present & Absent Officers
   const filteredPresentOfficers = useMemo(() => {
@@ -1139,6 +1374,183 @@ export default function ShiftSchedulePage() {
   const todayRestPersonnel = useMemo(() => {
     return todayRestAssignments.map((a) => getOfficerById(a.profile_id));
   }, [todayRestAssignments, getOfficerById]);
+
+  // ===========================================================================
+  // CURRENT USER CHECK-IN / CHECK-OUT & GEOFENCE SECURITY LOGIC
+  // ===========================================================================
+  const isMyRestDay = useMemo(() => {
+    if (!currentUserId) return false;
+    return restOfficerIds.has(currentUserId);
+  }, [currentUserId, restOfficerIds]);
+
+  const isMyTravelOrder = useMemo(() => {
+    if (!currentUserId) return false;
+    return travelOfficerIds.has(currentUserId);
+  }, [currentUserId, travelOfficerIds]);
+
+  const myAttendance = useMemo(() => {
+    if (!currentUserId) return null;
+    return todayAttendance.find((r) => r.profile_id === currentUserId) || null;
+  }, [todayAttendance, currentUserId]);
+
+  const isCheckedIn = myAttendance?.status === 'checked_in';
+
+  const geofenceCheck = useMemo(() => {
+    if (!userCoords) return null;
+    return checkGeofenceCoverage(userCoords, geofenceConfig);
+  }, [userCoords, geofenceConfig]);
+
+  const isOutsideGeofence = useMemo(() => {
+    if (!geofenceConfig.isActive) return false;
+    if (!geofenceCheck) return true;
+    return !geofenceCheck.isInside;
+  }, [geofenceConfig.isActive, geofenceCheck]);
+
+  // Button is disabled when:
+  // 1. Not in coverage area of geofenced set
+  // 2. Rest Day Schedule
+  // 3. Travel Order Schedule (automatically Present On-Duty)
+  const isCheckInOutDisabled =
+    isMyRestDay || isMyTravelOrder || isOutsideGeofence || isCheckingInOut || !currentUserId;
+
+  const handleToggleCheckInOut = useCallback(async () => {
+    if (!currentUserId) {
+      showToast('Please sign in to record your duty attendance.');
+      return;
+    }
+
+    if (isMyRestDay) {
+      showToast('Action disabled: You are scheduled for a Rest Day today.');
+      return;
+    }
+
+    if (isMyTravelOrder) {
+      showToast('Action disabled: You are on an Official Travel Order and automatically Present.');
+      return;
+    }
+
+    setIsCheckingInOut(true);
+    try {
+      let activeCoords = userCoords;
+      if (!activeCoords && geofenceConfig.isActive) {
+        activeCoords = await refreshGpsLocation();
+      }
+
+      if (geofenceConfig.isActive) {
+        if (!activeCoords) {
+          showToast(
+            'GPS Location Required: Allow location access to verify you are within the station geofence.'
+          );
+          return;
+        }
+        const coverage = checkGeofenceCoverage(activeCoords, geofenceConfig);
+        if (!coverage.isInside) {
+          showToast(
+            `Outside GeoFence Area: You are ${formatDistance(
+              coverage.distanceMeters
+            )} away (max allowed: ${formatDistance(coverage.allowedRadiusMeters)}).`
+          );
+          return;
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const distMeters =
+        activeCoords && geofenceConfig
+          ? checkGeofenceCoverage(activeCoords, geofenceConfig).distanceMeters
+          : null;
+      const isUuidGeo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        geofenceConfig.id
+      );
+
+      if (!isCheckedIn) {
+        // PERFORM CHECK IN
+        const newRecord: DutyAttendanceRecord = {
+          profile_id: currentUserId,
+          duty_date: todayKey,
+          shift_schedule_id: liveShiftSchedule?.id || null,
+          geofence_id: isUuidGeo ? geofenceConfig.id : null,
+          check_in_time: nowIso,
+          check_out_time: null,
+          status: 'checked_in',
+        };
+
+        setTodayAttendance((prev) => {
+          const next = [newRecord, ...prev.filter((r) => r.profile_id !== currentUserId)];
+          try {
+            localStorage.setItem(`pdrrmo_duty_attendance_${todayKey}`, JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+
+        // Persist Check-In record to Supabase
+        const { error: checkInErr } = await supabase
+          .from('duty_attendance_records')
+          .upsert(newRecord, { onConflict: 'profile_id,duty_date' });
+
+        if (checkInErr) {
+          console.warn('Supabase check-in upsert notice (cached locally):', checkInErr.message);
+        }
+
+        showToast('Checked In Successfully — You are now listed as Present On-Duty.');
+      } else {
+        // PERFORM CHECK OUT
+        const updatedRecord: DutyAttendanceRecord = {
+          ...(myAttendance || {
+            profile_id: currentUserId,
+            duty_date: todayKey,
+            check_in_time: nowIso,
+          }),
+          check_out_time: nowIso,
+          status: 'checked_out',
+        };
+
+        setTodayAttendance((prev) => {
+          const next = [updatedRecord, ...prev.filter((r) => r.profile_id !== currentUserId)];
+          try {
+            localStorage.setItem(`pdrrmo_duty_attendance_${todayKey}`, JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+
+        // Persist Check-Out record to Supabase
+        const { error: checkOutErr } = await supabase
+          .from('duty_attendance_records')
+          .upsert(updatedRecord, { onConflict: 'profile_id,duty_date' });
+
+        if (checkOutErr) {
+          console.warn('Supabase check-out upsert notice (cached locally):', checkOutErr.message);
+        }
+
+        showToast('Checked Out Successfully — Duty shift attendance logged.');
+      }
+
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_shift_sync');
+          bc.postMessage({ type: 'shift_state_updated', timestamp: Date.now() });
+          bc.close();
+        } catch {}
+        localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
+      }
+    } catch (err: any) {
+      console.error('Error toggling duty check-in/out:', err);
+      showToast(err.message || 'Failed to update check-in status.');
+    } finally {
+      setIsCheckingInOut(false);
+    }
+  }, [
+    currentUserId,
+    isMyRestDay,
+    isMyTravelOrder,
+    userCoords,
+    geofenceConfig,
+    refreshGpsLocation,
+    isCheckedIn,
+    myAttendance,
+    todayKey,
+    liveShiftSchedule?.id,
+  ]);
 
   // Open Edit Attendance Modal with cloned current state
   const handleOpenEditModal = useCallback(() => {
@@ -1369,6 +1781,10 @@ export default function ShiftSchedulePage() {
         return { type: 'REST' as const, shift: null, isLead: false };
       }
 
+      if (assign.assignment_type === 'travel') {
+        return { type: 'TRAVEL' as const, shift: null, isLead: false };
+      }
+
       const matchedShift = shiftSchedules.find((s) => s.id === assign.shift_schedule_id) || null;
       return {
         type: 'DUTY' as const,
@@ -1439,7 +1855,7 @@ export default function ShiftSchedulePage() {
   // Monthly stats for My Schedule
   const monthlyStats = useMemo(() => {
     if (!currentOfficer) {
-      return { dutyDays: 0, restDays: 0, totalHours: 0 };
+      return { dutyDays: 0, restDays: 0, travelDays: 0, totalHours: 0 };
     }
 
     const daysInMonth = eachDayOfInterval({
@@ -1449,17 +1865,20 @@ export default function ShiftSchedulePage() {
 
     let dutyCount = 0;
     let restCount = 0;
+    let travelCount = 0;
 
     daysInMonth.forEach((day) => {
       const assign = getOfficerAssignmentForDate(currentOfficer.id, day);
       if (assign.type === 'DUTY') dutyCount++;
       else if (assign.type === 'REST') restCount++;
+      else if (assign.type === 'TRAVEL') travelCount++;
     });
 
     return {
       dutyDays: dutyCount,
       restDays: restCount,
-      totalHours: dutyCount * 8,
+      travelDays: travelCount,
+      totalHours: (dutyCount + travelCount) * 8,
     };
   }, [calendarMonth, currentOfficer, getOfficerAssignmentForDate]);
 
@@ -1555,6 +1974,138 @@ export default function ShiftSchedulePage() {
             transition={{ duration: 0.2 }}
             className="space-y-6"
           >
+            {/* ===================================================================== */}
+            {/* OFFICER DUTY CHECK-IN / CHECK-OUT & GEOFENCE SECURITY TERMINAL */}
+            {/* ===================================================================== */}
+            <div className="bg-white border border-[#E2E8F0] rounded-3xl p-5 sm:p-6 shadow-xs">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+                {/* Left: Officer Identity & Current Duty Status */}
+                <div className="flex items-start sm:items-center gap-4">
+                  <div
+                    className={`w-12 h-12 rounded-2xl flex items-center justify-center border shrink-0 shadow-2xs ${
+                      isMyTravelOrder
+                        ? 'bg-purple-50 text-purple-600 border-purple-200'
+                        : isMyRestDay
+                          ? 'bg-amber-50 text-amber-600 border-amber-200'
+                          : isCheckedIn
+                            ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                            : 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    {isMyTravelOrder ? (
+                      <Plane className="w-6 h-6" />
+                    ) : isMyRestDay ? (
+                      <Coffee className="w-6 h-6" />
+                    ) : isCheckedIn ? (
+                      <ShieldCheck className="w-6 h-6" />
+                    ) : (
+                      <Clock className="w-6 h-6" />
+                    )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
+                        Duty Attendance Check-In Terminal
+                      </h2>
+                      {isMyTravelOrder ? (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                          <Plane className="w-3 h-3" />
+                          Travel Order
+                        </span>
+                      ) : isMyRestDay ? (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                          <Coffee className="w-3 h-3" />
+                          Rest Day Schedule
+                        </span>
+                      ) : isCheckedIn ? (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Present On-Duty
+                        </span>
+                      ) : myAttendance?.status === 'checked_out' ? (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                          Checked Out
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                          Default: Absent (Not Checked In)
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-[#505F76]">
+                      {isMyTravelOrder
+                        ? 'You are on an Official Travel Order today and are automatically marked Present On-Duty.'
+                        : isMyRestDay
+                          ? 'You are scheduled for a Rest Day today. Check-In and Check-Out are disabled.'
+                          : isCheckedIn && myAttendance?.check_in_time
+                            ? `Checked in at ${format(new Date(myAttendance.check_in_time), 'hh:mm a')} · Click Check Out when completing your shift.`
+                            : myAttendance?.status === 'checked_out' && myAttendance?.check_out_time
+                              ? `Last checked out at ${format(new Date(myAttendance.check_out_time), 'hh:mm a')} · Click Check In to resume active duty.`
+                              : 'All scheduled personnel are marked Absent by default until Checked In within the station geofence.'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Right: Check In / Check Out Action Button */}
+                <div className="flex flex-col sm:flex-row lg:flex-col items-stretch sm:items-center lg:items-end justify-end gap-2 shrink-0 border-t lg:border-t-0 pt-4 lg:pt-0 border-[#E2E8F0]">
+                  <button
+                    type="button"
+                    onClick={handleToggleCheckInOut}
+                    disabled={isCheckInOutDisabled}
+                    className={`inline-flex items-center justify-center gap-2.5 px-6 py-3 rounded-2xl text-sm font-bold transition-all shadow-sm ${
+                      isCheckInOutDisabled
+                        ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-75'
+                        : isCheckedIn
+                          ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-600/20 cursor-pointer'
+                          : 'bg-[#004AC6] hover:bg-[#003896] text-white shadow-[#004AC6]/20 cursor-pointer'
+                    }`}
+                  >
+                    {isCheckingInOut ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Processing...</span>
+                      </>
+                    ) : isCheckedIn ? (
+                      <>
+                        <LogOut className="w-4 h-4" />
+                        <span>Check Out</span>
+                      </>
+                    ) : (
+                      <>
+                        <LogIn className="w-4 h-4" />
+                        <span>Check In</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Disabled Reason Indicator */}
+                  {isMyTravelOrder ? (
+                    <span className="text-[11px] font-semibold text-purple-700 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      Disabled on Travel Order (Auto-Present)
+                    </span>
+                  ) : isMyRestDay ? (
+                    <span className="text-[11px] font-semibold text-amber-700 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      Disabled on Rest Day Schedule
+                    </span>
+                  ) : isOutsideGeofence ? (
+                    <span className="text-[11px] font-semibold text-rose-600 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      Disabled: Must be inside GeoFence coverage area
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-medium text-emerald-700 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      GeoFence Verified · Ready to {isCheckedIn ? 'Check Out' : 'Check In'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
             {/* Top 3 Summary Cards */}
             {isLoading ? (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
@@ -1625,28 +2176,9 @@ export default function ShiftSchedulePage() {
                         </div>
                       </div>
                     </div>
-
-                    {liveShiftSchedule && (
-                      <span
-                        style={{
-                          color: liveShiftSchedule.color || '#004AC6',
-                          borderColor: `${liveShiftSchedule.color || '#004AC6'}40`,
-                          backgroundColor: `${liveShiftSchedule.color || '#004AC6'}10`,
-                        }}
-                        className="text-[10px] font-bold px-2 py-0.5 rounded-full border shadow-2xs shrink-0 truncate max-w-[120px]"
-                      >
-                        {liveShiftSchedule.name}
-                      </span>
-                    )}
                   </div>
 
-                  <p className="text-xs text-[#757680]">
-                    {liveShiftSchedule
-                      ? `${liveShiftSchedule.time} · ${liveShiftSchedule.duration}`
-                      : 'No shift active at this hour'}
-                  </p>
-
-                  {/* Controls: Filter Role Dropdown + Edit Attendance Button */}
+                  {/* Controls: Filter Role Dropdown */}
                   <div className="flex items-center gap-2 pt-1">
                     <div className="flex-1 min-w-0">
                       <CustomDropdown
@@ -1659,19 +2191,6 @@ export default function ShiftSchedulePage() {
                         pill
                       />
                     </div>
-
-                    {liveShiftOfficers.length > 0 && !isShiftViewOnly && (
-                      <SecondaryButton
-                        type="button"
-                        size="sm"
-                        pill
-                        onClick={handleOpenEditModal}
-                        leftIcon={<Edit2 className="w-3 h-3 text-[#004AC6]" />}
-                        className="shrink-0 text-xs px-2.5"
-                      >
-                        Edit
-                      </SecondaryButton>
-                    )}
                   </div>
                 </div>
 
@@ -1706,17 +2225,17 @@ export default function ShiftSchedulePage() {
                               No {selectedRoleFilter.toUpperCase()} Present
                             </p>
                             <p className="text-[11px] text-[#757680]">
-                              No officers with role &quot;{selectedRoleFilter}&quot; on duty.
+                              No officers with role &quot;{selectedRoleFilter}&quot; checked in.
                             </p>
                           </div>
                         ) : (
                           <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5 my-auto">
                             <AlertCircle className="w-6 h-6 text-slate-400 mx-auto" />
                             <p className="text-xs font-bold text-[#1E293B]">
-                              No Officers On Duty
+                              No Officers Checked In Yet
                             </p>
                             <p className="text-[11px] text-[#757680]">
-                              No duty assignments found for current shift.
+                              Officers appear here once they click Check In within the geofence area.
                             </p>
                           </div>
                         )
@@ -1748,13 +2267,9 @@ export default function ShiftSchedulePage() {
                     </div>
 
                     <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full shrink-0">
-                      Absent / Leave
+                      Default: Absent
                     </span>
                   </div>
-
-                  <p className="text-xs text-[#757680]">
-                    Personnel assigned to duty but reported absent today
-                  </p>
                 </div>
 
                 {/* Absent Officers List */}
@@ -1781,8 +2296,6 @@ export default function ShiftSchedulePage() {
                         <AbsentOfficerCard
                           key={person.id}
                           person={person}
-                          isShiftViewOnly={isShiftViewOnly}
-                          onSetPresent={handleSetPresent}
                         />
                       )}
                       emptyState={
@@ -1826,10 +2339,6 @@ export default function ShiftSchedulePage() {
                       Off Duty
                     </span>
                   </div>
-
-                  <p className="text-xs text-[#757680]">
-                    Personnel scheduled for mandatory rest day today
-                  </p>
                 </div>
 
                 {/* Rest Day Officers List */}
@@ -1989,7 +2498,7 @@ export default function ShiftSchedulePage() {
                 </div>
 
                 {/* Legend Bar */}
-                <div className="flex items-center gap-4 text-xs font-semibold text-[#505F76] pt-1">
+                <div className="flex items-center gap-4 text-xs font-semibold text-[#505F76] pt-1 flex-wrap">
                   <span className="flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded-md bg-[#004AC6]" />
                     Duty Day
@@ -1997,6 +2506,10 @@ export default function ShiftSchedulePage() {
                   <span className="flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded-md bg-amber-500" />
                     Rest Day
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-md bg-purple-600" />
+                    Travel Order
                   </span>
                 </div>
 

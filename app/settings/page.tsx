@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { ShieldCheck, MapPin, Terminal, ArrowRight, CalendarDays } from 'lucide-react';
+import { ShieldCheck, MapPin, Terminal, ArrowRight, CalendarDays, Compass } from 'lucide-react';
 import { motion } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
 import { SecondaryButton } from '@/components/button';
@@ -51,6 +51,16 @@ export default function SettingsPage() {
       ambientBg: 'bg-emerald-500/5',
       actionLabel: 'View Calendar',
       href: '/settings/shifts',
+    },
+    {
+      id: 'geofencing',
+      title: 'Station GeoFencing Security',
+      description: 'Configure operational boundary coordinates and circle coverage area for duty check-in validation.',
+      icon: Compass,
+      iconBg: 'bg-indigo-50 text-indigo-700 border border-indigo-200/80',
+      ambientBg: 'bg-indigo-500/5',
+      actionLabel: 'Configure GeoFence',
+      href: '/settings/geofence',
     },
   ];
 

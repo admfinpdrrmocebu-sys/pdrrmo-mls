@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { CalendarDays, Megaphone, Settings } from 'lucide-react';
+import { Megaphone, Settings } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase/client';
@@ -172,16 +172,6 @@ export function HeaderNav({
       <div className="flex items-center gap-4 sm:gap-6 self-end sm:self-auto">
         {/* Action Icon Buttons */}
         <div className="flex items-center gap-2">
-          {/* Duty Schedule & Shift Dashboard */}
-          <Link
-            href="/shifts"
-            aria-label="Shift Schedule Operations"
-            title="Shift Schedule Operations"
-            className="w-10 h-10 flex items-center justify-center rounded-full text-[#505F76] hover:bg-white hover:text-[#004AC6] hover:shadow-sm border border-transparent hover:border-[#E2E8F0] transition-all cursor-pointer"
-          >
-            <CalendarDays className="w-4 h-4" />
-          </Link>
-
           {/* Announcements (Red when user has unacknowledged announcements) */}
           <Link
             href="/announcements"

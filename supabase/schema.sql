@@ -401,6 +401,47 @@ CREATE INDEX IF NOT EXISTS idx_duty_roster_profile ON public.duty_roster_assignm
 CREATE INDEX IF NOT EXISTS idx_duty_roster_shift ON public.duty_roster_assignments(shift_schedule_id);
 CREATE INDEX IF NOT EXISTS idx_duty_roster_type ON public.duty_roster_assignments(assignment_type);
 
+-- -----------------------------------------------------------------------------
+-- Table 16: GEOFENCE SETTINGS (Operational Perimeter Configuration)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.geofence_settings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL DEFAULT 'PDRRMO Command Center',
+    description TEXT DEFAULT 'Primary operational headquarters geofence perimeter',
+    latitude DOUBLE PRECISION NOT NULL DEFAULT 10.3157,
+    longitude DOUBLE PRECISION NOT NULL DEFAULT 123.8854,
+    radius_meters DOUBLE PRECISION NOT NULL DEFAULT 200,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    updated_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_geofence_settings_active ON public.geofence_settings(is_active);
+
+-- -----------------------------------------------------------------------------
+-- Table 17: DUTY ATTENDANCE RECORDS (Daily Officer Check-In & Check-Out)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.duty_attendance_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    profile_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    duty_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    shift_schedule_id UUID REFERENCES public.shift_schedules(id) ON DELETE SET NULL,
+    geofence_id UUID REFERENCES public.geofence_settings(id) ON DELETE SET NULL,
+    check_in_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    check_out_time TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'checked_in', -- 'checked_in' | 'checked_out'
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(profile_id, duty_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_duty_attendance_date ON public.duty_attendance_records(duty_date);
+CREATE INDEX IF NOT EXISTS idx_duty_attendance_profile ON public.duty_attendance_records(profile_id);
+CREATE INDEX IF NOT EXISTS idx_duty_attendance_status ON public.duty_attendance_records(status);
+
 -- =============================================================================
 -- 4. ATTACH UPDATED_AT TRIGGERS
 -- =============================================================================
@@ -443,6 +484,12 @@ CREATE TRIGGER trigger_shift_schedules_updated_at BEFORE UPDATE ON public.shift_
 
 DROP TRIGGER IF EXISTS trigger_duty_roster_assignments_updated_at ON public.duty_roster_assignments;
 CREATE TRIGGER trigger_duty_roster_assignments_updated_at BEFORE UPDATE ON public.duty_roster_assignments FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS trigger_geofence_settings_updated_at ON public.geofence_settings;
+CREATE TRIGGER trigger_geofence_settings_updated_at BEFORE UPDATE ON public.geofence_settings FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS trigger_duty_attendance_updated_at ON public.duty_attendance_records;
+CREATE TRIGGER trigger_duty_attendance_updated_at BEFORE UPDATE ON public.duty_attendance_records FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 -- =============================================================================
 -- 5. AUTH USER AUTO-CREATION TRIGGER
@@ -541,6 +588,8 @@ ALTER TABLE public.announcements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.access_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.shift_schedules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.duty_roster_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.geofence_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.duty_attendance_records ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: Authenticated users can read/manage all, anon can read
 DROP POLICY IF EXISTS "Allow authenticated read profiles" ON public.profiles;
@@ -599,6 +648,16 @@ CREATE POLICY "Allow authenticated manage shift_schedules" ON public.shift_sched
 CREATE POLICY "Allow authenticated read duty_roster_assignments" ON public.duty_roster_assignments FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Allow authenticated manage duty_roster_assignments" ON public.duty_roster_assignments FOR ALL TO authenticated USING (true);
 
+-- Geofence Settings: Authenticated & anon can read, authenticated can manage
+CREATE POLICY "Allow authenticated read geofence_settings" ON public.geofence_settings FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow anon read geofence_settings" ON public.geofence_settings FOR SELECT TO anon USING (true);
+CREATE POLICY "Allow authenticated manage geofence_settings" ON public.geofence_settings FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Duty Attendance Records: Authenticated & anon can read, authenticated can manage
+CREATE POLICY "Allow authenticated read duty_attendance_records" ON public.duty_attendance_records FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow anon read duty_attendance_records" ON public.duty_attendance_records FOR SELECT TO anon USING (true);
+CREATE POLICY "Allow authenticated manage duty_attendance_records" ON public.duty_attendance_records FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
 -- =============================================================================
 -- 8. STORAGE BUCKET SIMPLE RLS POLICIES
 -- =============================================================================
@@ -642,6 +701,8 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.shift_schedules;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.invitations;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.duty_roster_assignments;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.geofence_settings;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.duty_attendance_records;
 
 
 

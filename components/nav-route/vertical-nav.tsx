@@ -9,6 +9,7 @@ import {
   Radio,
   Users,
   Archive,
+  CalendarDays,
   LogOut,
   Menu,
   X,
@@ -31,6 +32,7 @@ export const defaultNavItems: NavItemDef[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Logs', href: '/logs', icon: FileText },
   { label: 'Roll Call', href: '/roll-call', icon: Radio },
+  { label: 'Attendance & Schedule', href: '/shifts', icon: CalendarDays },
   { label: 'Users', href: '/users', icon: Users },
   { label: 'Archives', href: '/archives', icon: Archive },
 ];
@@ -145,11 +147,11 @@ export function VerticalNav({
           className
         )}
       >
-        {/* Top Section: User Profile Card */}
-        <div>
+        {/* Top Section: User Profile Card (Fixed) */}
+        <div className="shrink-0 mb-4">
           <Link
             href="/profile"
-            className="flex items-center mb-7 px-1.5 cursor-pointer group"
+            className="flex items-center px-1.5 cursor-pointer group"
           >
             {/* Avatar Circle */}
             <div className="w-11 h-11 rounded-full bg-[#004AC6] text-white shrink-0 flex items-center justify-center font-bold text-sm shadow-sm border border-[#004AC6]/10 group-hover:scale-105 transition-transform overflow-hidden">
@@ -185,58 +187,58 @@ export function VerticalNav({
               )}
             </div>
           </Link>
-
-          {/* Navigation Links List */}
-          <nav className="flex flex-col gap-1.5">
-            {accessibleItems.map((item) => {
-              const Icon = item.icon;
-              const isActive =
-                pathname === item.href || (pathname?.startsWith(item.href + '/') ?? false);
-
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={twMerge(
-                    'group relative flex items-center h-12 px-3.5 rounded-xl transition-all duration-200 cursor-pointer',
-                    isActive
-                      ? 'bg-[#004AC6]/10 text-[#004AC6] font-semibold'
-                      : 'text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B]'
-                  )}
-                >
-                  <div className="flex items-center justify-center w-5 shrink-0">
-                    <Icon
-                      className={twMerge(
-                        'w-5 h-5 transition-colors',
-                        isActive ? 'text-[#004AC6]' : 'text-[#757680] group-hover:text-[#1E293B]'
-                      )}
-                    />
-                  </div>
-
-                  <span
-                    className={twMerge(
-                      'text-sm font-medium whitespace-nowrap overflow-hidden transition-all duration-300',
-                      isHovered
-                        ? 'opacity-100 ml-3 max-w-[150px]'
-                        : 'opacity-0 ml-0 max-w-0 pointer-events-none'
-                    )}
-                  >
-                    {item.label}
-                  </span>
-
-                  {item.badge !== undefined && isHovered && (
-                    <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#004AC6] text-white">
-                      {item.badge}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </nav>
         </div>
 
-        {/* Bottom Section: Sign Out & Dark Mode Preferences */}
-        <div className="pt-4 border-t border-[#E2E8F0] flex flex-col gap-1.5">
+        {/* Middle Section: Navigation Links List (Scrollable when reaching max height) */}
+        <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-1.5 pr-0.5 custom-scrollbar py-1">
+          {accessibleItems.map((item) => {
+            const Icon = item.icon;
+            const isActive =
+              pathname === item.href || (pathname?.startsWith(item.href + '/') ?? false);
+
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={twMerge(
+                  'group relative flex items-center h-12 px-3.5 rounded-xl transition-all duration-200 cursor-pointer shrink-0',
+                  isActive
+                    ? 'bg-[#004AC6]/10 text-[#004AC6] font-semibold'
+                    : 'text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B]'
+                )}
+              >
+                <div className="flex items-center justify-center w-5 shrink-0">
+                  <Icon
+                    className={twMerge(
+                      'w-5 h-5 transition-colors',
+                      isActive ? 'text-[#004AC6]' : 'text-[#757680] group-hover:text-[#1E293B]'
+                    )}
+                  />
+                </div>
+
+                <span
+                  className={twMerge(
+                    'text-sm font-medium whitespace-nowrap overflow-hidden transition-all duration-300',
+                    isHovered
+                      ? 'opacity-100 ml-3 max-w-[150px]'
+                      : 'opacity-0 ml-0 max-w-0 pointer-events-none'
+                  )}
+                >
+                  {item.label}
+                </span>
+
+                {item.badge !== undefined && isHovered && (
+                  <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#004AC6] text-white">
+                    {item.badge}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Bottom Section: Sign Out & Dark Mode Preferences (Fixed) */}
+        <div className="shrink-0 pt-4 mt-2 border-t border-[#E2E8F0] flex flex-col gap-1.5">
           <button
             type="button"
             onClick={signOut}
@@ -394,7 +396,7 @@ export function VerticalNav({
           </span>
 
           {/* Navigation Links (Scrollable for infinite scalability as features grow) */}
-          <nav className="flex flex-col gap-1.5 overflow-y-auto flex-1 pr-1 custom-scrollbar">
+          <nav className="flex flex-col gap-1.5 overflow-y-auto min-h-0 flex-1 pr-1 custom-scrollbar">
             {accessibleItems.map((item) => {
               const Icon = item.icon;
               const isActive =
@@ -406,7 +408,7 @@ export function VerticalNav({
                   href={item.href}
                   onClick={() => setIsMobileOpen(false)}
                   className={twMerge(
-                    'flex items-center h-12 px-3.5 rounded-xl transition-all duration-200 cursor-pointer',
+                    'flex items-center h-12 px-3.5 rounded-xl transition-all duration-200 cursor-pointer shrink-0',
                     isActive
                       ? 'bg-[#004AC6]/10 text-[#004AC6] font-semibold shadow-2xs'
                       : 'text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B]'

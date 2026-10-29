@@ -1,0 +1,24 @@
+{
+  "name": "PDRRMO MLS — Monitoring & Logging System",
+  "short_name": "PDRRMO MLS",
+  "description": "Provincial Disaster Risk Reduction and Management Office Monitoring & Logging System",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#004AC6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/assets/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

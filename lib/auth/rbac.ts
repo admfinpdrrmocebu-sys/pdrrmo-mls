@@ -63,11 +63,14 @@ export const routeToScreenMap: Record<string, ScreenName> = {
   '/settings/areas': 'Settings',
   '/settings/logs': 'Settings',
   '/settings/shifts': 'Settings',
+  '/settings/geofence': 'Settings',
   '/access': 'Settings',
   '/areas': 'Settings',
   '/announcements': 'Announcements',
   '/shifts': 'Shifts',
   '/schedule': 'Shifts',
+  'Attendance & Schedule': 'Shifts',
+  'attendance & schedule': 'Shifts',
 };
 
 /**

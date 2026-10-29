@@ -27,6 +27,7 @@ import {
   Crown,
   UserPlus,
   AlertCircle,
+  Plane,
 } from 'lucide-react';
 import {
   format,
@@ -84,7 +85,7 @@ export interface DutyRosterAssignmentRecord {
   profile_id: string;
   shift_schedule_id?: string | null;
   duty_date: string;
-  assignment_type: 'duty' | 'rest';
+  assignment_type: 'duty' | 'rest' | 'travel';
   is_lead: boolean;
   notes?: string | null;
   created_by?: string | null;
@@ -112,12 +113,13 @@ export interface DayDutySchedule {
   dateKey: string;
   shifts: AssignedShiftGroup[];
   restDayPersonnel: OfficerAssignment[];
+  travelOrderPersonnel: OfficerAssignment[];
 }
 
 export interface EditDayAssignment {
   profileId: string;
   shiftScheduleId: string | null;
-  assignmentType: 'duty' | 'rest';
+  assignmentType: 'duty' | 'rest' | 'travel';
   isLead: boolean;
 }
 
@@ -198,12 +200,13 @@ export default function ShiftScheduleCalendarPage() {
   const [selectedPersonnelIds, setSelectedPersonnelIds] = useState<string[]>([]);
   const [showAllPersonnel, setShowAllPersonnel] = useState<boolean>(false);
 
-  // Selected multi-dates for Duty Schedule and Day Off
+  // Selected multi-dates for Duty Schedule, Day Off, and Travel Order
   const [selectedDutyDates, setSelectedDutyDates] = useState<string[]>([]);
   const [selectedDayOffDates, setSelectedDayOffDates] = useState<string[]>([]);
+  const [selectedTravelOrderDates, setSelectedTravelOrderDates] = useState<string[]>([]);
 
-  // Active Picker Mode: 'DUTY' | 'DAY_OFF'
-  const [datePickerMode, setDatePickerMode] = useState<'DUTY' | 'DAY_OFF'>('DUTY');
+  // Active Picker Mode: 'DUTY' | 'DAY_OFF' | 'TRAVEL_ORDER'
+  const [datePickerMode, setDatePickerMode] = useState<'DUTY' | 'DAY_OFF' | 'TRAVEL_ORDER'>('DUTY');
 
   // Print & XLSX Modal State
   const [isPrintXLSXModalOpen, setIsPrintXLSXModalOpen] = useState(false);
@@ -414,12 +417,15 @@ export default function ShiftScheduleCalendarPage() {
           dateKey,
           shifts: [],
           restDayPersonnel: [],
+          travelOrderPersonnel: [],
         };
       }
 
       const dutyAssigns = dayAssignments.filter((a) => a.assignment_type === 'duty');
       const restAssigns = dayAssignments.filter((a) => a.assignment_type === 'rest');
+      const travelAssigns = dayAssignments.filter((a) => a.assignment_type === 'travel');
       const restDayPersonnel = restAssigns.map((a) => getOfficerById(a.profile_id));
+      const travelOrderPersonnel = travelAssigns.map((a) => getOfficerById(a.profile_id));
 
       // Group duty assignments by shift_schedule_id
       const groupMap = new Map<
@@ -494,6 +500,7 @@ export default function ShiftScheduleCalendarPage() {
         dateKey,
         shifts,
         restDayPersonnel,
+        travelOrderPersonnel,
       };
     },
     [dbAssignments, shiftSchedules, getOfficerById]
@@ -578,6 +585,7 @@ export default function ShiftScheduleCalendarPage() {
       const isCurMonth = isSameMonth(d, scheduleMonthDate);
       const isDuty = selectedDutyDates.includes(dateKey);
       const isDayOff = selectedDayOffDates.includes(dateKey);
+      const isTravelOrder = selectedTravelOrderDates.includes(dateKey);
       const dayOfWeek = d.getDay();
 
       return {
@@ -588,10 +596,11 @@ export default function ShiftScheduleCalendarPage() {
         isToday: isToday(d),
         isDuty,
         isDayOff,
+        isTravelOrder,
         dayOfWeek,
       };
     });
-  }, [scheduleMonthDate, selectedDutyDates, selectedDayOffDates]);
+  }, [scheduleMonthDate, selectedDutyDates, selectedDayOffDates, selectedTravelOrderDates]);
 
   // Current month active days only in the picker
   const pickerMonthDays = useMemo(() => {
@@ -606,13 +615,23 @@ export default function ShiftScheduleCalendarPage() {
       } else {
         setSelectedDutyDates((prev) => [...prev, dateKey].sort());
         setSelectedDayOffDates((prev) => prev.filter((d) => d !== dateKey));
+        setSelectedTravelOrderDates((prev) => prev.filter((d) => d !== dateKey));
       }
-    } else {
+    } else if (datePickerMode === 'DAY_OFF') {
       if (selectedDayOffDates.includes(dateKey)) {
         setSelectedDayOffDates((prev) => prev.filter((d) => d !== dateKey));
       } else {
         setSelectedDayOffDates((prev) => [...prev, dateKey].sort());
         setSelectedDutyDates((prev) => prev.filter((d) => d !== dateKey));
+        setSelectedTravelOrderDates((prev) => prev.filter((d) => d !== dateKey));
+      }
+    } else if (datePickerMode === 'TRAVEL_ORDER') {
+      if (selectedTravelOrderDates.includes(dateKey)) {
+        setSelectedTravelOrderDates((prev) => prev.filter((d) => d !== dateKey));
+      } else {
+        setSelectedTravelOrderDates((prev) => [...prev, dateKey].sort());
+        setSelectedDutyDates((prev) => prev.filter((d) => d !== dateKey));
+        setSelectedDayOffDates((prev) => prev.filter((d) => d !== dateKey));
       }
     }
   };
@@ -620,6 +639,7 @@ export default function ShiftScheduleCalendarPage() {
   const handleClearAllDates = () => {
     setSelectedDutyDates([]);
     setSelectedDayOffDates([]);
+    setSelectedTravelOrderDates([]);
   };
 
   // Calendar Grid Days Calculation
@@ -684,7 +704,7 @@ export default function ShiftScheduleCalendarPage() {
     const initialAssignments: EditDayAssignment[] = currentForDate.map((a) => ({
       profileId: a.profile_id,
       shiftScheduleId: a.shift_schedule_id || null,
-      assignmentType: a.assignment_type as 'duty' | 'rest',
+      assignmentType: a.assignment_type as 'duty' | 'rest' | 'travel',
       isLead: !!a.is_lead,
     }));
 
@@ -725,6 +745,23 @@ export default function ShiftScheduleCalendarPage() {
       ];
     });
     setSelectedAddProfileId((prev) => ({ ...prev, rest: '' }));
+  };
+
+  const handleAddOfficerToTravel = (profileId: string) => {
+    if (isSettingsViewOnly || !profileId) return;
+    setEditingDayAssignments((prev) => {
+      const filtered = prev.filter((a) => a.profileId !== profileId);
+      return [
+        ...filtered,
+        {
+          profileId,
+          shiftScheduleId: null,
+          assignmentType: 'travel',
+          isLead: false,
+        },
+      ];
+    });
+    setSelectedAddProfileId((prev) => ({ ...prev, travel: '' }));
   };
 
   const handleRemoveOfficerFromDay = (profileId: string) => {
@@ -869,8 +906,12 @@ export default function ShiftScheduleCalendarPage() {
       showToast('Please select at least one personnel member.');
       return;
     }
-    if (selectedDutyDates.length === 0 && selectedDayOffDates.length === 0) {
-      showToast('Please select at least one duty date or day off date.');
+    if (
+      selectedDutyDates.length === 0 &&
+      selectedDayOffDates.length === 0 &&
+      selectedTravelOrderDates.length === 0
+    ) {
+      showToast('Please select at least one duty, day off, or travel order date.');
       return;
     }
 
@@ -902,6 +943,17 @@ export default function ShiftScheduleCalendarPage() {
             created_by: user?.id || null,
           });
         }
+        // Add travel order dates (shift_schedule_id is null for travel orders)
+        for (const dateStr of selectedTravelOrderDates) {
+          records.push({
+            profile_id: profileId,
+            shift_schedule_id: null,
+            duty_date: dateStr,
+            assignment_type: 'travel',
+            is_lead: false,
+            created_by: user?.id || null,
+          });
+        }
       }
 
       // Upsert to Supabase
@@ -917,7 +969,7 @@ export default function ShiftScheduleCalendarPage() {
 
       const targetSched = shiftSchedules.find((s) => s.id === selectedShiftScheduleId);
       showToast(
-        `Configured ${targetSched?.name || 'Shift'}: ${selectedPersonnelIds.length} personnel (${selectedDutyDates.length} Duty, ${selectedDayOffDates.length} Day Off)`
+        `Configured ${targetSched?.name || 'Shift'}: ${selectedPersonnelIds.length} personnel (${selectedDutyDates.length} Duty, ${selectedDayOffDates.length} Day Off, ${selectedTravelOrderDates.length} Travel Order)`
       );
       await fetchRosterData();
       setIsAddScheduleModalOpen(false);
@@ -964,6 +1016,9 @@ export default function ShiftScheduleCalendarPage() {
           });
           row['Duty Assignments'] = summaries.length > 0 ? summaries.join('\n\n') : '—';
         }
+
+        row['Travel Order'] =
+          s.travelOrderPersonnel.length > 0 ? s.travelOrderPersonnel.map((p) => p.name).join('\n') : '—';
 
         row['Rest Day / Off-Duty'] =
           s.restDayPersonnel.length > 0 ? s.restDayPersonnel.map((p) => p.name).join('\n') : '—';
@@ -1547,6 +1602,38 @@ export default function ShiftScheduleCalendarPage() {
                               </div>
                             );
                           })}
+
+                          {/* Travel Order Indicator in Calendar Cell */}
+                          {schedule.travelOrderPersonnel.filter((o) =>
+                            matchesRole(o, selectedRoleFilter)
+                          ).length > 0 && (() => {
+                            const matchingTravel = schedule.travelOrderPersonnel.filter((o) =>
+                              matchesRole(o, selectedRoleFilter)
+                            );
+                            const primaryTravel = matchingTravel[0];
+                            const extraTravel = matchingTravel.slice(1);
+                            return (
+                              <div className="p-1.5 rounded-lg border bg-purple-50/80 border-purple-200 text-[11px] leading-tight transition-all hover:brightness-95">
+                                <div className="flex items-center justify-between text-[10px] font-bold mb-0.5 text-purple-700">
+                                  <span className="truncate flex items-center gap-1">
+                                    <Plane className="w-2.5 h-2.5 shrink-0" />
+                                    Travel Order
+                                  </span>
+                                  <span className="font-mono text-[9px] text-purple-600 shrink-0 ml-1">
+                                    TO
+                                  </span>
+                                </div>
+                                <p className="font-semibold text-[#1E293B] truncate">
+                                  {primaryTravel.name}
+                                </p>
+                                {extraTravel.length > 0 && (
+                                  <p className="text-[10px] text-purple-700 truncate">
+                                    +{extraTravel.map((m) => m.name.split(' ')[0]).join(', ')}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Footer Controls on Hover */}
@@ -1621,7 +1708,9 @@ export default function ShiftScheduleCalendarPage() {
 
               {/* Modal Body: Dynamic Shift Rotations with Category Cards & Dynamic Colors */}
               <div className="p-6 space-y-5 overflow-y-auto">
-                {selectedDaySchedule.shifts.length === 0 && selectedDaySchedule.restDayPersonnel.length === 0 ? (
+                {selectedDaySchedule.shifts.length === 0 &&
+                selectedDaySchedule.restDayPersonnel.length === 0 &&
+                selectedDaySchedule.travelOrderPersonnel.length === 0 ? (
                   <div className="py-12 text-center space-y-3">
                     <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto border border-slate-200">
                       <CalendarDays className="w-6 h-6" />
@@ -1643,6 +1732,7 @@ export default function ShiftScheduleCalendarPage() {
                           setScheduleMonth(format(selectedDaySchedule.date, 'yyyy-MM'));
                           setSelectedDutyDates([dateKey]);
                           setSelectedDayOffDates([]);
+                          setSelectedTravelOrderDates([]);
                           setIsAddScheduleModalOpen(true);
                         }}
                         className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-[#004AC6] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-full transition-colors cursor-pointer"
@@ -1782,6 +1872,37 @@ export default function ShiftScheduleCalendarPage() {
                         </div>
                       );
                     })}
+
+                    {/* Travel Order Card */}
+                    {selectedDaySchedule.travelOrderPersonnel.length > 0 && (
+                      <div className="p-4 rounded-2xl bg-purple-50/60 border border-purple-200 space-y-2">
+                        <span className="text-xs font-bold text-purple-800 uppercase tracking-wider flex items-center gap-1.5">
+                          <Plane className="w-3.5 h-3.5" />
+                          Travel Order Personnel
+                        </span>
+                        <div className="flex items-center gap-2 flex-wrap pt-1">
+                          {selectedDaySchedule.travelOrderPersonnel
+                            .filter((person) => matchesRole(person, selectedRoleFilter))
+                            .map((person) => {
+                              const badge = getRoleBadge(person.userRole);
+                              return (
+                                <span
+                                  key={person.id}
+                                  className="text-xs font-semibold bg-white border border-purple-200 px-3 py-1.5 rounded-xl text-slate-800 shadow-2xs flex items-center gap-2"
+                                >
+                                  <span>{person.name} ({person.role})</span>
+                                  <span className="text-[9px] font-bold bg-purple-100 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded">
+                                    Travel Order
+                                  </span>
+                                  <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${badge.badgeClass}`}>
+                                    {badge.label}
+                                  </span>
+                                </span>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Rest Day / Off-Duty Card */}
                     {selectedDaySchedule.restDayPersonnel.length > 0 && (
@@ -2126,6 +2247,92 @@ export default function ShiftScheduleCalendarPage() {
                     </button>
                   </div>
                 </div>
+
+                {/* 3. Travel Order Section */}
+                <div className="p-4 rounded-2xl bg-purple-50/60 border border-purple-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Plane className="w-4 h-4 text-purple-700" />
+                      <h4 className="text-sm font-bold text-purple-900">
+                        Travel Order Personnel
+                      </h4>
+                    </div>
+                    <span className="text-xs font-bold text-purple-800 bg-white px-2.5 py-0.5 rounded-full border border-purple-200">
+                      {
+                        editingDayAssignments.filter((a) => a.assignmentType === 'travel')
+                          .length
+                      }{' '}
+                      Personnel
+                    </span>
+                  </div>
+
+                  {/* Travel Order Personnel Tags */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {editingDayAssignments.filter((a) => a.assignmentType === 'travel').length >
+                    0 ? (
+                      editingDayAssignments
+                        .filter((a) => a.assignmentType === 'travel')
+                        .map((assignment) => {
+                          const officer = profiles.find((p) => p.id === assignment.profileId);
+                          return (
+                            <span
+                              key={assignment.profileId}
+                              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-purple-200 text-xs font-bold text-slate-800 shadow-2xs"
+                            >
+                              <span>{officer?.name || 'Officer'}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleRemoveOfficerFromDay(assignment.profileId)
+                                }
+                                className="text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                                title="Remove from travel order"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </span>
+                          );
+                        })
+                    ) : (
+                      <div className="text-xs text-purple-800/80 italic py-1">
+                        No personnel scheduled for travel order on this date.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Add Officer to Travel Order */}
+                  <div className="pt-2 border-t border-purple-200 flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                    <select
+                      value={selectedAddProfileId['travel'] || ''}
+                      onChange={(e) =>
+                        setSelectedAddProfileId((prev) => ({
+                          ...prev,
+                          travel: e.target.value,
+                        }))
+                      }
+                      className="bg-white border border-purple-300 rounded-xl py-1.5 px-3 text-xs text-[#1E293B] focus:outline-none focus:border-purple-600 flex-1 min-w-[200px]"
+                    >
+                      <option value="">-- Add Officer to Travel Order --</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.role})
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      disabled={!selectedAddProfileId['travel']}
+                      onClick={() =>
+                        handleAddOfficerToTravel(selectedAddProfileId['travel'])
+                      }
+                      className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer shadow-2xs"
+                    >
+                      <Plane className="w-3.5 h-3.5" />
+                      <span>Set as Travel Order</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Modal Footer */}
@@ -2370,7 +2577,7 @@ export default function ShiftScheduleCalendarPage() {
                         </h4>
                       </div>
                       <p className="text-[11px] text-[#505F76] mt-0.5">
-                        Click any date to assign it as Duty (Blue) or Day Off (Amber).
+                        Click any date to assign it as Duty (Blue), Day Off (Amber), or Travel Order (Purple).
                       </p>
                     </div>
 
@@ -2386,7 +2593,7 @@ export default function ShiftScheduleCalendarPage() {
                   </div>
 
                   {/* Picker Button / Segmented Controller: Choose Active Mode */}
-                  <div className="grid grid-cols-2 p-1 bg-slate-200/80 rounded-2xl gap-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 p-1 bg-slate-200/80 rounded-2xl gap-1">
                     <button
                       type="button"
                       onClick={() => setDatePickerMode('DUTY')}
@@ -2397,7 +2604,7 @@ export default function ShiftScheduleCalendarPage() {
                       }`}
                     >
                       <CalendarCheck className="w-3.5 h-3.5" />
-                      <span>Duty Schedule Dates</span>
+                      <span>Duty Schedule</span>
                       <span
                         className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
                           datePickerMode === 'DUTY'
@@ -2419,7 +2626,7 @@ export default function ShiftScheduleCalendarPage() {
                       }`}
                     >
                       <CalendarX className="w-3.5 h-3.5" />
-                      <span>Day Off Dates</span>
+                      <span>Day Off</span>
                       <span
                         className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
                           datePickerMode === 'DAY_OFF'
@@ -2430,6 +2637,28 @@ export default function ShiftScheduleCalendarPage() {
                         {selectedDayOffDates.length}
                       </span>
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDatePickerMode('TRAVEL_ORDER')}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        datePickerMode === 'TRAVEL_ORDER'
+                          ? 'bg-purple-600 text-white shadow-sm ring-2 ring-purple-600/30'
+                          : 'text-slate-700 hover:text-slate-900 hover:bg-white/60'
+                      }`}
+                    >
+                      <Plane className="w-3.5 h-3.5" />
+                      <span>Travel Order</span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                          datePickerMode === 'TRAVEL_ORDER'
+                            ? 'bg-white/20 text-white'
+                            : 'bg-purple-100 text-purple-800'
+                        }`}
+                      >
+                        {selectedTravelOrderDates.length}
+                      </span>
+                    </button>
                   </div>
 
                   {/* Mode Guidance Alert */}
@@ -2437,17 +2666,25 @@ export default function ShiftScheduleCalendarPage() {
                     className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${
                       datePickerMode === 'DUTY'
                         ? 'bg-blue-50/90 border-blue-200 text-[#004AC6]'
-                        : 'bg-amber-50/90 border-amber-200 text-amber-800'
+                        : datePickerMode === 'DAY_OFF'
+                        ? 'bg-amber-50/90 border-amber-200 text-amber-800'
+                        : 'bg-purple-50/90 border-purple-200 text-purple-800'
                     }`}
                   >
                     <div className="flex items-center gap-2">
                       <span className="font-bold">
-                        {datePickerMode === 'DUTY' ? '🔵 Duty Mode:' : '🟠 Day Off Mode:'}
+                        {datePickerMode === 'DUTY'
+                          ? '🔵 Duty Mode:'
+                          : datePickerMode === 'DAY_OFF'
+                          ? '🟠 Day Off Mode:'
+                          : '🟣 Travel Order Mode:'}
                       </span>
                       <span>
                         {datePickerMode === 'DUTY'
                           ? 'Click dates on the calendar to mark them as Active Duty.'
-                          : 'Click dates on the calendar to mark them as Scheduled Day Off.'}
+                          : datePickerMode === 'DAY_OFF'
+                          ? 'Click dates on the calendar to mark them as Scheduled Day Off.'
+                          : 'Click dates on the calendar to mark them as Official Travel Order.'}
                       </span>
                     </div>
                   </div>
@@ -2468,7 +2705,7 @@ export default function ShiftScheduleCalendarPage() {
                     {/* Days Grid */}
                     <div className="grid grid-cols-7 gap-1.5 pt-2">
                       {pickerCalendarDays.map((cell) => {
-                        const { dateKey, dayNum, isCurrentMonth, isDuty, isDayOff } = cell;
+                        const { dateKey, dayNum, isCurrentMonth, isDuty, isDayOff, isTravelOrder } = cell;
 
                         if (!isCurrentMonth) {
                           return (
@@ -2491,16 +2728,20 @@ export default function ShiftScheduleCalendarPage() {
                                 ? 'bg-[#004AC6] text-white shadow-2xs hover:bg-[#003ca3] ring-2 ring-[#004AC6]/30'
                                 : isDayOff
                                 ? 'bg-amber-600 text-white shadow-2xs hover:bg-amber-700 ring-2 ring-amber-600/30'
+                                : isTravelOrder
+                                ? 'bg-purple-600 text-white shadow-2xs hover:bg-purple-700 ring-2 ring-purple-600/30'
                                 : 'bg-[#F8FAFC] text-slate-700 hover:bg-slate-200/80 border border-[#E2E8F0]'
                             }`}
                           >
                             <span className="leading-tight">{dayNum}</span>
                             <span
                               className={`text-[8px] uppercase tracking-tighter leading-none mt-0.5 ${
-                                isDuty || isDayOff ? 'text-white/90 font-medium' : 'text-slate-400 font-normal'
+                                isDuty || isDayOff || isTravelOrder
+                                  ? 'text-white/90 font-medium'
+                                  : 'text-slate-400 font-normal'
                               }`}
                             >
-                              {isDuty ? 'Duty' : isDayOff ? 'Off' : '—'}
+                              {isDuty ? 'Duty' : isDayOff ? 'Off' : isTravelOrder ? 'Travel' : '—'}
                             </span>
                           </button>
                         );
@@ -2519,12 +2760,19 @@ export default function ShiftScheduleCalendarPage() {
                         <span className="w-2.5 h-2.5 rounded-full bg-amber-600" />
                         Day Off: {selectedDayOffDates.length} Days
                       </span>
+                      <span className="flex items-center gap-1.5 font-bold text-purple-700">
+                        <span className="w-2.5 h-2.5 rounded-full bg-purple-600" />
+                        Travel Order: {selectedTravelOrderDates.length} Days
+                      </span>
                       <span className="flex items-center gap-1.5 font-semibold text-slate-500">
                         <span className="w-2.5 h-2.5 rounded-full bg-slate-300" />
                         Unscheduled:{' '}
                         {Math.max(
                           0,
-                          pickerMonthDays.length - selectedDutyDates.length - selectedDayOffDates.length
+                          pickerMonthDays.length -
+                            selectedDutyDates.length -
+                            selectedDayOffDates.length -
+                            selectedTravelOrderDates.length
                         )}{' '}
                         Days
                       </span>

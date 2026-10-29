@@ -58,6 +58,7 @@ export const metadata: Metadata = {
   title: "PDRRMO MLS — Monitoring & Logging System",
   description:
     "Provincial Disaster Risk Reduction and Management Office (PDRRMO) Modern Precision Monitoring & Logging System.",
+  manifest: "/manifest.json",
   icons: {
     icon: "/logo.png",
     shortcut: "/logo.png",
