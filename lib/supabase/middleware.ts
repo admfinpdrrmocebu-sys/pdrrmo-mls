@@ -9,7 +9,8 @@ const AUTH_ROUTES = ['/login', '/register', '/forgot-password'];
 
 /**
  * Public standalone routes accessible to both unauthenticated and authenticated visitors
- * (e.g. Google OAuth Consent Screen Privacy Policy & Terms of Service verification pages).
+ * (e.g. Google OAuth Consent Screen Privacy Policy & Terms of Service verification pages,
+ * service worker background registration, and public push API endpoints).
  */
 const PUBLIC_ROUTES = [
   '/terms',
@@ -17,6 +18,11 @@ const PUBLIC_ROUTES = [
   '/privacy',
   '/privacy-policy',
   '/googlec855f23319c579a6.html',
+  '/sw.js',
+  '/manifest.json',
+  '/manifest.webmanifest',
+  '/api/push/vapid-public-key',
+  '/api/push/subscribe',
 ];
 
 /**
@@ -39,8 +45,8 @@ function isPublicRoute(pathname: string): boolean {
 export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
-  // Fast-path: Public standalone routes (e.g. /terms-and-conditions, /privacy for Google OAuth verification)
-  // Return immediately without round-trip auth checks so crawlers get instant HTTP 200 responses.
+  // Fast-path: Public standalone routes (e.g. /terms-and-conditions, /privacy, /sw.js, push endpoints)
+  // Return immediately without round-trip auth checks so clients get instant responses.
   if (isPublicRoute(pathname)) {
     return NextResponse.next({
       request,
@@ -80,8 +86,12 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // 1. Unauthenticated user trying to access protected routes or root / -> redirect to /login
+  // 1. Unauthenticated user trying to access protected routes or root /
   if (!user && !isAuthRoute(pathname)) {
+    // API routes should never be redirected to HTML login page
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     if (pathname !== '/') {

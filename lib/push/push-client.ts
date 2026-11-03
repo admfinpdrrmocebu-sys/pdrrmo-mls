@@ -4,9 +4,18 @@
 
 import { supabase } from '@/lib/supabase/client';
 
+export const DEFAULT_VAPID_PUBLIC_KEY =
+  'BIJ6Vz8cnZyFe76hVZqoHsGExgQIivB__UoW5eCjGgcWSbJzbJSDP6LIRloRYIlK--NIywmN_iVDR4VG8yqlbjc';
+
+function cleanKey(rawKey?: string | null): string {
+  if (!rawKey) return '';
+  return rawKey.replace(/^["']|["']$/g, '').trim();
+}
+
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const sanitized = cleanKey(base64String);
+  const padding = '='.repeat((4 - (sanitized.length % 4)) % 4);
+  const base64 = (sanitized + padding).replace(/-/g, '+').replace(/_/g, '/');
   const rawData = window.atob(base64);
   const outputArray = new Uint8Array(rawData.length);
   for (let i = 0; i < rawData.length; ++i) {
@@ -26,6 +35,23 @@ export function getNotificationPermission(): NotificationPermission {
 }
 
 /**
+ * Checks whether the current device is actively subscribed to Web Push.
+ */
+export async function checkIsPushSubscribed(): Promise<boolean> {
+  if (!isPushNotificationSupported()) return false;
+  if (getNotificationPermission() !== 'granted') return false;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) return false;
+    const subscription = await registration.pushManager.getSubscription();
+    return !!subscription;
+  } catch (err) {
+    console.warn('Error checking push subscription status:', err);
+    return false;
+  }
+}
+
+/**
  * Registers the Service Worker (/sw.js)
  */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
@@ -40,6 +66,35 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
     console.warn('Service worker registration failed:', err);
     return null;
   }
+}
+
+/**
+ * Retrieves the VAPID Public Key via client environment variable,
+ * dynamic API fetch (/api/push/vapid-public-key), or fallback default key.
+ */
+export async function getVapidPublicKey(): Promise<string> {
+  // 1. Check inlined client environment variable
+  let key = cleanKey(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY);
+  if (key) return key;
+
+  // 2. Fetch dynamically from API endpoint
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/push/vapid-public-key');
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.publicKey) {
+          key = cleanKey(data.publicKey);
+          if (key) return key;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch VAPID public key from /api/push/vapid-public-key:', err);
+    }
+  }
+
+  // 3. Fallback to configured project default VAPID public key
+  return DEFAULT_VAPID_PUBLIC_KEY;
 }
 
 /**
@@ -77,8 +132,8 @@ export async function subscribeToPushNotifications(userId?: string): Promise<{
     }
     await navigator.serviceWorker.ready;
 
-    // 3. Obtain VAPID Public Key from environment
-    const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    // 3. Obtain VAPID Public Key (multi-tier resolution)
+    const vapidPublicKey = await getVapidPublicKey();
     if (!vapidPublicKey) {
       console.warn('VAPID public key is missing from environment.');
       return {
@@ -174,11 +229,23 @@ export async function unsubscribeFromPushNotifications(): Promise<boolean> {
       const endpoint = subscription.endpoint;
       await subscription.unsubscribe();
 
-      await fetch('/api/push/subscribe', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint }),
-      });
+      // Delete directly from Supabase
+      try {
+        await supabase.from('user_push_subscriptions').delete().eq('endpoint', endpoint);
+      } catch (sbErr) {
+        console.warn('Direct push delete error:', sbErr);
+      }
+
+      // Also call backend API to delete
+      try {
+        await fetch('/api/push/subscribe', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint }),
+        });
+      } catch (apiErr) {
+        console.warn('Backend push delete error:', apiErr);
+      }
     }
     return true;
   } catch (err) {

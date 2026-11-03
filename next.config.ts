@@ -3,6 +3,13 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   env: {
     mapbox_token: process.env.mapbox_token || process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "",
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY:
+      (
+        process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ||
+        "BIJ6Vz8cnZyFe76hVZqoHsGExgQIivB__UoW5eCjGgcWSbJzbJSDP6LIRloRYIlK--NIywmN_iVDR4VG8yqlbjc"
+      )
+        .replace(/^["']|["']$/g, "")
+        .trim(),
   },
 };
 

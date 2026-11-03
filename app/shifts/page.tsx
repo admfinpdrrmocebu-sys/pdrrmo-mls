@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
   CalendarDays,
   LayoutDashboard,
@@ -638,6 +638,19 @@ export const CalendarDayCell = React.memo(function CalendarDayCell({ cell, onSel
       </div>
     </button>
   );
+}, (prev, next) => {
+  return (
+    prev.cell.isSelected === next.cell.isSelected &&
+    prev.cell.isCurrentMonth === next.cell.isCurrentMonth &&
+    prev.cell.isCurrentDay === next.cell.isCurrentDay &&
+    prev.cell.date.getTime() === next.cell.date.getTime() &&
+    prev.cell.assignment.type === next.cell.assignment.type &&
+    prev.cell.assignment.shift?.id === next.cell.assignment.shift?.id &&
+    prev.cell.assignment.shift?.name === next.cell.assignment.shift?.name &&
+    prev.cell.assignment.shift?.color === next.cell.assignment.shift?.color &&
+    prev.cell.assignment.isLead === next.cell.assignment.isLead &&
+    prev.onSelectDate === next.onSelectDate
+  );
 });
 
 interface DutyInspectorContentProps {
@@ -660,7 +673,7 @@ interface DutyInspectorContentProps {
   isModal?: boolean;
 }
 
-export function DutyInspectorContent({
+export const DutyInspectorContent = React.memo(function DutyInspectorContent({
   selectedDate,
   selectedDayInfo,
   onClose,
@@ -811,6 +824,62 @@ export function DutyInspectorContent({
       </div>
     </div>
   );
+});
+
+// =============================================================================
+// PERSISTENT CLIENT-SIDE MEMORY CACHE (ZERO RE-FETCH / ZERO SKELETON ON ROUTE NAV)
+// =============================================================================
+interface ShiftOperationsMemoryCache {
+  hasLoadedOnce: boolean;
+  profiles: OfficerMember[];
+  shiftSchedules: ShiftScheduleItem[];
+  activeShift: ActiveShiftRecord | null;
+  shiftDutyPersonnel: ShiftDutyPersonnelRecord[];
+  absentOfficerIds: string[];
+  geofenceConfig: GeofenceConfig;
+  todayAttendance: DutyAttendanceRecord[];
+  userCoords: UserCoordinates | null;
+  monthAssignmentsMap: Map<string, DutyRosterAssignmentRecord[]>;
+  todayAssignments: DutyRosterAssignmentRecord[];
+  lastFetchedAt: number;
+}
+
+const shiftOperationsMemoryCache: ShiftOperationsMemoryCache = {
+  hasLoadedOnce: false,
+  profiles: [],
+  shiftSchedules: [],
+  activeShift: null,
+  shiftDutyPersonnel: [],
+  absentOfficerIds: [],
+  geofenceConfig: DEFAULT_GEOFENCE_CONFIG,
+  todayAttendance: [],
+  userCoords: null,
+  monthAssignmentsMap: new Map<string, DutyRosterAssignmentRecord[]>(),
+  todayAssignments: [],
+  lastFetchedAt: 0,
+};
+
+function getMergedCachedAssignments(): DutyRosterAssignmentRecord[] {
+  const byKey = new Map<string, DutyRosterAssignmentRecord>();
+  shiftOperationsMemoryCache.todayAssignments.forEach((a) => {
+    const k = a.id || `${a.profile_id}_${a.duty_date}_${a.assignment_type}`;
+    byKey.set(k, a);
+  });
+  shiftOperationsMemoryCache.monthAssignmentsMap.forEach((records) => {
+    records.forEach((a) => {
+      const k = a.id || `${a.profile_id}_${a.duty_date}_${a.assignment_type}`;
+      byKey.set(k, a);
+    });
+  });
+  return Array.from(byKey.values());
+}
+
+function areJsonEqual(a: unknown, b: unknown): boolean {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
 // COMPONENT: SHIFT SCHEDULE OPERATIONS SCREEN (100% DYNAMIC DATABASE DATA)
@@ -824,21 +893,36 @@ export default function ShiftSchedulePage() {
   // Top Tab Switcher: 'dashboard' (Schedule Dashboard) | 'my-schedule' (My Schedule)
   const [activeTab, setActiveTab] = useState<'dashboard' | 'my-schedule'>('dashboard');
 
-  // Loading & Sync States
-  const [isLoading, setIsLoading] = useState(true);
+  // Loading & Sync States (Initialize from persistent memory cache to avoid skeleton flashes on route navigation)
+  const [isLoading, setIsLoading] = useState<boolean>(!shiftOperationsMemoryCache.hasLoadedOnce);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isSavingAttendance, setIsSavingAttendance] = useState(false);
 
-  // Dynamic Database Data
-  const [profiles, setProfiles] = useState<OfficerMember[]>([]);
-  const [shiftSchedules, setShiftSchedules] = useState<ShiftScheduleItem[]>([]);
-  const [dbAssignments, setDbAssignments] = useState<DutyRosterAssignmentRecord[]>([]);
-  const [activeShift, setActiveShift] = useState<ActiveShiftRecord | null>(null);
-  const [shiftDutyPersonnel, setShiftDutyPersonnel] = useState<ShiftDutyPersonnelRecord[]>([]);
+  // Dynamic Database Data (Initialized from memory cache)
+  const [profiles, setProfiles] = useState<OfficerMember[]>(shiftOperationsMemoryCache.profiles);
+  const [shiftSchedules, setShiftSchedules] = useState<ShiftScheduleItem[]>(
+    shiftOperationsMemoryCache.shiftSchedules
+  );
+  const [dbAssignments, setDbAssignments] = useState<DutyRosterAssignmentRecord[]>(() =>
+    getMergedCachedAssignments()
+  );
+  const [activeShift, setActiveShift] = useState<ActiveShiftRecord | null>(
+    shiftOperationsMemoryCache.activeShift
+  );
+  const [shiftDutyPersonnel, setShiftDutyPersonnel] = useState<ShiftDutyPersonnelRecord[]>(
+    shiftOperationsMemoryCache.shiftDutyPersonnel
+  );
 
   // GeoFence & Daily Check-In / Check-Out Attendance State
-  const [geofenceConfig, setGeofenceConfig] = useState<GeofenceConfig>(DEFAULT_GEOFENCE_CONFIG);
-  const [todayAttendance, setTodayAttendance] = useState<DutyAttendanceRecord[]>([]);
-  const [userCoords, setUserCoords] = useState<UserCoordinates | null>(null);
+  const [geofenceConfig, setGeofenceConfig] = useState<GeofenceConfig>(
+    shiftOperationsMemoryCache.geofenceConfig
+  );
+  const [todayAttendance, setTodayAttendance] = useState<DutyAttendanceRecord[]>(
+    shiftOperationsMemoryCache.todayAttendance
+  );
+  const [userCoords, setUserCoords] = useState<UserCoordinates | null>(
+    shiftOperationsMemoryCache.userCoords
+  );
   const [isLocatingGps, setIsLocatingGps] = useState<boolean>(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [isCheckingInOut, setIsCheckingInOut] = useState<boolean>(false);
@@ -858,12 +942,18 @@ export default function ShiftSchedulePage() {
   }, [selectedRoleFilter]);
 
   // Attendance State (Tracks absent officers for the active shift)
-  const [absentOfficerIds, setAbsentOfficerIds] = useState<string[]>([]);
+  const [absentOfficerIds, setAbsentOfficerIds] = useState<string[]>(
+    shiftOperationsMemoryCache.absentOfficerIds
+  );
   const [tempAbsentOfficerIds, setTempAbsentOfficerIds] = useState<string[]>([]);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
 
   // "My Schedule" Calendar State
   const [calendarMonth, setCalendarMonth] = useState<Date>(new Date());
+  const calendarMonthRef = useRef<Date>(calendarMonth);
+  useEffect(() => {
+    calendarMonthRef.current = calendarMonth;
+  }, [calendarMonth]);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [isMobileInspectorOpen, setIsMobileInspectorOpen] = useState<boolean>(false);
 
@@ -875,13 +965,21 @@ export default function ShiftSchedulePage() {
   };
 
   // ===========================================================================
-  // DATA FETCHING (SUPABASE 100% DYNAMIC)
+  // DATA FETCHING (SUPABASE 100% DYNAMIC WITH SELECTIVE DIFF UPDATES)
   // ===========================================================================
   const fetchShiftData = useCallback(async (isBackground = false) => {
     try {
-      if (!isBackground) {
+      if (!isBackground && !shiftOperationsMemoryCache.hasLoadedOnce) {
         setIsLoading(true);
+      } else {
+        setIsRefreshing(true);
       }
+
+      const activeMonth = calendarMonthRef.current;
+      const monthKey = format(activeMonth, 'yyyy-MM');
+      const monthStartStr = format(startOfMonth(activeMonth), 'yyyy-MM-dd');
+      const monthEndStr = format(endOfMonth(activeMonth), 'yyyy-MM-dd');
+      const todayStr = format(new Date(), 'yyyy-MM-dd');
 
       // 1. Fetch Profiles
       const { data: profilesData, error: profilesError } = await supabase
@@ -925,8 +1023,13 @@ export default function ShiftSchedulePage() {
               defaultShift: finalShift,
             };
           });
-        setProfiles(mappedProfiles);
-      } else {
+
+        if (!areJsonEqual(shiftOperationsMemoryCache.profiles, mappedProfiles)) {
+          shiftOperationsMemoryCache.profiles = mappedProfiles;
+          setProfiles(mappedProfiles);
+        }
+      } else if (shiftOperationsMemoryCache.profiles.length > 0) {
+        shiftOperationsMemoryCache.profiles = [];
         setProfiles([]);
       }
 
@@ -952,16 +1055,16 @@ export default function ShiftSchedulePage() {
           targetRole: s.target_role,
           sortOrder: s.sort_order ?? 0,
         }));
-        setShiftSchedules(mappedSchedules);
-      } else {
+        if (!areJsonEqual(shiftOperationsMemoryCache.shiftSchedules, mappedSchedules)) {
+          shiftOperationsMemoryCache.shiftSchedules = mappedSchedules;
+          setShiftSchedules(mappedSchedules);
+        }
+      } else if (shiftOperationsMemoryCache.shiftSchedules.length > 0) {
+        shiftOperationsMemoryCache.shiftSchedules = [];
         setShiftSchedules([]);
       }
 
       // 3. Fetch Month Duty Roster Assignments (Covering viewed calendar month + current date)
-      const monthStartStr = format(startOfMonth(calendarMonth), 'yyyy-MM-dd');
-      const monthEndStr = format(endOfMonth(calendarMonth), 'yyyy-MM-dd');
-      const todayStr = format(new Date(), 'yyyy-MM-dd');
-
       const { data: assignData, error: assignError } = await supabase
         .from('duty_roster_assignments')
         .select('*')
@@ -970,9 +1073,17 @@ export default function ShiftSchedulePage() {
       if (assignError) {
         console.warn('Duty roster query notice:', assignError.message);
       } else if (assignData) {
-        setDbAssignments(assignData as DutyRosterAssignmentRecord[]);
-      } else {
-        setDbAssignments([]);
+        const typedAssigns = assignData as DutyRosterAssignmentRecord[];
+        const monthRecords = typedAssigns.filter(
+          (a) => a.duty_date >= monthStartStr && a.duty_date <= monthEndStr
+        );
+        const todayRecords = typedAssigns.filter((a) => a.duty_date === todayStr);
+
+        shiftOperationsMemoryCache.monthAssignmentsMap.set(monthKey, monthRecords);
+        shiftOperationsMemoryCache.todayAssignments = todayRecords;
+
+        const merged = getMergedCachedAssignments();
+        setDbAssignments((prev) => (areJsonEqual(prev, merged) ? prev : merged));
       }
 
       // 4. Fetch Active Operational Shift from public.shifts (status = 'active')
@@ -989,7 +1100,11 @@ export default function ShiftSchedulePage() {
       }
 
       if (activeShiftData) {
-        setActiveShift(activeShiftData as ActiveShiftRecord);
+        const typedShift = activeShiftData as ActiveShiftRecord;
+        if (!areJsonEqual(shiftOperationsMemoryCache.activeShift, typedShift)) {
+          shiftOperationsMemoryCache.activeShift = typedShift;
+          setActiveShift(typedShift);
+        }
 
         // Fetch linked duty personnel for active shift
         const { data: personnelData, error: personnelError } = await supabase
@@ -1002,25 +1117,47 @@ export default function ShiftSchedulePage() {
         }
 
         if (personnelData && personnelData.length > 0) {
-          setShiftDutyPersonnel(personnelData as ShiftDutyPersonnelRecord[]);
-          const absentIds = personnelData
+          const typedPersonnel = personnelData as ShiftDutyPersonnelRecord[];
+          if (!areJsonEqual(shiftOperationsMemoryCache.shiftDutyPersonnel, typedPersonnel)) {
+            shiftOperationsMemoryCache.shiftDutyPersonnel = typedPersonnel;
+            setShiftDutyPersonnel(typedPersonnel);
+          }
+          const absentIds = typedPersonnel
             .filter((p) => p.present_at_end === false)
             .map((p) => p.profile_id);
-          setAbsentOfficerIds(absentIds);
+          if (!areJsonEqual(shiftOperationsMemoryCache.absentOfficerIds, absentIds)) {
+            shiftOperationsMemoryCache.absentOfficerIds = absentIds;
+            setAbsentOfficerIds(absentIds);
+          }
         } else {
-          setShiftDutyPersonnel([]);
+          if (shiftOperationsMemoryCache.shiftDutyPersonnel.length > 0) {
+            shiftOperationsMemoryCache.shiftDutyPersonnel = [];
+            setShiftDutyPersonnel([]);
+          }
           const rosterAbsent = (assignData || [])
             .filter((a: any) => a.duty_date === todayStr && a.notes && a.notes.toLowerCase().includes('absent'))
             .map((a: any) => a.profile_id);
-          setAbsentOfficerIds(rosterAbsent);
+          if (!areJsonEqual(shiftOperationsMemoryCache.absentOfficerIds, rosterAbsent)) {
+            shiftOperationsMemoryCache.absentOfficerIds = rosterAbsent;
+            setAbsentOfficerIds(rosterAbsent);
+          }
         }
       } else {
-        setActiveShift(null);
-        setShiftDutyPersonnel([]);
+        if (shiftOperationsMemoryCache.activeShift !== null) {
+          shiftOperationsMemoryCache.activeShift = null;
+          setActiveShift(null);
+        }
+        if (shiftOperationsMemoryCache.shiftDutyPersonnel.length > 0) {
+          shiftOperationsMemoryCache.shiftDutyPersonnel = [];
+          setShiftDutyPersonnel([]);
+        }
         const rosterAbsent = (assignData || [])
           .filter((a: any) => a.duty_date === todayStr && a.notes && a.notes.toLowerCase().includes('absent'))
           .map((a: any) => a.profile_id);
-        setAbsentOfficerIds(rosterAbsent);
+        if (!areJsonEqual(shiftOperationsMemoryCache.absentOfficerIds, rosterAbsent)) {
+          shiftOperationsMemoryCache.absentOfficerIds = rosterAbsent;
+          setAbsentOfficerIds(rosterAbsent);
+        }
       }
 
       // 5. Fetch GeoFence Security Configuration
@@ -1043,15 +1180,24 @@ export default function ShiftSchedulePage() {
             isActive: Boolean(geoData.is_active ?? true),
             updatedAt: geoData.updated_at,
           };
-          setGeofenceConfig(loadedGeo);
+          if (!areJsonEqual(shiftOperationsMemoryCache.geofenceConfig, loadedGeo)) {
+            shiftOperationsMemoryCache.geofenceConfig = loadedGeo;
+            setGeofenceConfig(loadedGeo);
+          }
           saveGeofenceCache(loadedGeo);
         } else {
           const cached = loadGeofenceCache();
-          if (cached) setGeofenceConfig(cached);
+          if (cached && !areJsonEqual(shiftOperationsMemoryCache.geofenceConfig, cached)) {
+            shiftOperationsMemoryCache.geofenceConfig = cached;
+            setGeofenceConfig(cached);
+          }
         }
       } catch {
         const cached = loadGeofenceCache();
-        if (cached) setGeofenceConfig(cached);
+        if (cached && !areJsonEqual(shiftOperationsMemoryCache.geofenceConfig, cached)) {
+          shiftOperationsMemoryCache.geofenceConfig = cached;
+          setGeofenceConfig(cached);
+        }
       }
 
       // 6. Fetch Today's Officer Check-In / Check-Out Attendance Records
@@ -1075,11 +1221,15 @@ export default function ShiftSchedulePage() {
             if (!dbMap.has(r.profile_id)) dbMap.set(r.profile_id, r);
           });
           const merged = Array.from(dbMap.values());
-          setTodayAttendance(merged);
+          if (!areJsonEqual(shiftOperationsMemoryCache.todayAttendance, merged)) {
+            shiftOperationsMemoryCache.todayAttendance = merged;
+            setTodayAttendance(merged);
+          }
           try {
             localStorage.setItem(`pdrrmo_duty_attendance_${todayStr}`, JSON.stringify(merged));
           } catch {}
-        } else {
+        } else if (!areJsonEqual(shiftOperationsMemoryCache.todayAttendance, localAtt)) {
+          shiftOperationsMemoryCache.todayAttendance = localAtt;
           setTodayAttendance(localAtt);
         }
       } catch {
@@ -1087,15 +1237,53 @@ export default function ShiftSchedulePage() {
           const localAtt = JSON.parse(
             localStorage.getItem(`pdrrmo_duty_attendance_${todayStr}`) || '[]'
           );
-          setTodayAttendance(localAtt);
+          if (!areJsonEqual(shiftOperationsMemoryCache.todayAttendance, localAtt)) {
+            shiftOperationsMemoryCache.todayAttendance = localAtt;
+            setTodayAttendance(localAtt);
+          }
         } catch {}
       }
+
+      shiftOperationsMemoryCache.hasLoadedOnce = true;
+      shiftOperationsMemoryCache.lastFetchedAt = Date.now();
     } catch (err) {
       console.error('Error fetching dynamic shift operations data:', err);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
-  }, [calendarMonth]);
+  }, []);
+
+  // Decoupled Month Assignments Fetcher (Only fetches uncached months without re-querying static tables)
+  const fetchMonthAssignmentsIfNeeded = useCallback(async (targetMonth: Date) => {
+    const monthKey = format(targetMonth, 'yyyy-MM');
+    if (shiftOperationsMemoryCache.monthAssignmentsMap.has(monthKey)) {
+      // Already cached in memory — 0 network requests, 0 re-renders!
+      return;
+    }
+
+    const monthStartStr = format(startOfMonth(targetMonth), 'yyyy-MM-dd');
+    const monthEndStr = format(endOfMonth(targetMonth), 'yyyy-MM-dd');
+
+    try {
+      const { data: assignData, error: assignError } = await supabase
+        .from('duty_roster_assignments')
+        .select('*')
+        .gte('duty_date', monthStartStr)
+        .lte('duty_date', monthEndStr);
+
+      if (!assignError && assignData) {
+        shiftOperationsMemoryCache.monthAssignmentsMap.set(
+          monthKey,
+          assignData as DutyRosterAssignmentRecord[]
+        );
+        const merged = getMergedCachedAssignments();
+        setDbAssignments((prev) => (areJsonEqual(prev, merged) ? prev : merged));
+      }
+    } catch (err) {
+      console.warn('Error fetching month assignments:', err);
+    }
+  }, []);
 
   // Acquire Live GPS Coordinates for Geofence Validation
   const refreshGpsLocation = useCallback(async () => {
@@ -1103,7 +1291,8 @@ export default function ShiftSchedulePage() {
     setGpsError(null);
     try {
       const coords = await getUserCoordinates();
-      setUserCoords(coords);
+      shiftOperationsMemoryCache.userCoords = coords;
+      setUserCoords((prev) => (areJsonEqual(prev, coords) ? prev : coords));
       return coords;
     } catch (err: any) {
       setGpsError(err.message || 'Unable to acquire GPS signal.');
@@ -1113,12 +1302,19 @@ export default function ShiftSchedulePage() {
     }
   }, []);
 
-  // Initial load and calendar month change trigger
+  // Initial load (Silent background sync if already cached in memory)
   useEffect(() => {
-    fetchShiftData();
+    fetchShiftData(shiftOperationsMemoryCache.hasLoadedOnce);
   }, [fetchShiftData]);
 
-  // Acquire GPS on mount
+  // Trigger decoupled month fetch when calendarMonth changes
+  useEffect(() => {
+    if (shiftOperationsMemoryCache.hasLoadedOnce) {
+      fetchMonthAssignmentsIfNeeded(calendarMonth);
+    }
+  }, [calendarMonth, fetchMonthAssignmentsIfNeeded]);
+
+  // Acquire GPS on mount (Skip blocking if already cached, refresh silently)
   useEffect(() => {
     refreshGpsLocation();
   }, [refreshGpsLocation]);
@@ -1203,10 +1399,33 @@ export default function ShiftSchedulePage() {
     };
   }, [fetchShiftData]);
 
-  // Helper to resolve officer by profile_id
+  // O(1) Indexed Map for Profiles by ID
+  const profilesByIdMap = useMemo(() => {
+    const map = new Map<string, OfficerMember>();
+    profiles.forEach((p) => map.set(p.id, p));
+    return map;
+  }, [profiles]);
+
+  // O(1) Indexed Map for Shift Schedules by ID
+  const schedulesByIdMap = useMemo(() => {
+    const map = new Map<string, ShiftScheduleItem>();
+    shiftSchedules.forEach((s) => map.set(s.id, s));
+    return map;
+  }, [shiftSchedules]);
+
+  // O(1) Indexed Map for Assignments by Officer + Date
+  const assignmentsByOfficerDateMap = useMemo(() => {
+    const map = new Map<string, DutyRosterAssignmentRecord>();
+    dbAssignments.forEach((a) => {
+      map.set(`${a.profile_id}_${a.duty_date}`, a);
+    });
+    return map;
+  }, [dbAssignments]);
+
+  // Helper to resolve officer by profile_id in O(1)
   const getOfficerById = useCallback(
     (id: string): OfficerMember => {
-      const found = profiles.find((p) => p.id === id);
+      const found = profilesByIdMap.get(id);
       if (found) return found;
       return {
         id,
@@ -1219,7 +1438,7 @@ export default function ShiftSchedulePage() {
         defaultShift: '',
       };
     },
-    [profiles]
+    [profilesByIdMap]
   );
 
   // Active Live Shift Schedule determined dynamically from database
@@ -1477,6 +1696,7 @@ export default function ShiftSchedulePage() {
 
         setTodayAttendance((prev) => {
           const next = [newRecord, ...prev.filter((r) => r.profile_id !== currentUserId)];
+          shiftOperationsMemoryCache.todayAttendance = next;
           try {
             localStorage.setItem(`pdrrmo_duty_attendance_${todayKey}`, JSON.stringify(next));
           } catch {}
@@ -1507,6 +1727,7 @@ export default function ShiftSchedulePage() {
 
         setTodayAttendance((prev) => {
           const next = [updatedRecord, ...prev.filter((r) => r.profile_id !== currentUserId)];
+          shiftOperationsMemoryCache.todayAttendance = next;
           try {
             localStorage.setItem(`pdrrmo_duty_attendance_${todayKey}`, JSON.stringify(next));
           } catch {}
@@ -1736,7 +1957,7 @@ export default function ShiftSchedulePage() {
         localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
       }
 
-      fetchShiftData();
+      fetchShiftData(true);
     } catch (err: any) {
       console.error('Error saving attendance to database:', err);
       showToast(`Error saving attendance: ${err.message || 'Database error'}`);
@@ -1745,10 +1966,10 @@ export default function ShiftSchedulePage() {
     }
   };
 
-  // Currently logged-in officer profile for My Schedule view
+  // Currently logged-in officer profile for My Schedule view (O(1) lookup)
   const currentOfficer = useMemo(() => {
     if (profile?.id) {
-      const found = profiles.find((p) => p.id === profile.id);
+      const found = profilesByIdMap.get(profile.id);
       if (found) return found;
       return {
         id: profile.id,
@@ -1763,15 +1984,13 @@ export default function ShiftSchedulePage() {
       };
     }
     return profiles[0] || null;
-  }, [profile, profiles]);
+  }, [profile, profilesByIdMap, profiles]);
 
-  // Helper to get logged-in officer's schedule for any given date from dbAssignments
+  // Helper to get logged-in officer's schedule for any given date in O(1)
   const getOfficerAssignmentForDate = useCallback(
     (officerId: string, date: Date) => {
       const dateKey = format(date, 'yyyy-MM-dd');
-      const assign = dbAssignments.find(
-        (a) => a.profile_id === officerId && a.duty_date === dateKey
-      );
+      const assign = assignmentsByOfficerDateMap.get(`${officerId}_${dateKey}`);
 
       if (!assign) {
         return { type: 'NONE' as const, shift: null, isLead: false };
@@ -1785,14 +2004,16 @@ export default function ShiftSchedulePage() {
         return { type: 'TRAVEL' as const, shift: null, isLead: false };
       }
 
-      const matchedShift = shiftSchedules.find((s) => s.id === assign.shift_schedule_id) || null;
+      const matchedShift = assign.shift_schedule_id
+        ? schedulesByIdMap.get(assign.shift_schedule_id) || null
+        : null;
       return {
         type: 'DUTY' as const,
         shift: matchedShift,
         isLead: assign.is_lead,
       };
     },
-    [dbAssignments, shiftSchedules]
+    [assignmentsByOfficerDateMap, schedulesByIdMap]
   );
 
   // Generate calendar days for My Schedule
@@ -1918,12 +2139,12 @@ export default function ShiftSchedulePage() {
             {/* Refresh Button */}
             <button
               type="button"
-              onClick={() => fetchShiftData(false)}
-              disabled={isLoading}
+              onClick={() => fetchShiftData(true)}
+              disabled={isLoading || isRefreshing}
               className="p-2 rounded-xl border border-[#E2E8F0] text-[#505F76] hover:text-[#1E293B] hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
               title="Refresh Roster Data"
             >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${isLoading || isRefreshing ? 'animate-spin text-[#004AC6]' : ''}`} />
             </button>
 
             {/* Segmented Tab Switcher Toggle */}
@@ -1964,16 +2185,12 @@ export default function ShiftSchedulePage() {
         />
 
         {/* ========================================================================= */}
-        {/* VIEW 1: SCHEDULE DASHBOARD */}
+        {/* VIEW 1: SCHEDULE DASHBOARD (KEEP-ALIVE - NO UNMOUNTING ON TAB SWITCH) */}
         {/* ========================================================================= */}
-        {activeTab === 'dashboard' && (
-          <motion.div
-            key="dashboard-tab"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2 }}
-            className="space-y-6"
-          >
+        <div
+          className={activeTab === 'dashboard' ? 'space-y-6 block' : 'hidden'}
+          aria-hidden={activeTab !== 'dashboard'}
+        >
             {/* ===================================================================== */}
             {/* OFFICER DUTY CHECK-IN / CHECK-OUT & GEOFENCE SECURITY TERMINAL */}
             {/* ===================================================================== */}
@@ -2380,20 +2597,15 @@ export default function ShiftSchedulePage() {
                 </div>
               </div>
             </div>
-          </motion.div>
-        )}
+        </div>
 
         {/* ========================================================================= */}
-        {/* VIEW 2: MY SCHEDULE (PERSONAL CALENDAR) */}
+        {/* VIEW 2: MY SCHEDULE (PERSONAL CALENDAR - KEEP-ALIVE) */}
         {/* ========================================================================= */}
-        {activeTab === 'my-schedule' && (
-          <motion.div
-            key="my-schedule-tab"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2 }}
-            className="space-y-6"
-          >
+        <div
+          className={activeTab === 'my-schedule' ? 'space-y-6 block' : 'hidden'}
+          aria-hidden={activeTab !== 'my-schedule'}
+        >
             {/* Personal Profile Bar */}
             <div className="bg-white border border-[#E2E8F0] rounded-3xl p-5 sm:p-6 shadow-xs flex items-center justify-between">
               {isLoading ? (
@@ -2529,9 +2741,9 @@ export default function ShiftSchedulePage() {
                   <PersonalCalendarSkeleton daysCount={35} />
                 ) : (
                   <div className="grid grid-cols-7 gap-1.5">
-                    {calendarDays.map((cell, idx) => (
+                    {calendarDays.map((cell) => (
                       <CalendarDayCell
-                        key={idx}
+                        key={format(cell.date, 'yyyy-MM-dd')}
                         cell={cell}
                         onSelectDate={handleSelectDate}
                       />
@@ -2554,8 +2766,7 @@ export default function ShiftSchedulePage() {
                 )}
               </div>
             </div>
-          </motion.div>
-        )}
+        </div>
       </div>
 
       {/* ========================================================================= */}

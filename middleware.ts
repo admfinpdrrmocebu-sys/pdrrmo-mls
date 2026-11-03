@@ -12,10 +12,12 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
+     * - sw.js (service worker)
+     * - manifest.json / manifest.webmanifest
      * - assets (public assets)
      * - terms / terms-and-conditions / privacy / privacy-policy (public OAuth compliance pages)
      * - Any image extension (.svg, .png, .jpg, .jpeg, .gif, .webp)
      */
-    '/((?!_next/static|_next/image|favicon.ico|assets|terms|terms-and-conditions|privacy|privacy-policy|.*\\.(?:svg|png|jpg|jpeg|gif|webp|html|txt|xml)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|sw\\.js|manifest\\.json|manifest\\.webmanifest|assets|terms|terms-and-conditions|privacy|privacy-policy|.*\\.(?:svg|png|jpg|jpeg|gif|webp|html|txt|xml)$).*)',
   ],
 };

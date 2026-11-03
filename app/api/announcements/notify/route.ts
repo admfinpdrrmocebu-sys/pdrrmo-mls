@@ -5,9 +5,20 @@ import webpush from 'web-push';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
-const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY || '';
-const vapidSubject = process.env.VAPID_SUBJECT || 'mailto:admin@pdrrmo.gov.ph';
+const rawPublicKey =
+  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ||
+  process.env.VAPID_PUBLIC_KEY ||
+  'BIJ6Vz8cnZyFe76hVZqoHsGExgQIivB__UoW5eCjGgcWSbJzbJSDP6LIRloRYIlK--NIywmN_iVDR4VG8yqlbjc';
+const rawPrivateKey =
+  process.env.VAPID_PRIVATE_KEY ||
+  'Cml7dzvOqr-abrvGzkeTaYgOw_zaBqxjIqSI8F0YnmE';
+const rawSubject =
+  process.env.VAPID_SUBJECT ||
+  'mailto:admin@pdrrmo.gov.ph';
+
+const vapidPublicKey = rawPublicKey.replace(/^["']|["']$/g, '').trim();
+const vapidPrivateKey = rawPrivateKey.replace(/^["']|["']$/g, '').trim();
+const vapidSubject = rawSubject.replace(/^["']|["']$/g, '').trim();
 
 // Configure Web Push VAPID credentials
 if (vapidPublicKey && vapidPrivateKey) {

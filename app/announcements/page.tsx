@@ -39,6 +39,8 @@ import {
   isPushNotificationSupported,
   getNotificationPermission,
   subscribeToPushNotifications,
+  unsubscribeFromPushNotifications,
+  checkIsPushSubscribed,
 } from '@/lib/push/push-client';
 
 export interface AnnouncementAcknowledgment {
@@ -346,6 +348,7 @@ export default function AnnouncementsPage() {
   // Mobile Web Push Notification state
   const [pushStatus, setPushStatus] = useState<NotificationPermission>('default');
   const [isPushSupported, setIsPushSupported] = useState<boolean>(false);
+  const [isPushActive, setIsPushActive] = useState<boolean>(false);
   const [isSubscribingPush, setIsSubscribingPush] = useState<boolean>(false);
 
   // Toast notification
@@ -464,19 +467,26 @@ export default function AnnouncementsPage() {
     };
   }, [fetchAnnouncements]);
 
-  // Check Web Push support and initial permission status
+  // Check Web Push support, initial permission status, and active subscription state
   useEffect(() => {
     const supported = isPushNotificationSupported();
     setIsPushSupported(supported);
     const perm = getNotificationPermission();
     setPushStatus(perm);
 
-    // If permission is already granted, verify/sync this device's token in user_push_subscriptions in background
+    // If permission is already granted, check if active subscription exists
     if (supported && perm === 'granted') {
-      const currentUserId = user?.id || profile?.id;
-      subscribeToPushNotifications(currentUserId).catch((err) => {
-        console.warn('Background push subscription sync notice:', err);
+      checkIsPushSubscribed().then((subscribed) => {
+        setIsPushActive(subscribed);
+        if (subscribed) {
+          const currentUserId = user?.id || profile?.id;
+          subscribeToPushNotifications(currentUserId).catch((err) => {
+            console.warn('Background push subscription sync notice:', err);
+          });
+        }
       });
+    } else {
+      setIsPushActive(false);
     }
   }, [user?.id, profile?.id]);
 
@@ -493,7 +503,7 @@ export default function AnnouncementsPage() {
     }
   }, [announcements, viewingAnnouncement?.id]);
 
-  // Request or view mobile push alert status
+  // Toggle mobile push alerts ON or OFF
   const handleTogglePushNotifications = useCallback(async () => {
     const currentUserId = user?.id || profile?.id;
     if (!isPushSupported) {
@@ -508,45 +518,57 @@ export default function AnnouncementsPage() {
     if (pushStatus === 'denied') {
       showToast(
         'Notifications Blocked',
-        'Notification permissions are blocked in your browser settings. Please enable notifications for this site.',
+        'Notification permissions are blocked in your browser settings. Please allow notifications for this site.',
         'error'
       );
       return;
     }
 
-    const wasAlreadyGranted = pushStatus === 'granted';
-
     setIsSubscribingPush(true);
+
     try {
-      const res = await subscribeToPushNotifications(currentUserId);
-      setPushStatus(res.status);
-      if (res.success) {
+      if (isPushActive) {
+        // 1. Turn OFF: Unsubscribe device and remove from database
+        await unsubscribeFromPushNotifications();
+        setIsPushActive(false);
         showToast(
-          wasAlreadyGranted ? 'Device Synced with Database' : 'Phone Notifications Enabled',
-          wasAlreadyGranted
-            ? 'This device is successfully registered in user_push_subscriptions to receive mobile notifications.'
-            : 'You will now receive native alerts on your phone even when the app is closed.',
-          'success'
-        );
-      } else if (res.status === 'denied') {
-        showToast(
-          'Permission Denied',
-          'Notification permission was declined.',
+          'Phone Alerts Turned Off',
+          'You will no longer receive background phone alerts for announcements.',
           'info'
         );
       } else {
-        showToast(
-          'Notification Setup',
-          res.error || 'Could not complete push registration.',
-          'error'
-        );
+        // 2. Turn ON: Subscribe device and save to database
+        const res = await subscribeToPushNotifications(currentUserId);
+        setPushStatus(res.status);
+        if (res.success) {
+          setIsPushActive(true);
+          showToast(
+            'Phone Alerts Turned On',
+            'You will now receive native alerts on your phone even when the app is closed.',
+            'success'
+          );
+        } else if (res.status === 'denied') {
+          setIsPushActive(false);
+          showToast(
+            'Permission Declined',
+            'Notification permission was declined.',
+            'info'
+          );
+        } else {
+          setIsPushActive(false);
+          showToast(
+            'Notification Setup',
+            res.error || 'Could not complete push registration.',
+            'error'
+          );
+        }
       }
     } catch (err: any) {
-      showToast('Error', err.message || 'Push registration failed.', 'error');
+      showToast('Error', err.message || 'Failed to update alert settings.', 'error');
     } finally {
       setIsSubscribingPush(false);
     }
-  }, [isPushSupported, pushStatus, user?.id, profile?.id, showToast]);
+  }, [isPushSupported, pushStatus, isPushActive, user?.id, profile?.id, showToast]);
 
   // 3. Toggle Acknowledgment (Receipt) Handler
   const handleToggleAcknowledge = useCallback(
@@ -907,7 +929,7 @@ export default function AnnouncementsPage() {
         {/* ========================================================================= */}
         {/* 1. HEADER & CONTROLS */}
         {/* ========================================================================= */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4">
           <div>
             <div className="flex items-center gap-2">
               <Megaphone className="w-6 h-6 text-[#004AC6]" />
@@ -920,53 +942,73 @@ export default function AnnouncementsPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-stretch sm:items-center gap-2">
             <button
               type="button"
               onClick={() => fetchAnnouncements(true)}
               title="Refresh Announcements"
-              className="p-2.5 text-[#505F76] hover:text-[#004AC6] hover:bg-slate-100 rounded-full transition-colors border border-[#E2E8F0] shadow-2xs cursor-pointer"
+              className="p-2.5 text-[#505F76] hover:text-[#004AC6] hover:bg-slate-100 rounded-full transition-colors border border-[#E2E8F0] shadow-2xs cursor-pointer flex items-center justify-center shrink-0"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-[#004AC6]' : ''}`} />
             </button>
 
             {isPushSupported && (
-              <button
-                type="button"
-                onClick={handleTogglePushNotifications}
-                disabled={isSubscribingPush}
-                title={
-                  pushStatus === 'granted'
-                    ? 'Mobile push alerts active'
-                    : pushStatus === 'denied'
-                    ? 'Push alerts blocked in browser'
-                    : 'Enable phone notifications when app is closed'
+              <div
+                onClick={
+                  !isSubscribingPush && pushStatus !== 'denied'
+                    ? handleTogglePushNotifications
+                    : undefined
                 }
-                className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-full border transition-all cursor-pointer shadow-2xs ${
-                  pushStatus === 'granted'
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                    : pushStatus === 'denied'
-                    ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
-                    : 'bg-white text-[#505F76] border-[#E2E8F0] hover:text-[#004AC6] hover:border-[#004AC6]/30'
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all shadow-2xs select-none shrink-0 ${
+                  pushStatus === 'denied'
+                    ? 'bg-rose-50/60 border-rose-200 cursor-not-allowed'
+                    : isSubscribingPush
+                    ? 'bg-slate-50 border-slate-200 cursor-wait'
+                    : isPushActive
+                    ? 'bg-emerald-50/80 border-emerald-200/90 text-emerald-700 cursor-pointer hover:bg-emerald-100/70'
+                    : 'bg-white border-[#E2E8F0] cursor-pointer hover:border-slate-300 hover:bg-slate-50'
                 }`}
+                title={
+                  pushStatus === 'denied'
+                    ? 'Notifications blocked in browser settings'
+                    : isPushActive
+                    ? 'Phone alerts are ON. Click toggle to turn OFF.'
+                    : 'Phone alerts are OFF. Click toggle to turn ON.'
+                }
               >
-                {isSubscribingPush ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : pushStatus === 'granted' ? (
-                  <BellRing className="w-3.5 h-3.5 text-emerald-600" />
-                ) : pushStatus === 'denied' ? (
-                  <BellOff className="w-3.5 h-3.5 text-rose-500" />
-                ) : (
-                  <Bell className="w-3.5 h-3.5" />
-                )}
-                <span className="hidden sm:inline">
-                  {pushStatus === 'granted'
-                    ? 'Phone Alerts On'
-                    : pushStatus === 'denied'
-                    ? 'Alerts Blocked'
-                    : 'Enable Phone Alerts'}
+                {/* Notification Icon */}
+                <span className="flex items-center justify-center shrink-0">
+                  {isSubscribingPush ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                  ) : isPushActive ? (
+                    <BellRing className="w-4 h-4 text-emerald-600" />
+                  ) : pushStatus === 'denied' ? (
+                    <BellOff className="w-4 h-4 text-rose-500" />
+                  ) : (
+                    <Bell className="w-4 h-4 text-slate-400" />
+                  )}
                 </span>
-              </button>
+
+                {/* Toggle Button */}
+                <span
+                  role="switch"
+                  aria-checked={isPushActive}
+                  aria-label={isPushActive ? 'Turn off phone alerts' : 'Turn on phone alerts'}
+                  className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                    pushStatus === 'denied'
+                      ? 'opacity-40 bg-slate-200'
+                      : isPushActive
+                      ? 'bg-emerald-500'
+                      : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                      isPushActive ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </span>
+              </div>
             )}
             {canModifyAnnouncements && (
               <PrimaryButton
