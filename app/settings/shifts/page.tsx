@@ -49,6 +49,7 @@ import { AppLayoutShell } from '@/components/nav-route';
 import { SummaryCard } from '@/components/card';
 import { SummaryCardSkeleton, CalendarSkeleton } from '@/components/skeleton';
 import { PrimaryButton, SecondaryButton } from '@/components/button';
+import { LocationAccessModal } from '@/components/location-access-modal';
 import { CustomDropdown, CustomDropdownOption } from '@/components/input';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
@@ -4614,6 +4615,11 @@ export default function ShiftScheduleCalendarPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Device Location Access Modal - only prompts if device has not accepted location access */}
+      <LocationAccessModal
+        screenName="Shift Schedule Management"
+      />
     </AppLayoutShell>
   );
 }

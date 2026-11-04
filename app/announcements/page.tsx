@@ -942,90 +942,95 @@ export default function AnnouncementsPage() {
             </p>
           </div>
 
-          <div className="flex items-stretch sm:items-center gap-2">
-            <button
-              type="button"
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto">
+            <SecondaryButton
+              size="md"
+              pill
               onClick={() => fetchAnnouncements(true)}
-              title="Refresh Announcements"
-              className="p-2.5 text-[#505F76] hover:text-[#004AC6] hover:bg-slate-100 rounded-full transition-colors border border-[#E2E8F0] shadow-2xs cursor-pointer flex items-center justify-center shrink-0"
+              disabled={isLoading}
+              leftIcon={<RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-[#004AC6]' : ''}`} />}
+              className="w-full sm:w-auto justify-center"
             >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-[#004AC6]' : ''}`} />
-            </button>
+              Refresh
+            </SecondaryButton>
 
-            {isPushSupported && (
-              <div
-                onClick={
-                  !isSubscribingPush && pushStatus !== 'denied'
-                    ? handleTogglePushNotifications
-                    : undefined
-                }
-                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all shadow-2xs select-none shrink-0 ${
-                  pushStatus === 'denied'
-                    ? 'bg-rose-50/60 border-rose-200 cursor-not-allowed'
-                    : isSubscribingPush
-                    ? 'bg-slate-50 border-slate-200 cursor-wait'
-                    : isPushActive
-                    ? 'bg-emerald-50/80 border-emerald-200/90 text-emerald-700 cursor-pointer hover:bg-emerald-100/70'
-                    : 'bg-white border-[#E2E8F0] cursor-pointer hover:border-slate-300 hover:bg-slate-50'
-                }`}
-                title={
-                  pushStatus === 'denied'
-                    ? 'Notifications blocked in browser settings'
-                    : isPushActive
-                    ? 'Phone alerts are ON. Click toggle to turn OFF.'
-                    : 'Phone alerts are OFF. Click toggle to turn ON.'
-                }
-              >
-                {/* Notification Icon */}
-                <span className="flex items-center justify-center shrink-0">
-                  {isSubscribingPush ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-                  ) : isPushActive ? (
-                    <BellRing className="w-4 h-4 text-emerald-600" />
-                  ) : pushStatus === 'denied' ? (
-                    <BellOff className="w-4 h-4 text-rose-500" />
-                  ) : (
-                    <Bell className="w-4 h-4 text-slate-400" />
-                  )}
-                </span>
-
-                {/* Toggle Button */}
-                <span
-                  role="switch"
-                  aria-checked={isPushActive}
-                  aria-label={isPushActive ? 'Turn off phone alerts' : 'Turn on phone alerts'}
-                  className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              {isPushSupported && (
+                <div
+                  onClick={
+                    !isSubscribingPush && pushStatus !== 'denied'
+                      ? handleTogglePushNotifications
+                      : undefined
+                  }
+                  className={`flex-1 sm:flex-initial inline-flex items-center justify-between sm:justify-start gap-2 px-3.5 py-2.5 sm:py-1.5 rounded-full border transition-all shadow-2xs select-none shrink-0 ${
                     pushStatus === 'denied'
-                      ? 'opacity-40 bg-slate-200'
+                      ? 'bg-rose-50/60 border-rose-200 cursor-not-allowed'
+                      : isSubscribingPush
+                      ? 'bg-slate-50 border-slate-200 cursor-wait'
                       : isPushActive
-                      ? 'bg-emerald-500'
-                      : 'bg-slate-300'
+                      ? 'bg-emerald-50/80 border-emerald-200/90 text-emerald-700 cursor-pointer hover:bg-emerald-100/70'
+                      : 'bg-white border-[#E2E8F0] cursor-pointer hover:border-slate-300 hover:bg-slate-50'
                   }`}
+                  title={
+                    pushStatus === 'denied'
+                      ? 'Notifications blocked in browser settings'
+                      : isPushActive
+                      ? 'Phone alerts are ON. Click toggle to turn OFF.'
+                      : 'Phone alerts are OFF. Click toggle to turn ON.'
+                  }
                 >
+                  {/* Notification Icon */}
+                  <span className="flex items-center justify-center shrink-0">
+                    {isSubscribingPush ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                    ) : isPushActive ? (
+                      <BellRing className="w-4 h-4 text-emerald-600" />
+                    ) : pushStatus === 'denied' ? (
+                      <BellOff className="w-4 h-4 text-rose-500" />
+                    ) : (
+                      <Bell className="w-4 h-4 text-slate-400" />
+                    )}
+                  </span>
+
+                  {/* Toggle Button */}
                   <span
-                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                      isPushActive ? 'translate-x-4' : 'translate-x-0'
+                    role="switch"
+                    aria-checked={isPushActive}
+                    aria-label={isPushActive ? 'Turn off phone alerts' : 'Turn on phone alerts'}
+                    className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                      pushStatus === 'denied'
+                        ? 'opacity-40 bg-slate-200'
+                        : isPushActive
+                        ? 'bg-emerald-500'
+                        : 'bg-slate-300'
                     }`}
-                  />
-                </span>
-              </div>
-            )}
-            {canModifyAnnouncements && (
-              <PrimaryButton
-                size="md"
-                pill
-                leftIcon={<Plus className="w-4 h-4" />}
-                onClick={handleOpenCreate}
-                disabled={isFull}
-                title={
-                  isFull
-                    ? `Maximum limit of ${MAX_ANNOUNCEMENTS} announcements reached`
-                    : 'Post Announcement'
-                }
-              >
-                Post Announcement
-              </PrimaryButton>
-            )}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                        isPushActive ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
+                  </span>
+                </div>
+              )}
+              {canModifyAnnouncements && (
+                <PrimaryButton
+                  size="md"
+                  pill
+                  leftIcon={<Plus className="w-4 h-4" />}
+                  onClick={handleOpenCreate}
+                  disabled={isFull}
+                  className="flex-1 sm:flex-initial justify-center"
+                  title={
+                    isFull
+                      ? `Maximum limit of ${MAX_ANNOUNCEMENTS} announcements reached`
+                      : 'Post Announcement'
+                  }
+                >
+                  Post Announcement
+                </PrimaryButton>
+              )}
+            </div>
           </div>
         </div>
 

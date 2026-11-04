@@ -1395,37 +1395,41 @@ export default function UserManagementPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={handleManualRefresh}
-              disabled={isRefreshing || isLoading}
-              className="p-2.5 rounded-full border border-[#E2E8F0] bg-white text-[#505F76] hover:text-[#004AC6] hover:bg-slate-50 transition-all cursor-pointer shadow-xs disabled:opacity-50"
-              title="Refresh database records"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-[#004AC6]' : ''}`} />
-            </button>
-
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto">
             <SecondaryButton
               size="md"
               pill
-              onClick={() => setIsEmailPreviewModalOpen(true)}
-              leftIcon={<Eye className="w-4 h-4" />}
+              onClick={handleManualRefresh}
+              disabled={isRefreshing || isLoading}
+              leftIcon={<RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-[#004AC6]' : ''}`} />}
+              className="w-full sm:w-auto justify-center"
             >
-              Email UI/UX Preview
+              Refresh
             </SecondaryButton>
 
-            {canModifyUsers && (
-              <PrimaryButton
+            <div className="flex items-center gap-2.5 w-full sm:w-auto">
+              <SecondaryButton
                 size="md"
                 pill
-                onClick={handleOpenInviteModal}
-                leftIcon={<UserPlus className="w-4 h-4" />}
-                className="shadow-md hover:shadow-lg transition-all"
+                onClick={() => setIsEmailPreviewModalOpen(true)}
+                leftIcon={<Eye className="w-4 h-4" />}
+                className="flex-1 sm:flex-initial justify-center"
               >
-                Invite User
-              </PrimaryButton>
-            )}
+                Email UI/UX Preview
+              </SecondaryButton>
+
+              {canModifyUsers && (
+                <PrimaryButton
+                  size="md"
+                  pill
+                  onClick={handleOpenInviteModal}
+                  leftIcon={<UserPlus className="w-4 h-4" />}
+                  className="flex-1 sm:flex-initial justify-center shadow-md hover:shadow-lg transition-all"
+                >
+                  Invite User
+                </PrimaryButton>
+              )}
+            </div>
           </div>
         </div>
 

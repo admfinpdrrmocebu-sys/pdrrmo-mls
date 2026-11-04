@@ -15,16 +15,18 @@ import {
   AlertCircle,
   LocateFixed,
   Radar,
-  Globe,
   Sliders,
   Info,
   Crosshair,
+  Pencil,
+  X,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { AppLayoutShell } from '@/components/nav-route';
 import { PrimaryButton, SecondaryButton } from '@/components/button';
+import { LocationAccessModal } from '@/components/location-access-modal';
 import { GeneralCard } from '@/components/card';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
@@ -374,14 +376,20 @@ export default function GeofenceSettingsPage() {
   const { user, profile, isViewOnly, canWrite } = useAuth();
   const canModifySettings = canWrite('Settings') && !isViewOnly('Settings');
 
-  // Geofence Form State
-  const [geofenceId, setGeofenceId] = useState<string>(DEFAULT_GEOFENCE_CONFIG.id);
-  const [name, setName] = useState<string>(DEFAULT_GEOFENCE_CONFIG.name);
-  const [description, setDescription] = useState<string>(DEFAULT_GEOFENCE_CONFIG.description);
-  const [latitude, setLatitude] = useState<string>(String(DEFAULT_GEOFENCE_CONFIG.latitude));
-  const [longitude, setLongitude] = useState<string>(String(DEFAULT_GEOFENCE_CONFIG.longitude));
-  const [radiusMeters, setRadiusMeters] = useState<string>(String(DEFAULT_GEOFENCE_CONFIG.radiusMeters));
-  const [isActive, setIsActive] = useState<boolean>(DEFAULT_GEOFENCE_CONFIG.isActive);
+  // Edit Mode State (default: false = view-only baseline with DB values)
+  const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [savedConfig, setSavedConfig] = useState<GeofenceConfig | null>(() => {
+    return loadGeofenceCache() || null;
+  });
+
+  // Geofence Form State - initialized from local cache or default
+  const [geofenceId, setGeofenceId] = useState<string>(() => loadGeofenceCache()?.id || DEFAULT_GEOFENCE_CONFIG.id);
+  const [name, setName] = useState<string>(() => loadGeofenceCache()?.name || DEFAULT_GEOFENCE_CONFIG.name);
+  const [description, setDescription] = useState<string>(() => loadGeofenceCache()?.description || DEFAULT_GEOFENCE_CONFIG.description);
+  const [latitude, setLatitude] = useState<string>(() => String(loadGeofenceCache()?.latitude ?? DEFAULT_GEOFENCE_CONFIG.latitude));
+  const [longitude, setLongitude] = useState<string>(() => String(loadGeofenceCache()?.longitude ?? DEFAULT_GEOFENCE_CONFIG.longitude));
+  const [radiusMeters, setRadiusMeters] = useState<string>(() => String(loadGeofenceCache()?.radiusMeters ?? DEFAULT_GEOFENCE_CONFIG.radiusMeters));
+  const [isActive, setIsActive] = useState<boolean>(() => loadGeofenceCache()?.isActive ?? DEFAULT_GEOFENCE_CONFIG.isActive);
 
   // Loading & Saving States
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -391,9 +399,6 @@ export default function GeofenceSettingsPage() {
   const [userCoords, setUserCoords] = useState<UserCoordinates | null>(null);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [locationError, setLocationError] = useState<string | null>(null);
-
-  // Visualizer View Mode ('radar' | 'map') - Mapbox Map by default
-  const [visualizerTab, setVisualizerTab] = useState<'radar' | 'map'>('map');
 
   // Callback when Mapbox pin is dragged or map is clicked
   const handleMapCenterChange = useCallback((newLat: number, newLng: number) => {
@@ -460,7 +465,7 @@ export default function GeofenceSettingsPage() {
       const { data, error } = await supabase
         .from('geofence_settings')
         .select('*')
-        .order('created_at', { ascending: true })
+        .order('updated_at', { ascending: false })
         .limit(1)
         .maybeSingle();
 
@@ -475,6 +480,7 @@ export default function GeofenceSettingsPage() {
           isActive: Boolean(data.is_active ?? true),
           updatedAt: data.updated_at,
         };
+        setSavedConfig(config);
         setGeofenceId(config.id);
         setName(config.name);
         setDescription(config.description);
@@ -487,6 +493,7 @@ export default function GeofenceSettingsPage() {
         // Fallback to localStorage cache if table pending migration
         const cached = loadGeofenceCache();
         if (cached) {
+          setSavedConfig(cached);
           setGeofenceId(cached.id);
           setName(cached.name);
           setDescription(cached.description);
@@ -499,6 +506,8 @@ export default function GeofenceSettingsPage() {
     } catch {
       const cached = loadGeofenceCache();
       if (cached) {
+        setSavedConfig(cached);
+        setGeofenceId(cached.id);
         setName(cached.name);
         setDescription(cached.description);
         setLatitude(String(cached.latitude));
@@ -510,6 +519,20 @@ export default function GeofenceSettingsPage() {
       setIsLoading(false);
     }
   }, []);
+
+  // Cancel edits and revert form values back to saved database data
+  const handleCancelEdit = useCallback(() => {
+    if (savedConfig) {
+      setName(savedConfig.name);
+      setDescription(savedConfig.description);
+      setLatitude(String(savedConfig.latitude));
+      setLongitude(String(savedConfig.longitude));
+      setRadiusMeters(String(savedConfig.radiusMeters));
+      setIsActive(savedConfig.isActive);
+    }
+    setIsEditing(false);
+    showToast('Edits Cancelled', 'Reverted perimeter parameters to saved database values.', 'info');
+  }, [savedConfig, showToast]);
 
   // Acquire User's Current GPS Position for Proximity Testing
   const handleTestMyLocation = useCallback(async () => {
@@ -592,6 +615,7 @@ export default function GeofenceSettingsPage() {
 
       // Save to local cache immediately for instant responsiveness
       saveGeofenceCache(configToSave);
+      setSavedConfig(configToSave);
 
       // Persist to Supabase geofence_settings table
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -634,8 +658,23 @@ export default function GeofenceSettingsPage() {
         if (error) throw error;
         if (data?.id) {
           setGeofenceId(data.id);
-          saveGeofenceCache({ ...configToSave, id: data.id });
+          const updatedWithId = { ...configToSave, id: data.id };
+          setSavedConfig(updatedWithId);
+          saveGeofenceCache(updatedWithId);
         }
+      }
+
+      // Exit edit mode back to view mode displaying saved values
+      setIsEditing(false);
+
+      // Broadcast update across tabs so Schedule Dashboard (/shifts) syncs immediately
+      if (typeof window !== 'undefined') {
+        try {
+          const bc = new BroadcastChannel('pdrrmo_shift_sync');
+          bc.postMessage({ type: 'geofence_updated', timestamp: Date.now() });
+          bc.close();
+        } catch {}
+        localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
       }
 
       showToast(
@@ -645,6 +684,7 @@ export default function GeofenceSettingsPage() {
       );
     } catch (err: any) {
       console.warn('Supabase geofence save notice (cached locally):', err?.message);
+      setIsEditing(false);
       showToast(
         'Saved to Local Configuration',
         'GeoFence coverage settings applied. Run the SQL migration to sync across all terminals.',
@@ -853,35 +893,69 @@ export default function GeofenceSettingsPage() {
           {/* LEFT COLUMN: GEOFENCE PARAMETERS FORM (7 cols) */}
           <form onSubmit={handleSaveSettings} className="lg:col-span-7 space-y-6">
             <GeneralCard className="p-6 sm:p-7 border-[#E2E8F0] space-y-6">
-              <div className="flex items-center justify-between pb-4 border-b border-[#E2E8F0]">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E2E8F0]">
                 <div className="flex items-center gap-2.5">
                   <Sliders className="w-5 h-5 text-[#004AC6]" />
                   <div>
-                    <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
-                      Perimeter Parameters
-                    </h2>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
+                        Perimeter Parameters
+                      </h2>
+                      {isEditing ? (
+                        <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#004AC6] animate-pulse" />
+                          Editing Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                          Saved Baseline
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-[#505F76]">
-                      Set the headquarters coordinates and circular coverage radius.
+                      {isEditing
+                        ? 'Modify headquarters coordinates and circular coverage radius below.'
+                        : 'Current saved headquarters coordinates and circular coverage radius.'}
                     </p>
                   </div>
                 </div>
 
-                {/* Active Enforcement Switch */}
-                <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">
-                  <span className="text-xs font-bold text-[#1E293B]">
-                    {isActive ? 'Enforce GeoFence' : 'GeoFence Off'}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={!canModifySettings}
-                    onClick={() => setIsActive((prev) => !prev)}
-                    className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 flex items-center ${
-                      isActive ? 'bg-[#004AC6] justify-end' : 'bg-slate-300 justify-start'
-                    } ${!canModifySettings ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
+                <div className="flex items-center gap-3 self-end sm:self-auto">
+                  {/* Active Enforcement Switch */}
+                  <label
+                    className={`inline-flex items-center gap-2 select-none ${
+                      !canModifySettings || !isEditing ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'
+                    }`}
                   >
-                    <span className="w-5 h-5 rounded-full bg-white shadow-xs transition-transform" />
-                  </button>
-                </label>
+                    <span className="text-xs font-bold text-[#1E293B]">
+                      {isActive ? 'Enforce GeoFence' : 'GeoFence Off'}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={!canModifySettings || !isEditing}
+                      onClick={() => setIsActive((prev) => !prev)}
+                      className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 flex items-center ${
+                        isActive ? 'bg-[#004AC6] justify-end' : 'bg-slate-300 justify-start'
+                      } ${!canModifySettings || !isEditing ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                      title={!isEditing ? 'Click "Edit Parameters" to toggle enforcement' : undefined}
+                    >
+                      <span className="w-5 h-5 rounded-full bg-white shadow-xs transition-transform" />
+                    </button>
+                  </label>
+
+                  {/* Header Quick Edit Button (shown when not editing) */}
+                  {!isEditing && canModifySettings && (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditing(true)}
+                      disabled={isLoading}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-[#004AC6] bg-blue-50 hover:bg-[#004AC6] hover:text-white border border-blue-200 hover:border-[#004AC6] transition-all cursor-pointer shadow-2xs"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>Edit</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Station Name & Description */}
@@ -893,10 +967,14 @@ export default function GeofenceSettingsPage() {
                   <input
                     type="text"
                     value={name}
-                    disabled={!canModifySettings}
+                    disabled={!canModifySettings || !isEditing}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="e.g. PDRRMO Command Center"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-sm font-medium text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white transition-all disabled:opacity-60"
+                    className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                      !isEditing
+                        ? 'bg-slate-50/80 border-[#E2E8F0] text-slate-800 cursor-not-allowed select-text'
+                        : 'bg-[#F8FAFC] border-[#CBD5E1] text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/10'
+                    }`}
                   />
                 </div>
 
@@ -907,10 +985,14 @@ export default function GeofenceSettingsPage() {
                   <input
                     type="text"
                     value={description}
-                    disabled={!canModifySettings}
+                    disabled={!canModifySettings || !isEditing}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Operational headquarters boundary"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-sm font-medium text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white transition-all disabled:opacity-60"
+                    className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                      !isEditing
+                        ? 'bg-slate-50/80 border-[#E2E8F0] text-slate-800 cursor-not-allowed select-text'
+                        : 'bg-[#F8FAFC] border-[#CBD5E1] text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/10'
+                    }`}
                   />
                 </div>
               </div>
@@ -923,7 +1005,7 @@ export default function GeofenceSettingsPage() {
                     <span>Center Point Coordinates (Latitude & Longitude)</span>
                   </label>
 
-                  {canModifySettings && (
+                  {canModifySettings && isEditing && (
                     <button
                       type="button"
                       onClick={handleSetCenterToCurrentLocation}
@@ -945,10 +1027,14 @@ export default function GeofenceSettingsPage() {
                       type="number"
                       step="any"
                       value={latitude}
-                      disabled={!canModifySettings}
+                      disabled={!canModifySettings || !isEditing}
                       onChange={(e) => setLatitude(e.target.value)}
                       placeholder="10.3157"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-sm font-mono font-bold text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-all disabled:opacity-60"
+                      className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-mono font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-all ${
+                        !isEditing
+                          ? 'bg-slate-50/80 border-[#E2E8F0] text-slate-800 cursor-not-allowed select-text'
+                          : 'bg-[#F8FAFC] border-[#CBD5E1] text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/10'
+                      }`}
                     />
                   </div>
 
@@ -960,10 +1046,14 @@ export default function GeofenceSettingsPage() {
                       type="number"
                       step="any"
                       value={longitude}
-                      disabled={!canModifySettings}
+                      disabled={!canModifySettings || !isEditing}
                       onChange={(e) => setLongitude(e.target.value)}
                       placeholder="123.8854"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-sm font-mono font-bold text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-all disabled:opacity-60"
+                      className={`w-full px-3.5 py-2.5 rounded-xl border text-sm font-mono font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-all ${
+                        !isEditing
+                          ? 'bg-slate-50/80 border-[#E2E8F0] text-slate-800 cursor-not-allowed select-text'
+                          : 'bg-[#F8FAFC] border-[#CBD5E1] text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/10'
+                      }`}
                     />
                   </div>
                 </div>
@@ -981,7 +1071,7 @@ export default function GeofenceSettingsPage() {
                       inputMode="numeric"
                       pattern="[0-9]*"
                       value={radiusMeters}
-                      disabled={!canModifySettings}
+                      disabled={!canModifySettings || !isEditing}
                       onChange={(e) => {
                         const digits = e.target.value.replace(/[^0-9]/g, '');
                         setRadiusMeters(digits);
@@ -992,7 +1082,11 @@ export default function GeofenceSettingsPage() {
                         }
                       }}
                       placeholder="200"
-                      className="w-28 px-3 py-1.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-sm font-mono font-extrabold text-[#004AC6] text-right focus:outline-none focus:border-[#004AC6] focus:bg-white [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-all disabled:opacity-60"
+                      className={`w-28 px-3 py-1.5 rounded-xl border text-sm font-mono font-extrabold text-[#004AC6] text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-all ${
+                        !isEditing
+                          ? 'bg-slate-50/80 border-[#E2E8F0] cursor-not-allowed select-text'
+                          : 'bg-[#F8FAFC] border-[#CBD5E1] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/10'
+                      }`}
                     />
                     <span className="text-xs font-bold text-[#505F76]">meters</span>
                   </div>
@@ -1005,9 +1099,13 @@ export default function GeofenceSettingsPage() {
                   max={2500}
                   step={25}
                   value={Math.min(2500, Math.max(25, effectiveRadius))}
-                  disabled={!canModifySettings}
+                  disabled={!canModifySettings || !isEditing}
                   onChange={(e) => setRadiusMeters(e.target.value)}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#004AC6] disabled:opacity-60"
+                  className={`w-full h-2 rounded-lg appearance-none transition-all ${
+                    !isEditing
+                      ? 'bg-slate-200 cursor-not-allowed opacity-50'
+                      : 'bg-slate-200 cursor-pointer accent-[#004AC6]'
+                  }`}
                 />
 
                 {/* Quick Radius Presets */}
@@ -1021,13 +1119,13 @@ export default function GeofenceSettingsPage() {
                       <button
                         key={preset}
                         type="button"
-                        disabled={!canModifySettings}
+                        disabled={!canModifySettings || !isEditing}
                         onClick={() => setRadiusMeters(String(preset))}
-                        className={`px-3 py-1 rounded-full text-xs font-mono font-bold border transition-all cursor-pointer ${
+                        className={`px-3 py-1 rounded-full text-xs font-mono font-bold border transition-all ${
                           isSelected
                             ? 'bg-[#004AC6] text-white border-[#004AC6] shadow-2xs'
                             : 'bg-[#F8FAFC] text-[#505F76] border-[#E2E8F0] hover:border-[#004AC6]/40 hover:text-[#004AC6]'
-                        } disabled:opacity-50`}
+                        } ${!isEditing ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                       >
                         {formatDistance(preset)}
                       </button>
@@ -1037,24 +1135,53 @@ export default function GeofenceSettingsPage() {
               </div>
 
               {/* Action Footer */}
-              <div className="pt-4 border-t border-[#E2E8F0] flex items-center justify-between gap-4">
+              <div className="pt-4 border-t border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-2 text-xs text-[#505F76]">
                   <Info className="w-4 h-4 text-[#004AC6] shrink-0" />
                   <span>
-                    Changes apply immediately to all Schedule Dashboard check-in terminals.
+                    {isEditing
+                      ? 'Click "Save GeoFence" to apply changes across all terminals, or "Cancel" to revert.'
+                      : 'Viewing confirmed database parameters. Click "Edit Parameters" to modify settings.'}
                   </span>
                 </div>
 
                 {canModifySettings && (
-                  <PrimaryButton
-                    type="submit"
-                    size="md"
-                    pill
-                    disabled={isSaving || isLoading}
-                    leftIcon={<Save className="w-4 h-4" />}
-                  >
-                    {isSaving ? 'Saving...' : 'Save GeoFence'}
-                  </PrimaryButton>
+                  <div className="flex items-center gap-2.5 self-end sm:self-auto shrink-0">
+                    {isEditing ? (
+                      <>
+                        <SecondaryButton
+                          type="button"
+                          size="md"
+                          pill
+                          onClick={handleCancelEdit}
+                          disabled={isSaving}
+                          leftIcon={<X className="w-4 h-4" />}
+                        >
+                          Cancel
+                        </SecondaryButton>
+                        <PrimaryButton
+                          type="submit"
+                          size="md"
+                          pill
+                          disabled={isSaving || isLoading}
+                          leftIcon={<Save className="w-4 h-4" />}
+                        >
+                          {isSaving ? 'Saving...' : 'Save GeoFence'}
+                        </PrimaryButton>
+                      </>
+                    ) : (
+                      <PrimaryButton
+                        type="button"
+                        size="md"
+                        pill
+                        onClick={() => setIsEditing(true)}
+                        disabled={isLoading}
+                        leftIcon={<Pencil className="w-4 h-4" />}
+                      >
+                        Edit Parameters
+                      </PrimaryButton>
+                    )}
+                  </div>
                 )}
               </div>
             </GeneralCard>
@@ -1063,8 +1190,8 @@ export default function GeofenceSettingsPage() {
           {/* RIGHT COLUMN: INTERACTIVE CIRCLE VISUALIZER & MAP (5 cols) */}
           <div className="lg:col-span-5 space-y-6">
             <GeneralCard className="p-5 sm:p-6 border-[#E2E8F0] space-y-4">
-              {/* Visualizer Header & Mode Switcher */}
-              <div className="flex items-center justify-between gap-2">
+              {/* Visualizer Header */}
+              <div className="flex items-center justify-between gap-2 pb-1">
                 <div>
                   <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
                     Coverage Area Visualizer
@@ -1074,159 +1201,28 @@ export default function GeofenceSettingsPage() {
                   </p>
                 </div>
 
-                <div className="bg-[#F1F5F9] p-1 rounded-xl flex items-center gap-1 border border-[#E2E8F0]">
-                  <button
-                    type="button"
-                    onClick={() => setVisualizerTab('radar')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                      visualizerTab === 'radar'
-                        ? 'bg-white text-[#004AC6] shadow-2xs'
-                        : 'text-[#505F76] hover:text-[#1E293B]'
-                    }`}
-                  >
-                    <Radar className="w-3.5 h-3.5" />
-                    <span>Radar</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setVisualizerTab('map')}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                      visualizerTab === 'map'
-                        ? 'bg-white text-[#004AC6] shadow-2xs'
-                        : 'text-[#505F76] hover:text-[#1E293B]'
-                    }`}
-                  >
-                    <Globe className="w-3.5 h-3.5" />
-                    <span>Map</span>
-                  </button>
-                </div>
+                <span
+                  className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                    isActive
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}
+                >
+                  {isActive ? 'Live Enforced' : 'Bypassed'}
+                </span>
               </div>
 
-              {/* VISUALIZER CANVAS */}
-              {visualizerTab === 'radar' ? (
-                <div className="relative w-full aspect-square max-h-[320px] mx-auto rounded-2xl bg-slate-950 border border-slate-800 overflow-hidden flex items-center justify-center select-none shadow-inner">
-                  {/* Subtle Coordinate Grid Lines */}
-                  <div
-                    className="absolute inset-0 opacity-20"
-                    style={{
-                      backgroundImage:
-                        'linear-gradient(to right, #334155 1px, transparent 1px), linear-gradient(to bottom, #334155 1px, transparent 1px)',
-                      backgroundSize: '32px 32px',
-                    }}
-                  />
-
-                  {/* Crosshair Axes */}
-                  <div className="absolute inset-x-0 top-1/2 h-px bg-slate-800" />
-                  <div className="absolute inset-y-0 left-1/2 w-px bg-slate-800" />
-
-                  {/* Compass Labels */}
-                  <span className="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-mono font-bold text-slate-500">
-                    N
-                  </span>
-                  <span className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-mono font-bold text-slate-500">
-                    S
-                  </span>
-                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-mono font-bold text-slate-500">
-                    E
-                  </span>
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-mono font-bold text-slate-500">
-                    W
-                  </span>
-
-                  {/* Outer Reference Ring (1.5x radius) */}
-                  <div className="w-[82%] h-[82%] rounded-full border border-dashed border-slate-700/70 flex items-center justify-center">
-                    {/* Active Geofence Coverage Circle */}
-                    <div
-                      className={`w-[68%] h-[68%] rounded-full border-2 flex items-center justify-center relative transition-colors duration-300 ${
-                        isActive
-                          ? 'bg-blue-500/15 border-blue-400 shadow-[0_0_40px_rgba(59,130,246,0.25)]'
-                          : 'bg-amber-500/10 border-amber-400/60 border-dashed'
-                      }`}
-                    >
-                      {/* Inner 50% Ring */}
-                      <div className="w-1/2 h-1/2 rounded-full border border-blue-400/25" />
-
-                      {/* Radius Label on Perimeter */}
-                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-blue-600 text-white text-[10px] font-mono font-bold shadow-sm whitespace-nowrap">
-                        R = {formatDistance(activeConfig.radiusMeters)}
-                      </span>
-
-                      {/* Center Station HQ Pin */}
-                      <div className="relative flex flex-col items-center">
-                        <span className="w-4 h-4 rounded-full bg-blue-500 border-2 border-white shadow-md flex items-center justify-center">
-                          <span className="w-1.5 h-1.5 rounded-full bg-white" />
-                        </span>
-                        <span className="mt-1 px-1.5 py-0.5 rounded bg-slate-900/90 text-[9px] font-bold text-blue-200 border border-slate-700 whitespace-nowrap">
-                          HQ Center
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Plotted Live User GPS Dot */}
-                  {proximityCheck && (
-                    <div
-                      style={{
-                        // Scale distance relative to activeConfig.radiusMeters (where 34% of container radius = 1.0x radiusMeters)
-                        transform: (() => {
-                          const ratio = Math.min(
-                            1.32,
-                            proximityCheck.distanceMeters / Math.max(1, activeConfig.radiusMeters)
-                          );
-                          const maxPx = 92; // radius in px on radar corresponding to 1.0x geofence radius
-                          const distPx = ratio * maxPx;
-                          const rad = ((proximityCheck.bearing - 90) * Math.PI) / 180;
-                          const x = Math.cos(rad) * distPx;
-                          const y = Math.sin(rad) * distPx;
-                          return `translate(${x}px, ${y}px)`;
-                        })(),
-                      }}
-                      className="absolute z-20 flex flex-col items-center transition-transform duration-500"
-                    >
-                      <span className="relative flex h-4 w-4">
-                        <span
-                          className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                            proximityCheck.isInside ? 'bg-emerald-400' : 'bg-rose-400'
-                          }`}
-                        />
-                        <span
-                          className={`relative inline-flex rounded-full h-4 w-4 border-2 border-white shadow-md ${
-                            proximityCheck.isInside ? 'bg-emerald-500' : 'bg-rose-500'
-                          }`}
-                        />
-                      </span>
-                      <span
-                        className={`mt-0.5 px-1.5 py-0.2 rounded text-[9px] font-mono font-bold text-white shadow-xs whitespace-nowrap ${
-                          proximityCheck.isInside ? 'bg-emerald-600' : 'bg-rose-600'
-                        }`}
-                      >
-                        You ({formatDistance(proximityCheck.distanceMeters)})
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Bottom Coordinates Overlay */}
-                  <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between text-[10px] font-mono text-slate-400 bg-slate-900/80 backdrop-blur-xs px-2.5 py-1 rounded-lg border border-slate-800">
-                    <span>
-                      Center: {activeConfig.latitude.toFixed(4)}, {activeConfig.longitude.toFixed(4)}
-                    </span>
-                    <span className={isActive ? 'text-emerald-400 font-bold' : 'text-amber-400'}>
-                      {isActive ? '● ACTIVE' : '○ BYPASSED'}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                <MapboxGeofenceMap
-                  center={[activeConfig.longitude, activeConfig.latitude]}
-                  radiusMeters={activeConfig.radiusMeters}
-                  stationName={activeConfig.name}
-                  isActive={activeConfig.isActive}
-                  userCoords={userCoords}
-                  proximityCheck={proximityCheck}
-                  canModify={canModifySettings}
-                  onCenterChange={handleMapCenterChange}
-                />
-              )}
+              {/* MAPBOX VISUALIZER CANVAS */}
+              <MapboxGeofenceMap
+                center={[activeConfig.longitude, activeConfig.latitude]}
+                radiusMeters={activeConfig.radiusMeters}
+                stationName={activeConfig.name}
+                isActive={activeConfig.isActive}
+                userCoords={userCoords}
+                proximityCheck={proximityCheck}
+                canModify={canModifySettings && isEditing}
+                onCenterChange={handleMapCenterChange}
+              />
 
               {/* Live GPS Verification Readout Box */}
               <div
@@ -1321,6 +1317,24 @@ export default function GeofenceSettingsPage() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Device Location Access Modal - only prompts if device has not accepted location access */}
+        <LocationAccessModal
+          screenName="Station GeoFencing"
+          onLocationGranted={(coords) => {
+            setUserCoords({
+              latitude: coords.latitude,
+              longitude: coords.longitude,
+              accuracyMeters: 10,
+              timestamp: Date.now(),
+            });
+            showToast(
+              'Location Access Enabled',
+              'Device GPS coordinates updated for live geofence verification.',
+              'success'
+            );
+          }}
+        />
       </div>
     </AppLayoutShell>
   );

@@ -1456,7 +1456,7 @@ export default function ArchivesPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
             <SecondaryButton
               size="md"
               pill
@@ -1467,27 +1467,29 @@ export default function ArchivesPage() {
               Refresh
             </SecondaryButton>
 
-            <Link href="/archives/transfer">
-              <SecondaryButton
-                size="md"
-                pill
-                leftIcon={<FolderUp className="w-4 h-4 text-[#004AC6]" />}
-                className="w-full sm:w-auto justify-center"
-              >
-                Transfer Hub
-              </SecondaryButton>
-            </Link>
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <Link href="/archives/transfer" className="flex-1 sm:flex-initial">
+                <SecondaryButton
+                  size="md"
+                  pill
+                  leftIcon={<FolderUp className="w-4 h-4 text-[#004AC6]" />}
+                  className="w-full sm:w-auto justify-center"
+                >
+                  Transfer Hub
+                </SecondaryButton>
+              </Link>
 
-            <Link href="/archives/drive">
-              <PrimaryButton
-                size="md"
-                pill
-                leftIcon={<FolderOpen className="w-4 h-4" />}
-                className="w-full sm:w-auto justify-center"
-              >
-                Drive Files
-              </PrimaryButton>
-            </Link>
+              <Link href="/archives/drive" className="flex-1 sm:flex-initial">
+                <PrimaryButton
+                  size="md"
+                  pill
+                  leftIcon={<FolderOpen className="w-4 h-4" />}
+                  className="w-full sm:w-auto justify-center"
+                >
+                  Drive Files
+                </PrimaryButton>
+              </Link>
+            </div>
           </div>
         </div>
 
