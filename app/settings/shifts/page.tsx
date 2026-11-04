@@ -30,6 +30,7 @@ import {
   UserPlus,
   AlertCircle,
   Plane,
+  Clock,
 } from 'lucide-react';
 import {
   format,
@@ -708,6 +709,36 @@ export default function ShiftScheduleCalendarPage() {
   const [selectedDayOffDates, setSelectedDayOffDates] = useState<string[]>([]);
   const [selectedTravelOrderDates, setSelectedTravelOrderDates] = useState<string[]>([]);
 
+  // Already Scheduled Personnel Map for the designated scheduleMonth
+  const [monthScheduledPersonnelMap, setMonthScheduledPersonnelMap] = useState<
+    Map<string, { shiftId?: string | null; shiftName?: string; count: number }>
+  >(new Map());
+  const [isLoadingMonthSchedule, setIsLoadingMonthSchedule] = useState<boolean>(false);
+
+  // 2-Year Month Dropdown Options (Current Year + Next Year in advance)
+  const twoYearMonthOptions = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const nextYear = currentYear + 1;
+
+    const buildMonths = (year: number) => {
+      const months: { value: string; label: string }[] = [];
+      for (let m = 0; m < 12; m++) {
+        const d = new Date(year, m, 1);
+        const value = `${year}-${String(m + 1).padStart(2, '0')}`;
+        const label = format(d, 'MMMM yyyy');
+        months.push({ value, label });
+      }
+      return months;
+    };
+
+    return {
+      currentYear,
+      nextYear,
+      currentYearMonths: buildMonths(currentYear),
+      nextYearMonths: buildMonths(nextYear),
+    };
+  }, []);
+
   // Active Picker Mode: 'DUTY' | 'DAY_OFF' | 'TRAVEL_ORDER'
   const [datePickerMode, setDatePickerMode] = useState<'DUTY' | 'DAY_OFF' | 'TRAVEL_ORDER'>('DUTY');
 
@@ -1296,6 +1327,68 @@ export default function ShiftScheduleCalendarPage() {
     }
   }, [isAddScheduleModalOpen, shiftSchedules, selectedShiftScheduleId]);
 
+  // Fetch existing assignments for the selected scheduleMonth to detect already-scheduled personnel
+  useEffect(() => {
+    if (!isAddScheduleModalOpen) return;
+
+    let isMounted = true;
+    const fetchScheduledPersonnelForMonth = async () => {
+      try {
+        setIsLoadingMonthSchedule(true);
+        const mStart = format(startOfMonth(scheduleMonthDate), 'yyyy-MM-dd');
+        const mEnd = format(endOfMonth(scheduleMonthDate), 'yyyy-MM-dd');
+
+        const { data, error } = await supabase
+          .from('duty_roster_assignments')
+          .select('profile_id, shift_schedule_id, assignment_type')
+          .gte('duty_date', mStart)
+          .lte('duty_date', mEnd);
+
+        if (!isMounted) return;
+
+        if (!error && data) {
+          const map = new Map<string, { shiftId?: string | null; shiftName?: string; count: number }>();
+          data.forEach((row) => {
+            const existing = map.get(row.profile_id);
+            const schedObj = row.shift_schedule_id ? schedulesById.get(row.shift_schedule_id) : undefined;
+            const sName = schedObj?.name || (row.assignment_type === 'rest' ? 'Rest Day' : row.assignment_type === 'travel' ? 'Travel Order' : 'Duty');
+
+            if (existing) {
+              existing.count += 1;
+              if (!existing.shiftName && sName) existing.shiftName = sName;
+            } else {
+              map.set(row.profile_id, {
+                shiftId: row.shift_schedule_id,
+                shiftName: sName,
+                count: 1,
+              });
+            }
+          });
+          setMonthScheduledPersonnelMap(map);
+        } else {
+          setMonthScheduledPersonnelMap(new Map());
+        }
+      } catch (err) {
+        console.warn('Error fetching month scheduled personnel:', err);
+      } finally {
+        if (isMounted) setIsLoadingMonthSchedule(false);
+      }
+    };
+
+    fetchScheduledPersonnelForMonth();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isAddScheduleModalOpen, scheduleMonth, scheduleMonthDate, schedulesById]);
+
+  // Clear date multi-picker selections when scheduleMonth changes
+  useEffect(() => {
+    setSelectedDutyDates([]);
+    setSelectedDayOffDates([]);
+    setSelectedTravelOrderDates([]);
+  }, [scheduleMonth]);
+
   // Filter personnel strictly according to the chosen shift schedule in modal
   const filteredPersonnel = useMemo(() => {
     if (!selectedShiftScheduleId) return profiles;
@@ -1318,9 +1411,118 @@ export default function ShiftScheduleCalendarPage() {
     return filteredPersonnel;
   }, [showAllPersonnel, profiles, filteredPersonnel]);
 
+  // Partition personnel: unscheduled personnel at the top (enabled), already-scheduled personnel at the bottom (disabled & checked)
+  const sortedVisiblePersonnel = useMemo(() => {
+    const unassigned: OfficerAssignment[] = [];
+    const alreadyScheduled: OfficerAssignment[] = [];
+
+    visiblePersonnel.forEach((officer) => {
+      if (monthScheduledPersonnelMap.has(officer.id)) {
+        alreadyScheduled.push(officer);
+      } else {
+        unassigned.push(officer);
+      }
+    });
+
+    return [...unassigned, ...alreadyScheduled];
+  }, [visiblePersonnel, monthScheduledPersonnelMap]);
+
+  // Available (unassigned) personnel for the designated month
+  const availablePersonnel = useMemo(() => {
+    return visiblePersonnel.filter((p) => !monthScheduledPersonnelMap.has(p.id));
+  }, [visiblePersonnel, monthScheduledPersonnelMap]);
+
+  // Count of already-scheduled personnel for the designated month
+  const alreadyScheduledCount = useMemo(() => {
+    return visiblePersonnel.filter((p) => monthScheduledPersonnelMap.has(p.id)).length;
+  }, [visiblePersonnel, monthScheduledPersonnelMap]);
+
   // Handle shift schedule change: update selected shift schedule and reset showAllPersonnel
   const handleShiftScheduleChange = (newSchedId: string) => {
     setSelectedShiftScheduleId(newSchedId);
+  };
+
+  const selectedShiftSchedule = useMemo(() => {
+    return shiftSchedules.find((s) => s.id === selectedShiftScheduleId);
+  }, [shiftSchedules, selectedShiftScheduleId]);
+
+  // Shift Schedule Custom Dropdown Popover State
+  const [isShiftDropdownOpen, setIsShiftDropdownOpen] = useState(false);
+  const shiftDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close shift schedule dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (shiftDropdownRef.current && !shiftDropdownRef.current.contains(e.target as Node)) {
+        setIsShiftDropdownOpen(false);
+      }
+    };
+    if (isShiftDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isShiftDropdownOpen]);
+
+  // Reset shift schedule dropdown when modal closes
+  useEffect(() => {
+    if (!isAddScheduleModalOpen) {
+      setIsShiftDropdownOpen(false);
+    }
+  }, [isAddScheduleModalOpen]);
+
+  // Personnel Search Query with Debouncing for Add Schedule Modal
+  const [personnelSearchQuery, setPersonnelSearchQuery] = useState('');
+  const [debouncedPersonnelSearchQuery, setDebouncedPersonnelSearchQuery] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedPersonnelSearchQuery(personnelSearchQuery);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [personnelSearchQuery]);
+
+  useEffect(() => {
+    if (!isAddScheduleModalOpen) {
+      setPersonnelSearchQuery('');
+      setDebouncedPersonnelSearchQuery('');
+    }
+  }, [isAddScheduleModalOpen]);
+
+  // Filtered sorted personnel list based on debounced search query
+  const searchedSortedPersonnel = useMemo(() => {
+    if (!debouncedPersonnelSearchQuery.trim()) {
+      return sortedVisiblePersonnel;
+    }
+    const q = debouncedPersonnelSearchQuery.trim().toLowerCase();
+    return sortedVisiblePersonnel.filter((p) => {
+      const name = (p.name || '').toLowerCase();
+      const role = (p.role || '').toLowerCase();
+      const badge = (p.badgeNumber || '').toLowerCase();
+      const shift = (p.defaultShift || '').toLowerCase();
+      return name.includes(q) || role.includes(q) || badge.includes(q) || shift.includes(q);
+    });
+  }, [sortedVisiblePersonnel, debouncedPersonnelSearchQuery]);
+
+  const handlePrevScheduleMonth = () => {
+    const [y, m] = scheduleMonth.split('-').map(Number);
+    const prevDate = subMonths(new Date(y, m - 1, 1), 1);
+    const prevStr = format(prevDate, 'yyyy-MM');
+    const minStr = `${twoYearMonthOptions.currentYear}-01`;
+    if (prevStr >= minStr) {
+      setScheduleMonth(prevStr);
+    }
+  };
+
+  const handleNextScheduleMonth = () => {
+    const [y, m] = scheduleMonth.split('-').map(Number);
+    const nextDate = addMonths(new Date(y, m - 1, 1), 1);
+    const nextStr = format(nextDate, 'yyyy-MM');
+    const maxStr = `${twoYearMonthOptions.nextYear}-12`;
+    if (nextStr <= maxStr) {
+      setScheduleMonth(nextStr);
+    }
   };
 
   // Reset showAllPersonnel when modal is opened
@@ -1330,24 +1532,25 @@ export default function ShiftScheduleCalendarPage() {
     }
   }, [isAddScheduleModalOpen]);
 
-  // When modal opens or visiblePersonnel changes, auto-select matching personnel
+  // When modal opens or available personnel changes, auto-select ONLY unassigned personnel
   useEffect(() => {
     if (isAddScheduleModalOpen) {
-      setSelectedPersonnelIds(visiblePersonnel.map((p) => p.id));
+      setSelectedPersonnelIds(availablePersonnel.map((p) => p.id));
     }
-  }, [isAddScheduleModalOpen, visiblePersonnel]);
+  }, [isAddScheduleModalOpen, availablePersonnel]);
 
-  // Toggle single personnel selection
+  // Toggle single personnel selection (locked for already-scheduled personnel)
   const handleTogglePersonnel = (id: string) => {
+    if (monthScheduledPersonnelMap.has(id)) return;
     setSelectedPersonnelIds((prev) =>
       prev.includes(id) ? prev.filter((pId) => pId !== id) : [...prev, id]
     );
   };
 
-  // Toggle all personnel in the visible list
+  // Toggle all available personnel in the visible list (already-scheduled personnel stay checked and locked)
   const handleToggleAllPersonnel = (selectAll: boolean) => {
     if (selectAll) {
-      setSelectedPersonnelIds(visiblePersonnel.map((p) => p.id));
+      setSelectedPersonnelIds(availablePersonnel.map((p) => p.id));
     } else {
       setSelectedPersonnelIds([]);
     }
@@ -1755,8 +1958,13 @@ export default function ShiftScheduleCalendarPage() {
       showToast('Please select a valid shift schedule.');
       return;
     }
-    if (selectedPersonnelIds.length === 0) {
-      showToast('Please select at least one personnel member.');
+    // Filter to only personnel who are not already scheduled
+    const targetPersonnelIds = selectedPersonnelIds.filter(
+      (id) => !monthScheduledPersonnelMap.has(id)
+    );
+
+    if (targetPersonnelIds.length === 0) {
+      showToast('Please select at least one available personnel member who is not already scheduled.');
       return;
     }
     if (
@@ -1773,7 +1981,7 @@ export default function ShiftScheduleCalendarPage() {
 
       const records: DutyRosterAssignmentRecord[] = [];
 
-      for (const profileId of selectedPersonnelIds) {
+      for (const profileId of targetPersonnelIds) {
         // Add duty dates with the exact shift_schedule_id UUID
         for (const dateStr of selectedDutyDates) {
           records.push({
@@ -1841,8 +2049,33 @@ export default function ShiftScheduleCalendarPage() {
 
       const targetSched = schedulesById.get(selectedShiftScheduleId);
       showToast(
-        `Configured ${targetSched?.name || 'Shift'}: ${selectedPersonnelIds.length} personnel (${selectedDutyDates.length} Duty, ${selectedDayOffDates.length} Day Off, ${selectedTravelOrderDates.length} Travel Order)`
+        `Configured ${targetSched?.name || 'Shift'}: ${targetPersonnelIds.length} personnel (${selectedDutyDates.length} Duty, ${selectedDayOffDates.length} Day Off, ${selectedTravelOrderDates.length} Travel Order)`
       );
+      // Immediately refresh month scheduled map
+      const mStart = format(startOfMonth(scheduleMonthDate), 'yyyy-MM-dd');
+      const mEnd = format(endOfMonth(scheduleMonthDate), 'yyyy-MM-dd');
+      supabase
+        .from('duty_roster_assignments')
+        .select('profile_id, shift_schedule_id, assignment_type')
+        .gte('duty_date', mStart)
+        .lte('duty_date', mEnd)
+        .then(({ data }) => {
+          if (data) {
+            const m = new Map<string, { shiftId?: string | null; shiftName?: string; count: number }>();
+            data.forEach((r) => {
+              const ex = m.get(r.profile_id);
+              const schedObj = r.shift_schedule_id ? schedulesById.get(r.shift_schedule_id) : undefined;
+              const sName = schedObj?.name || (r.assignment_type === 'rest' ? 'Rest Day' : r.assignment_type === 'travel' ? 'Travel Order' : 'Duty');
+              if (ex) {
+                ex.count += 1;
+                if (!ex.shiftName && sName) ex.shiftName = sName;
+              } else {
+                m.set(r.profile_id, { shiftId: r.shift_schedule_id, shiftName: sName, count: 1 });
+              }
+            });
+            setMonthScheduledPersonnelMap(m);
+          }
+        });
 
       setSelectedDutyDates([]);
       setSelectedDayOffDates([]);
@@ -3968,140 +4201,301 @@ export default function ShiftScheduleCalendarPage() {
 
               {/* Form Content */}
               <form onSubmit={handleSaveShiftSchedule} className="p-6 space-y-5 overflow-y-auto flex-1">
-                {/* 1. Month of & Shift Schedule Dropdown */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Month of */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                      Month of
-                    </label>
-                    <input
-                      type="month"
-                      required
-                      value={scheduleMonth}
-                      onChange={(e) => setScheduleMonth(e.target.value)}
-                      className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl py-2.5 px-3.5 text-sm text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all font-medium"
-                    />
+                {/* 1. Month of Schedule & Shift Schedule (Consistent Balanced Design) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-stretch">
+                  {/* Left: Month of Schedule Card */}
+                  <div className="bg-[#F8FAFC] border border-[#CBD5E1] rounded-2xl p-3 sm:p-3.5 space-y-2 shadow-2xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <CalendarDays className="w-4 h-4 text-[#004AC6]" />
+                        <label className="text-xs font-bold text-[#1E293B] uppercase tracking-wide">
+                          Month of Schedule
+                        </label>
+                      </div>
+                      <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200/60">
+                        {scheduleMonth.startsWith(String(twoYearMonthOptions.currentYear))
+                          ? `${twoYearMonthOptions.currentYear}`
+                          : `${twoYearMonthOptions.nextYear} Advance`}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 bg-white border border-[#E2E8F0] rounded-xl p-1.5 shadow-2xs h-12">
+                      <button
+                        type="button"
+                        onClick={handlePrevScheduleMonth}
+                        disabled={scheduleMonth <= `${twoYearMonthOptions.currentYear}-01`}
+                        className="w-9 h-9 rounded-lg flex items-center justify-center text-[#505F76] hover:bg-slate-100 hover:text-[#1E293B] transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent shrink-0"
+                        aria-label="Previous Month"
+                        title="Previous Month"
+                      >
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+
+                      <div className="flex-1 flex items-center justify-center px-1">
+                        <span className="text-xs sm:text-sm font-bold text-[#1E293B] select-none text-center truncate">
+                          {format(scheduleMonthDate, 'MMMM yyyy')}
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleNextScheduleMonth}
+                        disabled={scheduleMonth >= `${twoYearMonthOptions.nextYear}-12`}
+                        className="w-9 h-9 rounded-lg flex items-center justify-center text-[#505F76] hover:bg-slate-100 hover:text-[#1E293B] transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent shrink-0"
+                        aria-label="Next Month"
+                        title="Next Month"
+                      >
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Shift Schedule Dropdown (Stored by ID) */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                      Shift Schedule
-                    </label>
+                  {/* Right: Shift Schedule Card */}
+                  <div className="bg-[#F8FAFC] border border-[#CBD5E1] rounded-2xl p-3 sm:p-3.5 space-y-2 shadow-2xs flex flex-col justify-between relative" ref={shiftDropdownRef}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-4 h-4 text-[#004AC6]" />
+                        <label className="text-xs font-bold text-[#1E293B] uppercase tracking-wide">
+                          Shift Schedule
+                        </label>
+                      </div>
+                      <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200/60">
+                        {shiftSchedules.length} Available
+                      </span>
+                    </div>
+
                     {shiftSchedules.length > 0 ? (
-                      <select
-                        value={selectedShiftScheduleId}
-                        onChange={(e) => handleShiftScheduleChange(e.target.value)}
-                        className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl py-2.5 px-3.5 text-sm text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all font-medium"
-                      >
-                        {shiftSchedules.map((sched) => (
-                          <option key={sched.id} value={sched.id}>
-                            {sched.name} · {sched.time} {sched.targetRole ? `(${sched.targetRole})` : ''}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setIsShiftDropdownOpen((prev) => !prev)}
+                          className="w-full flex items-center justify-between gap-2.5 bg-white border border-[#E2E8F0] rounded-xl px-3 py-1.5 shadow-2xs h-12 hover:border-[#004AC6]/60 transition-all cursor-pointer text-left"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
+                              style={{ backgroundColor: selectedShiftSchedule?.color || '#004AC6' }}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+                                  {selectedShiftSchedule?.name || 'Select Shift Schedule'}
+                                </span>
+                                {selectedShiftSchedule?.targetRole && (
+                                  <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.2 rounded bg-blue-50 text-[#004AC6] border border-blue-200/60 shrink-0">
+                                    {selectedShiftSchedule.targetRole}
+                                  </span>
+                                )}
+                              </div>
+                              {selectedShiftSchedule && (
+                                <div className="text-[11px] text-[#505F76] font-medium flex items-center gap-1.5 truncate mt-0.5 leading-none">
+                                  <span>{selectedShiftSchedule.time}</span>
+                                  {selectedShiftSchedule.duration && (
+                                    <>
+                                      <span className="text-slate-300">•</span>
+                                      <span className="text-[#757680]">{selectedShiftSchedule.duration}</span>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <ChevronDown
+                            className={`w-4 h-4 text-[#757680] shrink-0 transition-transform duration-200 ${
+                              isShiftDropdownOpen ? 'rotate-180 text-[#004AC6]' : ''
+                            }`}
+                          />
+                        </button>
+
+                        {/* Floating Dropdown Popover */}
+                        <AnimatePresence>
+                          {isShiftDropdownOpen && (
+                            <motion.div
+                              initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                              transition={{ duration: 0.15 }}
+                              className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white border border-[#CBD5E1] rounded-2xl shadow-xl overflow-hidden max-h-60 overflow-y-auto p-1.5 space-y-1"
+                            >
+                              {shiftSchedules.map((sched) => {
+                                const isSelected = selectedShiftScheduleId === sched.id;
+                                const color = sched.color || '#004AC6';
+
+                                return (
+                                  <button
+                                    key={sched.id}
+                                    type="button"
+                                    onClick={() => {
+                                      handleShiftScheduleChange(sched.id);
+                                      setIsShiftDropdownOpen(false);
+                                    }}
+                                    className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition-all cursor-pointer ${
+                                      isSelected
+                                        ? 'bg-blue-50/90 text-[#004AC6] font-bold border border-blue-200/60'
+                                        : 'hover:bg-slate-100 text-[#1E293B]'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                                      <span
+                                        className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
+                                        style={{ backgroundColor: color }}
+                                      />
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-xs font-bold truncate">
+                                            {sched.name}
+                                          </span>
+                                          {sched.targetRole && (
+                                            <span className="text-[9px] uppercase font-semibold px-1.5 py-0.2 rounded bg-slate-200/70 text-[#505F76]">
+                                              {sched.targetRole}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="text-[11px] text-[#505F76] font-normal flex items-center gap-1.5 truncate mt-0.5">
+                                          <span>{sched.time}</span>
+                                          {sched.duration && (
+                                            <>
+                                              <span className="text-slate-300">•</span>
+                                              <span className="text-[#757680]">{sched.duration}</span>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="shrink-0">
+                                      {isSelected ? (
+                                        <div className="w-5 h-5 rounded-full bg-[#004AC6] text-white flex items-center justify-center shadow-2xs">
+                                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                        </div>
+                                      ) : (
+                                        <div className="w-4 h-4 rounded-full border border-slate-300" />
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
                     ) : (
-                      <div className="p-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                      <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-800">
                         No shift schedules found. Please create one in <strong>Settings → Access Control</strong>.
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* 2. Personnel Checklist */}
+                {/* 2. Assigned Personnel Checklist */}
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                      Assigned Personnel ({visiblePersonnel.length} available)
+                      Assigned Personnel
                     </label>
-                    <div className="flex items-center gap-2 text-xs">
-                      {showAllPersonnel ? (
+
+                    {/* Search Bar with Debouncing */}
+                    <div className="relative w-full sm:w-64">
+                      <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#757680] pointer-events-none" />
+                      <input
+                        type="text"
+                        value={personnelSearchQuery}
+                        onChange={(e) => setPersonnelSearchQuery(e.target.value)}
+                        placeholder="Search personnel..."
+                        className="w-full bg-[#F8FAFC] border border-[#CBD5E1] rounded-xl pl-8 pr-7 py-1.5 text-xs text-[#1E293B] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all placeholder:text-[#94A3B8]"
+                      />
+                      {personnelSearchQuery && (
                         <button
                           type="button"
-                          onClick={() => setShowAllPersonnel(false)}
-                          className="text-[#004AC6] font-semibold hover:underline cursor-pointer"
+                          onClick={() => setPersonnelSearchQuery('')}
+                          className="w-4 h-4 rounded-full flex items-center justify-center absolute right-2.5 top-1/2 -translate-y-1/2 text-[#757680] hover:text-[#1E293B] cursor-pointer"
+                          title="Clear search"
                         >
-                          Filter by Shift ({filteredPersonnel.length})
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setShowAllPersonnel(true)}
-                          className="text-[#505F76] hover:underline cursor-pointer"
-                        >
-                          Show All ({profiles.length})
+                          <X className="w-3 h-3" />
                         </button>
                       )}
-                      <span className="text-slate-300">•</span>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleAllPersonnel(true)}
-                        className="text-[#004AC6] font-semibold hover:underline cursor-pointer"
-                      >
-                        Select All
-                      </button>
-                      <span className="text-slate-300">•</span>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleAllPersonnel(false)}
-                        className="text-[#505F76] hover:underline cursor-pointer"
-                      >
-                        Clear
-                      </button>
                     </div>
                   </div>
 
                   <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-3.5 max-h-56 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {visiblePersonnel.length > 0 ? (
-                      visiblePersonnel.map((officer) => {
-                        const isChecked = selectedPersonnelIds.includes(officer.id);
+                    {searchedSortedPersonnel.length > 0 ? (
+                      searchedSortedPersonnel.map((officer) => {
+                        const isAlreadyScheduled = monthScheduledPersonnelMap.has(officer.id);
+                        const scheduledInfo = monthScheduledPersonnelMap.get(officer.id);
+                        const isChecked = isAlreadyScheduled || selectedPersonnelIds.includes(officer.id);
+
                         return (
                           <label
                             key={officer.id}
-                            className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer select-none ${
-                              isChecked
-                                ? 'bg-white border-[#004AC6]/40 shadow-xs ring-1 ring-[#004AC6]/20'
-                                : 'bg-white/60 border-[#E2E8F0] opacity-70 hover:opacity-100 hover:bg-white'
+                            className={`flex items-center justify-between p-3 rounded-xl border transition-all select-none ${
+                              isAlreadyScheduled
+                                ? 'shift-personnel-card-disabled cursor-not-allowed opacity-85'
+                                : isChecked
+                                ? 'bg-white border-[#004AC6]/50 shadow-xs ring-1 ring-[#004AC6]/25 cursor-pointer'
+                                : 'bg-white/60 border-[#E2E8F0] opacity-80 hover:opacity-100 hover:bg-white cursor-pointer'
                             }`}
                           >
                             <div className="flex items-center gap-2.5 min-w-0">
                               <input
                                 type="checkbox"
                                 checked={isChecked}
+                                disabled={isAlreadyScheduled}
                                 onChange={() => handleTogglePersonnel(officer.id)}
-                                className="w-4 h-4 rounded text-[#004AC6] focus:ring-[#004AC6] shrink-0"
+                                className={`w-4 h-4 rounded shrink-0 ${
+                                  isAlreadyScheduled
+                                    ? 'shift-personnel-checkbox-disabled cursor-not-allowed'
+                                    : 'text-[#004AC6] focus:ring-[#004AC6] cursor-pointer'
+                                }`}
                               />
                               <div className="min-w-0">
-                                <span className="text-xs font-bold text-[#1E293B] block truncate">
+                                <span
+                                  className={`text-xs font-bold block truncate ${
+                                    isAlreadyScheduled ? 'shift-personnel-text-disabled' : 'text-[#1E293B]'
+                                  }`}
+                                >
                                   {officer.name}
                                 </span>
-                                <span className="text-[11px] text-[#757680] block truncate">
+                                <span
+                                  className={`text-[11px] block truncate ${
+                                    isAlreadyScheduled ? 'shift-personnel-subtext-disabled' : 'text-[#757680]'
+                                  }`}
+                                >
                                   {officer.role} · <span className="font-mono">{officer.badgeNumber}</span>
                                 </span>
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-1 shrink-0 ml-1">
-                              {officer.defaultShift && (
+                            <div className="flex items-center gap-1.5 shrink-0 ml-1">
+                              {isAlreadyScheduled ? (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded shadow-2xs shift-personnel-badge-disabled">
+                                  {scheduledInfo?.shiftName ? `Scheduled: ${scheduledInfo.shiftName}` : 'Already Scheduled'}
+                                </span>
+                              ) : officer.defaultShift ? (
                                 <span className="text-[10px] font-bold text-[#004AC6] bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded">
                                   {officer.defaultShift}
                                 </span>
-                              )}
+                              ) : null}
                             </div>
                           </label>
                         );
                       })
                     ) : (
                       <div className="col-span-full py-5 text-center text-xs text-slate-500 space-y-1">
-                        <p>No personnel currently assigned to this shift schedule.</p>
-                        <button
-                          type="button"
-                          onClick={() => setShowAllPersonnel(true)}
-                          className="text-[#004AC6] font-semibold hover:underline cursor-pointer"
-                        >
-                          Show all registered personnel ({profiles.length})
-                        </button>
+                        {debouncedPersonnelSearchQuery.trim() ? (
+                          <>
+                            <p>No personnel matching "{debouncedPersonnelSearchQuery}".</p>
+                            <button
+                              type="button"
+                              onClick={() => setPersonnelSearchQuery('')}
+                              className="text-[#004AC6] font-semibold hover:underline cursor-pointer"
+                            >
+                              Clear search query
+                            </button>
+                          </>
+                        ) : (
+                          <p>No personnel currently assigned to this shift schedule.</p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -4291,33 +4685,86 @@ export default function ShiftScheduleCalendarPage() {
                     </div>
                   </div>
 
-                  {/* Summary Metric Counters */}
-                  <div className="flex items-center justify-between flex-wrap gap-2 text-xs pt-1 border-t border-slate-200 text-[#505F76]">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <span className="flex items-center gap-1.5 font-bold text-[#004AC6]">
-                        <span className="w-2.5 h-2.5 rounded-full bg-[#004AC6]" />
-                        Duty: {selectedDutyDates.length} Days
-                      </span>
-                      <span className="flex items-center gap-1.5 font-bold text-amber-700">
-                        <span className="w-2.5 h-2.5 rounded-full bg-amber-600" />
-                        Day Off: {selectedDayOffDates.length} Days
-                      </span>
-                      <span className="flex items-center gap-1.5 font-bold text-purple-700">
-                        <span className="w-2.5 h-2.5 rounded-full bg-purple-600" />
-                        Travel Order: {selectedTravelOrderDates.length} Days
-                      </span>
-                      <span className="flex items-center gap-1.5 font-semibold text-slate-500">
-                        <span className="w-2.5 h-2.5 rounded-full bg-slate-300" />
-                        Unscheduled:{' '}
-                        {Math.max(
-                          0,
-                          pickerMonthDays.length -
-                            selectedDutyDates.length -
-                            selectedDayOffDates.length -
-                            selectedTravelOrderDates.length
-                        )}{' '}
-                        Days
-                      </span>
+                  {/* Summary Metric Cards (grid-col-4 on desktop, grid-col-2 on mobile) */}
+                  <div className="pt-2 border-t border-slate-200">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
+                      {/* 1. Duty Days Card */}
+                      <div className="p-3 rounded-2xl border metric-card-duty flex flex-col justify-between transition-all">
+                        <div className="flex items-center justify-between gap-1 text-[11px] font-bold">
+                          <span className="truncate">Duty Days</span>
+                          <CalendarCheck className="w-3.5 h-3.5 shrink-0 opacity-90" />
+                        </div>
+                        <div className="mt-1.5 flex items-baseline gap-1">
+                          <span className="text-lg sm:text-xl font-black">
+                            {selectedDutyDates.length}
+                          </span>
+                          <span className="text-[11px] font-semibold opacity-80">
+                            {selectedDutyDates.length === 1 ? 'Day' : 'Days'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 2. Day Off Card (Rest Day - Clean Dark Mode High Contrast) */}
+                      <div className="p-3 rounded-2xl border metric-card-dayoff flex flex-col justify-between transition-all">
+                        <div className="flex items-center justify-between gap-1 text-[11px] font-bold">
+                          <span className="truncate">Day Off</span>
+                          <CalendarX className="w-3.5 h-3.5 shrink-0 opacity-90" />
+                        </div>
+                        <div className="mt-1.5 flex items-baseline gap-1">
+                          <span className="text-lg sm:text-xl font-black">
+                            {selectedDayOffDates.length}
+                          </span>
+                          <span className="text-[11px] font-semibold opacity-80">
+                            {selectedDayOffDates.length === 1 ? 'Day' : 'Days'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 3. Travel Order Card */}
+                      <div className="p-3 rounded-2xl border metric-card-travel flex flex-col justify-between transition-all">
+                        <div className="flex items-center justify-between gap-1 text-[11px] font-bold">
+                          <span className="truncate">Travel Order</span>
+                          <Plane className="w-3.5 h-3.5 shrink-0 opacity-90" />
+                        </div>
+                        <div className="mt-1.5 flex items-baseline gap-1">
+                          <span className="text-lg sm:text-xl font-black">
+                            {selectedTravelOrderDates.length}
+                          </span>
+                          <span className="text-[11px] font-semibold opacity-80">
+                            {selectedTravelOrderDates.length === 1 ? 'Day' : 'Days'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 4. Unscheduled Card */}
+                      <div className="p-3 rounded-2xl border metric-card-unscheduled flex flex-col justify-between transition-all">
+                        <div className="flex items-center justify-between gap-1 text-[11px] font-bold">
+                          <span className="truncate">Unscheduled</span>
+                          <CalendarDays className="w-3.5 h-3.5 shrink-0 opacity-90" />
+                        </div>
+                        <div className="mt-1.5 flex items-baseline gap-1">
+                          <span className="text-lg sm:text-xl font-black">
+                            {Math.max(
+                              0,
+                              pickerMonthDays.length -
+                                selectedDutyDates.length -
+                                selectedDayOffDates.length -
+                                selectedTravelOrderDates.length
+                            )}
+                          </span>
+                          <span className="text-[11px] font-semibold opacity-80">
+                            {Math.max(
+                              0,
+                              pickerMonthDays.length -
+                                selectedDutyDates.length -
+                                selectedDayOffDates.length -
+                                selectedTravelOrderDates.length
+                            ) === 1
+                              ? 'Day'
+                              : 'Days'}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -138,6 +138,7 @@ body {
   html.dark .bg-slate-100,
   html.dark .bg-slate-100\/90,
   html.dark .bg-slate-100\/80,
+  html.dark .bg-slate-100\/75,
   html.dark .bg-slate-100\/70,
   html.dark .bg-slate-100\/60 {
     background-color: #1e293b !important;
@@ -351,11 +352,15 @@ body {
   html.dark .bg-amber-50\/95,
   html.dark .bg-amber-50\/90,
   html.dark .bg-amber-50\/80,
+  html.dark .bg-amber-50\/70,
   html.dark .bg-amber-50\/60,
   html.dark .bg-amber-50\/50,
   html.dark .bg-amber-50\/40,
   html.dark .bg-amber-100,
   html.dark .bg-amber-100\/70,
+  html.dark .bg-amber-500\/10,
+  html.dark .bg-amber-500\/15,
+  html.dark .bg-amber-500\/20,
   html.dark .bg-\[\#FFFBEB\] {
     background-color: rgba(245, 158, 11, 0.16) !important;
   }
@@ -531,4 +536,99 @@ body {
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+
+
+/* ============================================================================
+ * SHIFT SCHEDULE MODAL: LIGHT & DARK MODE ADAPTIVE STYLES
+ * ============================================================================ */
+.shift-personnel-card-disabled {
+  background-color: #f1f5f9;
+  border-color: #cbd5e1;
+}
+html.dark .shift-personnel-card-disabled {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+}
+
+.shift-personnel-text-disabled {
+  color: #475569;
+}
+html.dark .shift-personnel-text-disabled {
+  color: #cbd5e1 !important;
+}
+
+.shift-personnel-subtext-disabled {
+  color: #64748b;
+}
+html.dark .shift-personnel-subtext-disabled {
+  color: #94a3b8 !important;
+}
+
+.shift-personnel-badge-disabled {
+  background-color: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
+html.dark .shift-personnel-badge-disabled {
+  background-color: #334155 !important;
+  border-color: #475569 !important;
+  color: #e2e8f0 !important;
+}
+
+.shift-personnel-checkbox-disabled {
+  accent-color: #64748b;
+  opacity: 0.7;
+}
+html.dark .shift-personnel-checkbox-disabled {
+  accent-color: #94a3b8 !important;
+  opacity: 0.8 !important;
+}
+
+
+/* ============================================================================
+ * SHIFT SCHEDULE METRIC CARDS (LIGHT & DARK MODE HIGH CONTRAST)
+ * ============================================================================ */
+.metric-card-duty {
+  background-color: rgba(239, 246, 255, 0.7);
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+html.dark .metric-card-duty {
+  background-color: rgba(59, 130, 246, 0.16) !important;
+  border-color: rgba(59, 130, 246, 0.35) !important;
+  color: #60a5fa !important;
+}
+
+.metric-card-dayoff {
+  background-color: rgba(254, 243, 199, 0.75);
+  border-color: #fde68a;
+  color: #b45309;
+}
+html.dark .metric-card-dayoff {
+  background-color: rgba(245, 158, 11, 0.16) !important;
+  border-color: rgba(245, 158, 11, 0.35) !important;
+  color: #fbbf24 !important;
+}
+
+.metric-card-travel {
+  background-color: rgba(250, 245, 255, 0.7);
+  border-color: #e9d5ff;
+  color: #7e22ce;
+}
+html.dark .metric-card-travel {
+  background-color: rgba(168, 85, 247, 0.16) !important;
+  border-color: rgba(168, 85, 247, 0.35) !important;
+  color: #c084fc !important;
+}
+
+.metric-card-unscheduled {
+  background-color: rgba(241, 245, 249, 0.7);
+  border-color: #e2e8f0;
+  color: #475569;
+}
+html.dark .metric-card-unscheduled {
+  background-color: rgba(30, 41, 59, 0.6) !important;
+  border-color: rgba(51, 65, 85, 0.8) !important;
+  color: #cbd5e1 !important;
 }
