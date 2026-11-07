@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { ShieldCheck, MapPin, Terminal, ArrowRight, CalendarDays, Compass } from 'lucide-react';
+import { ShieldCheck, MapPin, Terminal, ArrowRight, CalendarDays, Compass, LayoutGrid } from 'lucide-react';
 import { motion } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
 import { SecondaryButton } from '@/components/button';
@@ -10,7 +10,8 @@ import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 
 export default function SettingsPage() {
-  const { isViewOnly } = useAuth();
+  const { isViewOnly, canWrite } = useAuth();
+  const canManageAffiliatedApps = canWrite('Affiliated Apps');
   const settingsModules = [
     {
       id: 'access-control',
@@ -61,6 +62,16 @@ export default function SettingsPage() {
       ambientBg: 'bg-indigo-500/5',
       actionLabel: 'Configure GeoFence',
       href: '/settings/geofence',
+    },
+    {
+      id: 'affiliated-apps',
+      title: 'Affiliated PDRRMO Web Apps',
+      description: 'Register related operational web apps, auto-snap live link previews as pictures, and publish to the Affiliated Apps directory.',
+      icon: LayoutGrid,
+      iconBg: 'bg-sky-50 text-sky-700 border border-sky-200/70',
+      ambientBg: 'bg-sky-500/5',
+      actionLabel: canManageAffiliatedApps ? 'Manage Apps' : 'View Directory',
+      href: canManageAffiliatedApps ? '/settings/affiliated-apps' : '/affiliated-apps',
     },
   ];
 

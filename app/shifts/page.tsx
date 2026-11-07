@@ -29,6 +29,10 @@ import {
   LogOut,
   Compass,
   Plane,
+  Search,
+  User,
+  Mail,
+  Building2,
 } from 'lucide-react';
 import {
   format,
@@ -52,6 +56,7 @@ import { CustomDropdown, CustomDropdownOption } from '@/components/input';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
+import { LocationAccessBanner } from '@/components/location-access-modal';
 import {
   GeofenceConfig,
   DEFAULT_GEOFENCE_CONFIG,
@@ -75,6 +80,8 @@ export interface OfficerMember {
   badgeNumber: string;
   avatarInitials: string;
   phone?: string;
+  email?: string | null;
+  division?: string;
   station: string;
   defaultShift?: string;
   avatarUrl?: string | null;
@@ -83,6 +90,9 @@ export interface OfficerMember {
   checkInTime?: string | null;
   checkOutTime?: string | null;
   attendanceStatus?: 'checked_in' | 'checked_out' | 'absent';
+  isLate?: boolean;
+  unclosedFromDate?: string | null;
+  assignedStartTime?: string | null;
 }
 
 export interface DutyAttendanceRecord {
@@ -183,39 +193,177 @@ function getRoleBadge(userRole?: string) {
 }
 
 const roleFilterDropdownOptions: CustomDropdownOption[] = [
-  { value: 'ALL', label: 'All Roles', badge: 'All', badgeColor: 'bg-slate-100 text-slate-700' },
-  { value: 'admin', label: 'Admin', dotColor: '#004AC6', badge: 'System', badgeColor: 'bg-blue-50 text-[#004AC6]' },
-  { value: 'monitoring', label: 'Monitoring', dotColor: '#0284C7', badge: 'Operational', badgeColor: 'bg-sky-50 text-sky-700' },
-  { value: 'staff', label: 'Staff', dotColor: '#64748B', badge: 'Standard', badgeColor: 'bg-slate-100 text-slate-700' },
+  { value: 'ALL', label: 'All Roles' },
+  { value: 'admin', label: 'Admin' },
+  { value: 'monitoring', label: 'Monitoring' },
+  { value: 'staff', label: 'Staff' },
 ];
 
+const attendanceFilterDropdownOptions: CustomDropdownOption[] = [
+  { value: 'ALL', label: 'All Attendance' },
+  { value: 'ON_TIME', label: 'On Time' },
+  { value: 'LATE', label: 'Late' },
+  { value: 'TRAVEL_ORDER', label: 'Travel Order' },
+];
+
+function parseLocalDateParts(
+  dateStr?: string | null
+): { year: number; month: number; day: number } | null {
+  if (!dateStr) return null;
+  const match = dateStr.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+  return { year, month, day };
+}
+
+function formatDutyDateShort(dateStr?: string | null): string {
+  const parts = parseLocalDateParts(dateStr);
+  if (!parts) return dateStr || '';
+  return format(new Date(parts.year, parts.month, parts.day), 'MMM d');
+}
+
+function parseScheduleTimeParts(
+  timeStr?: string | null
+): { hours: number; minutes: number } | null {
+  if (!timeStr) return null;
+  const trimmed = timeStr.trim();
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
+  if (!match) return null;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const meridiem = match[3]?.toUpperCase();
+  if (isNaN(hours) || isNaN(minutes) || minutes < 0 || minutes > 59) return null;
+
+  if (!meridiem && hours === 24 && minutes === 0) {
+    return { hours: 0, minutes: 0 };
+  }
+  if (meridiem === 'PM' && hours < 12) {
+    hours += 12;
+  } else if (meridiem === 'AM' && hours === 12) {
+    hours = 0;
+  }
+  if (hours < 0 || hours > 23) return null;
+  return { hours, minutes };
+}
+
+// Strict 0-minute grace period: checking in past startHours:startMinutes:59.999 is Late
+function computeIsOfficerLate(
+  checkInIso?: string | null,
+  dutyDateStr?: string | null,
+  startTimeStr?: string | null,
+  endTimeStr?: string | null
+): boolean {
+  if (!checkInIso || !dutyDateStr || !startTimeStr) return false;
+  const checkInDate = new Date(checkInIso);
+  if (isNaN(checkInDate.getTime())) return false;
+
+  const dateParts = parseLocalDateParts(dutyDateStr);
+  const startParts = parseScheduleTimeParts(startTimeStr);
+  if (!dateParts || !startParts) return false;
+
+  const endParts = parseScheduleTimeParts(endTimeStr);
+  const startM = startParts.hours * 60 + startParts.minutes;
+  const endM = endParts ? endParts.hours * 60 + endParts.minutes : null;
+
+  let dayOffset = 0;
+  // If overnight shift (startM > endM) and officer checked in after midnight (before endM) on dutyDateStr,
+  // the scheduled shift actually started on the previous calendar evening.
+  if (endM !== null && startM > endM) {
+    const checkInLocalKey = format(checkInDate, 'yyyy-MM-dd');
+    const checkInMinutes = checkInDate.getHours() * 60 + checkInDate.getMinutes();
+    if (checkInLocalKey === dutyDateStr && checkInMinutes < endM) {
+      dayOffset = -1;
+    }
+  }
+
+  const scheduledStartLimit = new Date(
+    dateParts.year,
+    dateParts.month,
+    dateParts.day + dayOffset,
+    startParts.hours,
+    startParts.minutes,
+    59,
+    999
+  );
+
+  return checkInDate.getTime() > scheduledStartLimit.getTime();
+}
+
+// Check Out unlocks 30 minutes before assigned shift end_time
+function computeCheckOutUnlockTime(
+  dutyDateStr?: string | null,
+  startTimeStr?: string | null,
+  endTimeStr?: string | null,
+  checkInIso?: string | null
+): Date | null {
+  if (!dutyDateStr || !endTimeStr) return null;
+  const dateParts = parseLocalDateParts(dutyDateStr);
+  const endParts = parseScheduleTimeParts(endTimeStr);
+  if (!dateParts || !endParts) return null;
+
+  const startParts = parseScheduleTimeParts(startTimeStr);
+  const startM = startParts ? startParts.hours * 60 + startParts.minutes : null;
+  const endM = endParts.hours * 60 + endParts.minutes;
+
+  let endDayOffset = 0;
+  if (startM !== null && endM <= startM) {
+    // Overnight shift spanning midnight: ends on day + 1 unless check-in occurred post-midnight on dutyDateStr
+    endDayOffset = 1;
+    if (checkInIso) {
+      const checkInDate = new Date(checkInIso);
+      if (!isNaN(checkInDate.getTime())) {
+        const checkInLocalKey = format(checkInDate, 'yyyy-MM-dd');
+        const checkInMinutes = checkInDate.getHours() * 60 + checkInDate.getMinutes();
+        if (checkInLocalKey === dutyDateStr && checkInMinutes < endM) {
+          endDayOffset = 0;
+        }
+      }
+    }
+  }
+
+  const shiftEndDate = new Date(
+    dateParts.year,
+    dateParts.month,
+    dateParts.day + endDayOffset,
+    endParts.hours,
+    endParts.minutes,
+    0,
+    0
+  );
+
+  return new Date(shiftEndDate.getTime() - 30 * 60 * 1000);
+}
+
 // Helper to determine the current active shift schedule based on current time
-function getLiveShiftSchedule(schedules: ShiftScheduleItem[]): ShiftScheduleItem | null {
+function getLiveShiftSchedule(
+  schedules: ShiftScheduleItem[],
+  now: Date = new Date()
+): ShiftScheduleItem | null {
   if (!schedules || schedules.length === 0) return null;
-  const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
   for (const s of schedules) {
-    if (!s.startTime || !s.endTime) continue;
-    const startParts = s.startTime.replace(/[^0-9:]/g, '').split(':').map(Number);
-    const endParts = s.endTime.replace(/[^0-9:]/g, '').split(':').map(Number);
-    if (startParts.length < 2 || endParts.length < 2) continue;
-    const [sh, sm] = startParts;
-    const [eh, em] = endParts;
-    if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) continue;
+    const startParts = parseScheduleTimeParts(s.startTime);
+    const endParts = parseScheduleTimeParts(s.endTime);
+    if (!startParts || !endParts) continue;
 
-    const startM = sh * 60 + sm;
-    const endM = eh * 60 + em;
+    const startM = startParts.hours * 60 + startParts.minutes;
+    const endM = endParts.hours * 60 + endParts.minutes;
 
-    if (startM <= endM) {
+    if (startM < endM) {
       if (currentMinutes >= startM && currentMinutes < endM) {
         return s;
       }
-    } else {
+    } else if (startM > endM) {
       // Overnight shift spanning midnight
       if (currentMinutes >= startM || currentMinutes < endM) {
         return s;
       }
+    } else {
+      return s;
     }
   }
 
@@ -287,19 +435,49 @@ function OfficerAvatar({
 
 export interface PresentOfficerCardProps {
   member: OfficerMember;
+  onSelect?: (member: OfficerMember) => void;
+  isClickable?: boolean;
 }
 
 export const PresentOfficerCard = React.memo(
-  function PresentOfficerCard({ member }: PresentOfficerCardProps) {
-    const badge = getRoleBadge(member.userRole);
+  function PresentOfficerCard({ member, onSelect, isClickable = false }: PresentOfficerCardProps) {
+    const formattedCheckIn = useMemo(() => {
+      if (!member.checkInTime) return null;
+      const d = new Date(member.checkInTime);
+      if (isNaN(d.getTime())) return null;
+      if (member.unclosedFromDate) {
+        return `${formatDutyDateShort(member.unclosedFromDate)}, ${format(d, 'hh:mm a')}`;
+      }
+      return format(d, 'hh:mm a');
+    }, [member.checkInTime, member.unclosedFromDate]);
 
     return (
-      <div className="p-3.5 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all shadow-2xs flex items-center justify-between gap-3">
+      <div
+        role={isClickable ? 'button' : undefined}
+        tabIndex={isClickable ? 0 : undefined}
+        onClick={isClickable ? () => onSelect?.(member) : undefined}
+        onKeyDown={
+          isClickable
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelect?.(member);
+                }
+              }
+            : undefined
+        }
+        className={`group p-3.5 rounded-2xl border border-[#E2E8F0] bg-white transition-all shadow-2xs flex items-center justify-between gap-3 ${
+          isClickable
+            ? 'cursor-pointer hover:border-[#004AC6]/50 hover:shadow-xs active:scale-[0.99] select-none'
+            : 'hover:border-[#CBD5E1]'
+        }`}
+        title={isClickable ? `Click to view profile & attendance details for ${member.name}` : undefined}
+      >
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <OfficerAvatar officer={member} size="md" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+              <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate group-hover:text-[#004AC6] transition-colors">
                 {member.name}
               </h4>
               {member.isLead && (
@@ -310,19 +488,26 @@ export const PresentOfficerCard = React.memo(
             </div>
             <p className="text-[11px] text-[#757680] truncate font-medium">
               {member.role}
+              {formattedCheckIn ? ` · In ${formattedCheckIn}` : ''}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+          {member.isLate && !member.isTravelOrder && (
+            <span className="text-[9px] font-extrabold uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-300 px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0 shadow-2xs">
+              <Clock className="w-2.5 h-2.5" />
+              Late
+            </span>
+          )}
           {member.isTravelOrder && (
             <span className="text-[9px] font-bold bg-purple-500/15 text-purple-700 border border-purple-300/80 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
               <Plane className="w-2.5 h-2.5" />
               Travel Order
             </span>
           )}
-          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
-            {badge.label}
-          </span>
+          {isClickable && (
+            <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-[#004AC6] group-hover:translate-x-0.5 transition-all shrink-0 ml-0.5" />
+          )}
         </div>
       </div>
     );
@@ -334,26 +519,51 @@ export const PresentOfficerCard = React.memo(
       prev.member.role === next.member.role &&
       prev.member.isLead === next.member.isLead &&
       prev.member.isTravelOrder === next.member.isTravelOrder &&
+      prev.member.isLate === next.member.isLate &&
+      prev.member.checkInTime === next.member.checkInTime &&
+      prev.member.unclosedFromDate === next.member.unclosedFromDate &&
       prev.member.avatarUrl === next.member.avatarUrl &&
-      prev.member.userRole === next.member.userRole
+      prev.member.userRole === next.member.userRole &&
+      prev.isClickable === next.isClickable &&
+      prev.onSelect === next.onSelect
     );
   }
 );
 
 export interface AbsentOfficerCardProps {
   person: OfficerMember;
+  onSelect?: (person: OfficerMember) => void;
+  isClickable?: boolean;
 }
 
 export const AbsentOfficerCard = React.memo(
-  function AbsentOfficerCard({ person }: AbsentOfficerCardProps) {
-    const badge = getRoleBadge(person.userRole);
-
+  function AbsentOfficerCard({ person, onSelect, isClickable = false }: AbsentOfficerCardProps) {
     return (
-      <div className="p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs flex items-center justify-between gap-3">
+      <div
+        role={isClickable ? 'button' : undefined}
+        tabIndex={isClickable ? 0 : undefined}
+        onClick={isClickable ? () => onSelect?.(person) : undefined}
+        onKeyDown={
+          isClickable
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelect?.(person);
+                }
+              }
+            : undefined
+        }
+        className={`group p-3.5 rounded-2xl border border-rose-200 bg-rose-50/40 shadow-2xs flex items-center justify-between gap-3 transition-all ${
+          isClickable
+            ? 'cursor-pointer hover:border-rose-400 hover:shadow-xs active:scale-[0.99] select-none'
+            : ''
+        }`}
+        title={isClickable ? `Click to view profile & attendance details for ${person.name}` : undefined}
+      >
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <OfficerAvatar officer={person} size="md" fallbackBg="bg-rose-600 text-white" />
           <div className="min-w-0 flex-1">
-            <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+            <h4 className="text-xs sm:text-sm font-bold text-[#1E293B] truncate group-hover:text-rose-700 transition-colors">
               {person.name}
             </h4>
             <p className="text-[11px] text-rose-700 truncate font-medium">
@@ -361,9 +571,9 @@ export const AbsentOfficerCard = React.memo(
             </p>
           </div>
         </div>
-        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
-          {badge.label}
-        </span>
+        {isClickable && (
+          <ChevronRight className="w-4 h-4 text-rose-300 group-hover:text-rose-600 group-hover:translate-x-0.5 transition-all shrink-0" />
+        )}
       </div>
     );
   },
@@ -373,28 +583,53 @@ export const AbsentOfficerCard = React.memo(
       prev.person.name === next.person.name &&
       prev.person.role === next.person.role &&
       prev.person.avatarUrl === next.person.avatarUrl &&
-      prev.person.userRole === next.person.userRole
+      prev.person.userRole === next.person.userRole &&
+      prev.isClickable === next.isClickable &&
+      prev.onSelect === next.onSelect
     );
   }
 );
 
 export interface RestDayOfficerCardProps {
   person: OfficerMember;
+  onSelect?: (person: OfficerMember) => void;
+  isClickable?: boolean;
 }
 
 export const RestDayOfficerCard = React.memo(
-  function RestDayOfficerCard({ person }: RestDayOfficerCardProps) {
-    const badge = getRoleBadge(person.userRole);
+  function RestDayOfficerCard({ person, onSelect, isClickable = false }: RestDayOfficerCardProps) {
     return (
-      <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center gap-3 shadow-2xs">
-        <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold text-[#1E293B] truncate">{person.name}</p>
-          <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
+      <div
+        role={isClickable ? 'button' : undefined}
+        tabIndex={isClickable ? 0 : undefined}
+        onClick={isClickable ? () => onSelect?.(person) : undefined}
+        onKeyDown={
+          isClickable
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelect?.(person);
+                }
+              }
+            : undefined
+        }
+        className={`group p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3 shadow-2xs transition-all ${
+          isClickable
+            ? 'cursor-pointer hover:border-slate-400 hover:shadow-xs active:scale-[0.99] select-none'
+            : ''
+        }`}
+        title={isClickable ? `Click to view profile & attendance details for ${person.name}` : undefined}
+      >
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <OfficerAvatar officer={person} size="sm" fallbackBg="bg-slate-200 text-slate-700" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-[#1E293B] truncate group-hover:text-[#004AC6] transition-colors">{person.name}</p>
+            <p className="text-[11px] text-[#757680] truncate">{person.role}</p>
+          </div>
         </div>
-        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${badge.badgeClass}`}>
-          {badge.label}
-        </span>
+        {isClickable && (
+          <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-600 group-hover:translate-x-0.5 transition-all shrink-0" />
+        )}
       </div>
     );
   },
@@ -404,7 +639,9 @@ export const RestDayOfficerCard = React.memo(
       prev.person.name === next.person.name &&
       prev.person.role === next.person.role &&
       prev.person.avatarUrl === next.person.avatarUrl &&
-      prev.person.userRole === next.person.userRole
+      prev.person.userRole === next.person.userRole &&
+      prev.isClickable === next.isClickable &&
+      prev.onSelect === next.onSelect
     );
   }
 );
@@ -927,17 +1164,92 @@ export default function ShiftSchedulePage() {
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [isCheckingInOut, setIsCheckingInOut] = useState<boolean>(false);
 
-  // Role Filter State
+  // Side Modal State for Personnel Profile & Attendance Inspector (Full Access Only)
+  const [selectedOfficerForDetail, setSelectedOfficerForDetail] = useState<OfficerMember | null>(null);
+
+  const handleSelectOfficerForDetail = useCallback(
+    (officer: OfficerMember) => {
+      if (isShiftViewOnly) return;
+      setSelectedOfficerForDetail(officer);
+    },
+    [isShiftViewOnly]
+  );
+
+  // Auto-close side modal if view-only access is enabled
+  useEffect(() => {
+    if (isShiftViewOnly && selectedOfficerForDetail) {
+      setSelectedOfficerForDetail(null);
+    }
+  }, [isShiftViewOnly, selectedOfficerForDetail]);
+
+  // Escape key handler for Side Modal
+  useEffect(() => {
+    if (!selectedOfficerForDetail || isShiftViewOnly) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedOfficerForDetail(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedOfficerForDetail, isShiftViewOnly]);
+
+  // Role & Attendance Filter States
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('ALL');
+  const [selectedAttendanceFilter, setSelectedAttendanceFilter] = useState<string>('ALL');
+
+  // Live Clock Ticker (Updates every 15s + tab focus for Check-Out 30-min gate, Per-Shift rollover & 12:00 AM Midnight rollover)
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNowTick(Date.now());
+    }, 15000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        setNowTick(Date.now());
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
+
+  // Checked Out Floating Modal & Debounced Search States
+  const [isCheckedOutModalOpen, setIsCheckedOutModalOpen] = useState<boolean>(false);
+  const [checkedOutSearchQuery, setCheckedOutSearchQuery] = useState<string>('');
+  const [debouncedCheckedOutSearch, setDebouncedCheckedOutSearch] = useState<string>('');
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedCheckedOutSearch(checkedOutSearchQuery.trim().toLowerCase());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [checkedOutSearchQuery]);
+
+  useEffect(() => {
+    if (!isCheckedOutModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsCheckedOutModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isCheckedOutModalOpen]);
 
   // Card Pagination States (Max 5 people per page, lazy/keep-alive rendering)
   const [presentPage, setPresentPage] = useState<number>(1);
   const [absentPage, setAbsentPage] = useState<number>(1);
   const [restPage, setRestPage] = useState<number>(1);
 
-  // Reset pagination when role filter changes
+  // Reset pagination when role or attendance filter changes
   useEffect(() => {
     setPresentPage(1);
+  }, [selectedRoleFilter, selectedAttendanceFilter]);
+
+  useEffect(() => {
     setAbsentPage(1);
   }, [selectedRoleFilter]);
 
@@ -1021,6 +1333,8 @@ export default function ShiftSchedulePage() {
               avatarUrl: p.avatar_url,
               station: 'DOC Command Center',
               defaultShift: finalShift,
+              email: p.email || null,
+              division: (p as any).division || 'Provincial Disaster Risk Reduction Management Office',
             };
           });
 
@@ -1200,25 +1514,36 @@ export default function ShiftSchedulePage() {
         }
       }
 
-      // 6. Fetch Today's Officer Check-In / Check-Out Attendance Records
+      // 6. Fetch Today's Officer Check-In / Check-Out Attendance Records + Any Unclosed Prior-Day Check-Ins
       try {
         const { data: attData, error: attError } = await supabase
           .from('duty_attendance_records')
           .select('*')
-          .eq('duty_date', todayStr);
+          .or(`duty_date.eq.${todayStr},status.eq.checked_in`)
+          .order('duty_date', { ascending: false });
 
         let localAtt: DutyAttendanceRecord[] = [];
+        let localUnsynced: DutyAttendanceRecord[] = [];
         try {
           localAtt = JSON.parse(
             localStorage.getItem(`pdrrmo_duty_attendance_${todayStr}`) || '[]'
+          );
+          localUnsynced = JSON.parse(
+            localStorage.getItem('pdrrmo_duty_attendance_unsynced') || '[]'
           );
         } catch {}
 
         if (!attError && attData) {
           const dbMap = new Map<string, DutyAttendanceRecord>();
-          (attData as DutyAttendanceRecord[]).forEach((r) => dbMap.set(r.profile_id, r));
-          localAtt.forEach((r) => {
-            if (!dbMap.has(r.profile_id)) dbMap.set(r.profile_id, r);
+          (attData as DutyAttendanceRecord[]).forEach((r) =>
+            dbMap.set(`${r.profile_id}_${r.duty_date}`, r)
+          );
+          // Merge only locally unsynced records (when Supabase write failed offline)
+          localUnsynced.forEach((r) => {
+            const key = `${r.profile_id}_${r.duty_date}`;
+            if (r.duty_date === todayStr || r.status === 'checked_in') {
+              if (!dbMap.has(key)) dbMap.set(key, r);
+            }
           });
           const merged = Array.from(dbMap.values());
           if (!areJsonEqual(shiftOperationsMemoryCache.todayAttendance, merged)) {
@@ -1314,9 +1639,83 @@ export default function ShiftSchedulePage() {
     }
   }, [calendarMonth, fetchMonthAssignmentsIfNeeded]);
 
-  // Acquire GPS on mount (Skip blocking if already cached, refresh silently)
+  // Realtime Location Tracking & Permission Listener (Disables / Enables Check In in realtime when location is toggled)
   useEffect(() => {
-    refreshGpsLocation();
+    if (typeof window === 'undefined' || !('geolocation' in navigator)) return;
+
+    let watchId: number | null = null;
+    let permStatus: PermissionStatus | null = null;
+
+    // 1. Listen to Permissions API status changes in realtime (Chrome, Edge, Firefox)
+    if ('permissions' in navigator && typeof navigator.permissions?.query === 'function') {
+      navigator.permissions
+        .query({ name: 'geolocation' })
+        .then((status) => {
+          permStatus = status;
+          const handlePermChange = () => {
+            if (status.state === 'denied' || status.state === 'prompt') {
+              // Location turned OFF or revoked -> Instantly disable Check In button!
+              shiftOperationsMemoryCache.userCoords = null;
+              setUserCoords(null);
+              try {
+                localStorage.removeItem('pdrrmo_location_granted');
+              } catch {}
+            } else if (status.state === 'granted') {
+              // Location turned ON -> Re-acquire position and verify geofence!
+              try {
+                localStorage.setItem('pdrrmo_location_granted', 'true');
+              } catch {}
+              refreshGpsLocation();
+            }
+          };
+
+          handlePermChange();
+          status.onchange = handlePermChange;
+        })
+        .catch(() => {});
+    }
+
+    // 2. Continuous watchPosition: Streams active GPS position and detects when device location is turned off
+    try {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const coords: UserCoordinates = {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracyMeters: Math.round(pos.coords.accuracy || 0),
+            timestamp: pos.timestamp,
+          };
+          shiftOperationsMemoryCache.userCoords = coords;
+          setUserCoords((prev) => (areJsonEqual(prev, coords) ? prev : coords));
+          try {
+            localStorage.setItem('pdrrmo_location_granted', 'true');
+          } catch {}
+        },
+        (err) => {
+          // If location is blocked or turned off on the device:
+          if (err.code === err.PERMISSION_DENIED || err.code === err.POSITION_UNAVAILABLE) {
+            shiftOperationsMemoryCache.userCoords = null;
+            setUserCoords(null);
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 10000,
+        }
+      );
+    } catch (e) {
+      console.warn('watchPosition error:', e);
+    }
+
+    return () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+      if (permStatus) {
+        permStatus.onchange = null;
+      }
+    };
   }, [refreshGpsLocation]);
 
   // Realtime subscription for shifts, shift_duty_personnel, duty_roster_assignments, shift_schedules, profiles, geofence_settings, duty_attendance_records
@@ -1436,18 +1835,29 @@ export default function ShiftSchedulePage() {
         avatarInitials: 'OP',
         station: 'DOC Command Center',
         defaultShift: '',
+        email: null,
+        division: 'Provincial Disaster Risk Reduction Management Office',
       };
     },
     [profilesByIdMap]
   );
 
-  // Active Live Shift Schedule determined dynamically from database
-  const liveShiftSchedule = useMemo(() => {
-    return getLiveShiftSchedule(shiftSchedules);
-  }, [shiftSchedules]);
+  // Today's Date String (Rolls over automatically at 12:00 AM Midnight via live clock)
+  const todayKey = useMemo(() => format(new Date(nowTick), 'yyyy-MM-dd'), [nowTick]);
 
-  // Today's Date String
-  const todayKey = useMemo(() => format(new Date(), 'yyyy-MM-dd'), []);
+  // Re-sync roster & attendance automatically when Midnight (12:00 AM) date rollover occurs
+  const prevTodayKeyRef = useRef<string>(todayKey);
+  useEffect(() => {
+    if (prevTodayKeyRef.current !== todayKey) {
+      prevTodayKeyRef.current = todayKey;
+      fetchShiftData(true);
+    }
+  }, [todayKey, fetchShiftData]);
+
+  // Active Live Shift Schedule determined dynamically from database & live clock
+  const liveShiftSchedule = useMemo(() => {
+    return getLiveShiftSchedule(shiftSchedules, new Date(nowTick));
+  }, [shiftSchedules, nowTick]);
 
   // Today's dynamic database duty and rest assignments
   const todayAssignments = useMemo(() => {
@@ -1479,9 +1889,83 @@ export default function ShiftSchedulePage() {
     return new Set(todayTravelAssignments.map((a) => a.profile_id));
   }, [todayTravelAssignments]);
 
+  // Resolve an officer's assigned shift schedule for a specific duty date
+  const resolveOfficerShiftForDate = useCallback(
+    (
+      officerId: string,
+      dutyDate: string,
+      att?: DutyAttendanceRecord | null
+    ): ShiftScheduleItem | null => {
+      const assign = assignmentsByOfficerDateMap.get(`${officerId}_${dutyDate}`);
+      if (assign?.assignment_type === 'duty' && assign.shift_schedule_id) {
+        const s = schedulesByIdMap.get(assign.shift_schedule_id);
+        if (s) return s;
+      }
+      if (att?.shift_schedule_id) {
+        const s = schedulesByIdMap.get(att.shift_schedule_id);
+        if (s) return s;
+      }
+      const officer = getOfficerById(officerId);
+      if (officer.defaultShift) {
+        const matched = shiftSchedules.find(
+          (s) => s.name.toLowerCase() === officer.defaultShift!.toLowerCase()
+        );
+        if (matched) return matched;
+      }
+      return dutyDate === todayKey ? liveShiftSchedule : shiftSchedules[0] || null;
+    },
+    [
+      assignmentsByOfficerDateMap,
+      schedulesByIdMap,
+      getOfficerById,
+      shiftSchedules,
+      todayKey,
+      liveShiftSchedule,
+    ]
+  );
+
+  // Resolve active attendance record for an officer:
+  // 1. Today's attendance record (unless completed on an earlier shift and officer is assigned to a newly active shift)
+  // 2. Fallback to any unclosed prior-day check-in (duty_date < todayKey && status === 'checked_in')
+  const getActiveAttendanceForOfficer = useCallback(
+    (officerId: string): DutyAttendanceRecord | null => {
+      const todayRec = todayAttendance.find(
+        (r) => r.profile_id === officerId && r.duty_date === todayKey
+      );
+      if (todayRec) {
+        const isReassignedNewShift = Boolean(
+          todayRec.status === 'checked_out' &&
+            liveShiftSchedule &&
+            todayRec.shift_schedule_id &&
+            todayRec.shift_schedule_id !== liveShiftSchedule.id &&
+            todayDutyAssignments.some(
+              (a) => a.profile_id === officerId && a.shift_schedule_id === liveShiftSchedule.id
+            )
+        );
+        if (isReassignedNewShift) {
+          return null;
+        }
+        return todayRec;
+      }
+
+      const unclosedPrior = todayAttendance
+        .filter(
+          (r) =>
+            r.profile_id === officerId &&
+            r.status === 'checked_in' &&
+            r.duty_date < todayKey
+        )
+        .sort((a, b) => b.duty_date.localeCompare(a.duty_date))[0];
+
+      return unclosedPrior || null;
+    },
+    [todayAttendance, todayKey, liveShiftSchedule, todayDutyAssignments]
+  );
+
   // Officers assigned on Duty for the Current Live Shift
   // Default status is Absent until the user clicks Check In.
-  // Officers on Travel Order are automatically included as Present On-Duty.
+  // Officers who Checked Out remain 'checked_out' (never reverting to Absent) until next day/shift rollover.
+  // Officers with an unclosed prior-day shift remain in Present On-Duty until they Check Out.
   const liveShiftOfficers = useMemo(() => {
     let baseAssigns = todayDutyAssignments.filter((a) => !restOfficerIds.has(a.profile_id));
 
@@ -1529,32 +2013,87 @@ export default function ShiftSchedulePage() {
       });
     });
 
-    // Ensure the current logged-in user (if not on rest day) and anyone who checked in today is included
+    // Ensure the current logged-in user (if not on rest day) is included
     if (currentUserId && !restOfficerIds.has(currentUserId) && !officerMap.has(currentUserId)) {
       officerMap.set(currentUserId, getOfficerById(currentUserId));
     }
+
+    // Include anyone with an open check-in (including unclosed prior-day shifts even if today is rest day)
+    // or today's attendance record (if not on rest day)
     todayAttendance.forEach((att) => {
-      if (!restOfficerIds.has(att.profile_id) && !officerMap.has(att.profile_id)) {
+      const isOpenPrior = att.status === 'checked_in' && att.duty_date < todayKey;
+      const isTodayActive = att.duty_date === todayKey && !restOfficerIds.has(att.profile_id);
+      if ((isOpenPrior || isTodayActive) && !officerMap.has(att.profile_id)) {
         officerMap.set(att.profile_id, getOfficerById(att.profile_id));
       }
     });
 
-    // Enrich each officer with today's check-in / check-out status (default is 'absent')
-    // Officers on Travel Order are automatically marked as 'checked_in' (Present On-Duty)
+    // Enrich each officer with check-in / check-out / late / unclosed status
     return Array.from(officerMap.values()).map((officer): OfficerMember => {
+      const att = getActiveAttendanceForOfficer(officer.id);
+
+      // 1. Unclosed prior-day shift takes precedence until closed
+      if (att && att.status === 'checked_in' && att.duty_date < todayKey) {
+        const sched = resolveOfficerShiftForDate(officer.id, att.duty_date, att);
+        const isLate = computeIsOfficerLate(
+          att.check_in_time,
+          att.duty_date,
+          sched?.startTime,
+          sched?.endTime
+        );
+        return {
+          ...officer,
+          isTravelOrder: false,
+          checkInTime: att.check_in_time,
+          checkOutTime: null,
+          attendanceStatus: 'checked_in',
+          isLate,
+          unclosedFromDate: att.duty_date,
+          assignedStartTime: sched?.startTime || null,
+        };
+      }
+
+      // 2. Travel Order today is automatically Present On-Duty (never Late)
       if (travelOfficerIds.has(officer.id)) {
         return {
           ...officer,
           isTravelOrder: true,
           attendanceStatus: 'checked_in',
+          isLate: false,
+          unclosedFromDate: null,
         };
       }
-      const att = todayAttendance.find((r) => r.profile_id === officer.id);
+
+      // 3. Today's Checked-In or Checked-Out record
+      if (att) {
+        const sched = resolveOfficerShiftForDate(officer.id, att.duty_date, att);
+        const isLate = computeIsOfficerLate(
+          att.check_in_time,
+          att.duty_date,
+          sched?.startTime,
+          sched?.endTime
+        );
+        return {
+          ...officer,
+          checkInTime: att.check_in_time || null,
+          checkOutTime: att.check_out_time || null,
+          attendanceStatus: att.status,
+          isLate,
+          unclosedFromDate: null,
+          assignedStartTime: sched?.startTime || null,
+        };
+      }
+
+      // 4. Default: Absent
+      const sched = resolveOfficerShiftForDate(officer.id, todayKey, null);
       return {
         ...officer,
-        checkInTime: att?.check_in_time || null,
-        checkOutTime: att?.check_out_time || null,
-        attendanceStatus: att?.status || 'absent',
+        checkInTime: null,
+        checkOutTime: null,
+        attendanceStatus: 'absent',
+        isLate: false,
+        unclosedFromDate: null,
+        assignedStartTime: sched?.startTime || null,
       };
     });
   }, [
@@ -1566,24 +2105,67 @@ export default function ShiftSchedulePage() {
     profiles,
     currentUserId,
     todayAttendance,
+    todayKey,
     getOfficerById,
+    getActiveAttendanceForOfficer,
+    resolveOfficerShiftForDate,
   ]);
 
-  // Derived Present vs Absent lists for the live shift:
-  // Present = ONLY officers who have clicked Check In (status === 'checked_in')
-  // Absent = Default for all scheduled officers who have NOT checked in (or have Checked Out)
+  // Derived Present vs Absent vs Checked-Out lists:
+  // Present = Officers currently checked in (On Time, Late, Travel Order, or Unclosed Prior Shift)
+  // Absent = ONLY scheduled officers who have NOT checked in yet ('absent') — Checked Out officers NEVER revert to Absent!
   const presentOfficers = useMemo(() => {
     return liveShiftOfficers.filter((o) => o.attendanceStatus === 'checked_in');
   }, [liveShiftOfficers]);
 
   const absentOfficers = useMemo(() => {
-    return liveShiftOfficers.filter((o) => o.attendanceStatus !== 'checked_in');
+    return liveShiftOfficers.filter((o) => o.attendanceStatus === 'absent');
   }, [liveShiftOfficers]);
 
-  // Role-filtered Present & Absent Officers
+  // Checked Out Personnel Today (Displayed in the floating Checked Out modal)
+  const checkedOutOfficers = useMemo(() => {
+    const seen = new Set<string>();
+    return todayAttendance
+      .filter((r) => r.status === 'checked_out' && r.duty_date === todayKey)
+      .sort((a, b) => {
+        const timeA = a.check_out_time ? new Date(a.check_out_time).getTime() : 0;
+        const timeB = b.check_out_time ? new Date(b.check_out_time).getTime() : 0;
+        return timeB - timeA;
+      })
+      .filter((r) => {
+        if (seen.has(r.profile_id)) return false;
+        seen.add(r.profile_id);
+        return true;
+      })
+      .map((r) => ({
+        officer: getOfficerById(r.profile_id),
+        checkOutTime: r.check_out_time || null,
+      }));
+  }, [todayAttendance, todayKey, getOfficerById]);
+
+  const filteredCheckedOutOfficers = useMemo(() => {
+    if (!debouncedCheckedOutSearch) return checkedOutOfficers;
+    return checkedOutOfficers.filter((item) =>
+      item.officer.name.toLowerCase().includes(debouncedCheckedOutSearch)
+    );
+  }, [checkedOutOfficers, debouncedCheckedOutSearch]);
+
+  // Role & Attendance filtered Present Officers
   const filteredPresentOfficers = useMemo(() => {
-    return presentOfficers.filter((o) => matchesRole(o, selectedRoleFilter));
-  }, [presentOfficers, selectedRoleFilter]);
+    return presentOfficers.filter((o) => {
+      if (!matchesRole(o, selectedRoleFilter)) return false;
+      if (selectedAttendanceFilter === 'ON_TIME') {
+        return !o.isTravelOrder && !o.isLate;
+      }
+      if (selectedAttendanceFilter === 'LATE') {
+        return !o.isTravelOrder && Boolean(o.isLate);
+      }
+      if (selectedAttendanceFilter === 'TRAVEL_ORDER') {
+        return Boolean(o.isTravelOrder);
+      }
+      return true;
+    });
+  }, [presentOfficers, selectedRoleFilter, selectedAttendanceFilter]);
 
   const filteredAbsentOfficers = useMemo(() => {
     return absentOfficers.filter((o) => matchesRole(o, selectedRoleFilter));
@@ -1594,8 +2176,80 @@ export default function ShiftSchedulePage() {
     return todayRestAssignments.map((a) => getOfficerById(a.profile_id));
   }, [todayRestAssignments, getOfficerById]);
 
+  // Dynamic Inspector Metrics for the selected officer in Side Modal
+  const selectedOfficerAttendance = useMemo(() => {
+    if (!selectedOfficerForDetail) return null;
+    return getActiveAttendanceForOfficer(selectedOfficerForDetail.id);
+  }, [selectedOfficerForDetail, getActiveAttendanceForOfficer]);
+
+  const selectedOfficerSchedule = useMemo(() => {
+    if (!selectedOfficerForDetail) return null;
+    const targetDate = selectedOfficerAttendance?.duty_date || todayKey;
+    return resolveOfficerShiftForDate(
+      selectedOfficerForDetail.id,
+      targetDate,
+      selectedOfficerAttendance
+    );
+  }, [selectedOfficerForDetail, selectedOfficerAttendance, todayKey, resolveOfficerShiftForDate]);
+
+  const isSelectedOfficerRestDay = useMemo(() => {
+    if (!selectedOfficerForDetail) return false;
+    return restOfficerIds.has(selectedOfficerForDetail.id);
+  }, [selectedOfficerForDetail, restOfficerIds]);
+
+  const isSelectedOfficerTravelOrder = useMemo(() => {
+    if (!selectedOfficerForDetail) return false;
+    return travelOfficerIds.has(selectedOfficerForDetail.id) || Boolean(selectedOfficerForDetail.isTravelOrder);
+  }, [selectedOfficerForDetail, travelOfficerIds]);
+
+  const selectedOfficerDutyDateFormatted = useMemo(() => {
+    if (!selectedOfficerForDetail) return '';
+    const dateStr = selectedOfficerAttendance?.duty_date || todayKey;
+    const parts = parseLocalDateParts(dateStr);
+    if (!parts) return dateStr;
+    return format(new Date(parts.year, parts.month, parts.day), 'EEEE, MMMM d, yyyy');
+  }, [selectedOfficerForDetail, selectedOfficerAttendance, todayKey]);
+
+  const selectedOfficerCheckInFormatted = useMemo(() => {
+    if (!selectedOfficerAttendance?.check_in_time) return null;
+    const d = new Date(selectedOfficerAttendance.check_in_time);
+    if (isNaN(d.getTime())) return null;
+    const timeStr = format(d, 'hh:mm:ss a');
+    if (selectedOfficerAttendance.duty_date < todayKey) {
+      return `${timeStr} (${formatDutyDateShort(selectedOfficerAttendance.duty_date)})`;
+    }
+    return timeStr;
+  }, [selectedOfficerAttendance, todayKey]);
+
+  const selectedOfficerCheckOutFormatted = useMemo(() => {
+    if (!selectedOfficerAttendance?.check_out_time) return null;
+    const d = new Date(selectedOfficerAttendance.check_out_time);
+    if (isNaN(d.getTime())) return null;
+    return format(d, 'hh:mm:ss a');
+  }, [selectedOfficerAttendance]);
+
+  const selectedOfficerDetailLate = useMemo(() => {
+    if (!selectedOfficerForDetail || isSelectedOfficerTravelOrder || isSelectedOfficerRestDay) {
+      return false;
+    }
+    if (selectedOfficerForDetail.isLate) return true;
+    if (!selectedOfficerAttendance?.check_in_time) return false;
+    return computeIsOfficerLate(
+      selectedOfficerAttendance.check_in_time,
+      selectedOfficerAttendance.duty_date,
+      selectedOfficerSchedule?.startTime,
+      selectedOfficerSchedule?.endTime
+    );
+  }, [
+    selectedOfficerForDetail,
+    isSelectedOfficerTravelOrder,
+    isSelectedOfficerRestDay,
+    selectedOfficerAttendance,
+    selectedOfficerSchedule,
+  ]);
+
   // ===========================================================================
-  // CURRENT USER CHECK-IN / CHECK-OUT & GEOFENCE SECURITY LOGIC
+  // CURRENT USER CHECK-IN / CHECK-OUT, 30-MIN GATE & GEOFENCE SECURITY LOGIC
   // ===========================================================================
   const isMyRestDay = useMemo(() => {
     if (!currentUserId) return false;
@@ -1609,10 +2263,53 @@ export default function ShiftSchedulePage() {
 
   const myAttendance = useMemo(() => {
     if (!currentUserId) return null;
-    return todayAttendance.find((r) => r.profile_id === currentUserId) || null;
-  }, [todayAttendance, currentUserId]);
+    return getActiveAttendanceForOfficer(currentUserId);
+  }, [currentUserId, getActiveAttendanceForOfficer]);
+
+  const hasUnclosedPriorShift = Boolean(
+    myAttendance && myAttendance.status === 'checked_in' && myAttendance.duty_date < todayKey
+  );
 
   const isCheckedIn = myAttendance?.status === 'checked_in';
+
+  const isMyCheckedOutToday = Boolean(
+    myAttendance && myAttendance.status === 'checked_out' && myAttendance.duty_date === todayKey
+  );
+
+  const myAssignedSchedule = useMemo(() => {
+    if (!currentUserId) return liveShiftSchedule;
+    const targetDate = myAttendance?.duty_date || todayKey;
+    return resolveOfficerShiftForDate(currentUserId, targetDate, myAttendance);
+  }, [currentUserId, myAttendance, todayKey, resolveOfficerShiftForDate, liveShiftSchedule]);
+
+  const isMyLate = useMemo(() => {
+    if (!isCheckedIn || (!hasUnclosedPriorShift && isMyTravelOrder) || !myAttendance) {
+      return false;
+    }
+    return computeIsOfficerLate(
+      myAttendance.check_in_time,
+      myAttendance.duty_date,
+      myAssignedSchedule?.startTime,
+      myAssignedSchedule?.endTime
+    );
+  }, [isCheckedIn, hasUnclosedPriorShift, isMyTravelOrder, myAttendance, myAssignedSchedule]);
+
+  const checkOutUnlockDate = useMemo(() => {
+    if (!isCheckedIn || hasUnclosedPriorShift || !myAttendance) return null;
+    return computeCheckOutUnlockTime(
+      myAttendance.duty_date,
+      myAssignedSchedule?.startTime,
+      myAssignedSchedule?.endTime,
+      myAttendance.check_in_time
+    );
+  }, [isCheckedIn, hasUnclosedPriorShift, myAttendance, myAssignedSchedule]);
+
+  const isBeforeCheckOutWindow = Boolean(
+    isCheckedIn &&
+      !hasUnclosedPriorShift &&
+      checkOutUnlockDate &&
+      nowTick < checkOutUnlockDate.getTime()
+  );
 
   const geofenceCheck = useMemo(() => {
     if (!userCoords) return null;
@@ -1625,12 +2322,18 @@ export default function ShiftSchedulePage() {
     return !geofenceCheck.isInside;
   }, [geofenceConfig.isActive, geofenceCheck]);
 
-  // Button is disabled when:
-  // 1. Not in coverage area of geofenced set
-  // 2. Rest Day Schedule
-  // 3. Travel Order Schedule (automatically Present On-Duty)
-  const isCheckInOutDisabled =
-    isMyRestDay || isMyTravelOrder || isOutsideGeofence || isCheckingInOut || !currentUserId;
+  // Primary Action Button Disable Rules:
+  // - If closing an unclosed prior-day shift: only requires GeoFence & auth (bypasses today's Rest Day / Travel Order)
+  // - Otherwise: disabled on Rest Day, Travel Order, Checked Out Today, Before (end_time - 30m), or Outside GeoFence
+  const isCheckInOutDisabled = hasUnclosedPriorShift
+    ? isOutsideGeofence || isCheckingInOut || !currentUserId
+    : isMyRestDay ||
+      isMyTravelOrder ||
+      isMyCheckedOutToday ||
+      isBeforeCheckOutWindow ||
+      isOutsideGeofence ||
+      isCheckingInOut ||
+      !currentUserId;
 
   const handleToggleCheckInOut = useCallback(async () => {
     if (!currentUserId) {
@@ -1638,14 +2341,28 @@ export default function ShiftSchedulePage() {
       return;
     }
 
-    if (isMyRestDay) {
-      showToast('Action disabled: You are scheduled for a Rest Day today.');
-      return;
-    }
+    if (!hasUnclosedPriorShift) {
+      if (isMyRestDay) {
+        showToast('Action disabled: You are scheduled for a Rest Day today.');
+        return;
+      }
 
-    if (isMyTravelOrder) {
-      showToast('Action disabled: You are on an Official Travel Order and automatically Present.');
-      return;
+      if (isMyTravelOrder) {
+        showToast('Action disabled: You are on an Official Travel Order and automatically Present.');
+        return;
+      }
+
+      if (isMyCheckedOutToday) {
+        showToast('You have already checked out for this shift.');
+        return;
+      }
+
+      if (isCheckedIn && isBeforeCheckOutWindow && checkOutUnlockDate) {
+        showToast(
+          `Check Out unlocks at ${format(checkOutUnlockDate, 'hh:mm a')} (30 minutes before shift end).`
+        );
+        return;
+      }
     }
 
     setIsCheckingInOut(true);
@@ -1674,20 +2391,17 @@ export default function ShiftSchedulePage() {
       }
 
       const nowIso = new Date().toISOString();
-      const distMeters =
-        activeCoords && geofenceConfig
-          ? checkGeofenceCoverage(activeCoords, geofenceConfig).distanceMeters
-          : null;
       const isUuidGeo = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
         geofenceConfig.id
       );
 
       if (!isCheckedIn) {
-        // PERFORM CHECK IN
+        // PERFORM CHECK IN FOR TODAY
+        const targetSchedule = myAssignedSchedule || liveShiftSchedule;
         const newRecord: DutyAttendanceRecord = {
           profile_id: currentUserId,
           duty_date: todayKey,
-          shift_schedule_id: liveShiftSchedule?.id || null,
+          shift_schedule_id: targetSchedule?.id || null,
           geofence_id: isUuidGeo ? geofenceConfig.id : null,
           check_in_time: nowIso,
           check_out_time: null,
@@ -1695,7 +2409,12 @@ export default function ShiftSchedulePage() {
         };
 
         setTodayAttendance((prev) => {
-          const next = [newRecord, ...prev.filter((r) => r.profile_id !== currentUserId)];
+          const next = [
+            newRecord,
+            ...prev.filter(
+              (r) => !(r.profile_id === currentUserId && r.duty_date === todayKey)
+            ),
+          ];
           shiftOperationsMemoryCache.todayAttendance = next;
           try {
             localStorage.setItem(`pdrrmo_duty_attendance_${todayKey}`, JSON.stringify(next));
@@ -1710,15 +2429,49 @@ export default function ShiftSchedulePage() {
 
         if (checkInErr) {
           console.warn('Supabase check-in upsert notice (cached locally):', checkInErr.message);
+          try {
+            const unsynced: DutyAttendanceRecord[] = JSON.parse(
+              localStorage.getItem('pdrrmo_duty_attendance_unsynced') || '[]'
+            );
+            const nextUnsynced = [
+              newRecord,
+              ...unsynced.filter(
+                (r) => !(r.profile_id === currentUserId && r.duty_date === todayKey)
+              ),
+            ];
+            localStorage.setItem('pdrrmo_duty_attendance_unsynced', JSON.stringify(nextUnsynced));
+          } catch {}
+        } else {
+          try {
+            const unsynced: DutyAttendanceRecord[] = JSON.parse(
+              localStorage.getItem('pdrrmo_duty_attendance_unsynced') || '[]'
+            );
+            const nextUnsynced = unsynced.filter(
+              (r) => !(r.profile_id === currentUserId && r.duty_date === todayKey)
+            );
+            localStorage.setItem('pdrrmo_duty_attendance_unsynced', JSON.stringify(nextUnsynced));
+          } catch {}
         }
 
-        showToast('Checked In Successfully — You are now listed as Present On-Duty.');
+        const checkedInLate = computeIsOfficerLate(
+          nowIso,
+          todayKey,
+          targetSchedule?.startTime,
+          targetSchedule?.endTime
+        );
+        showToast(
+          checkedInLate
+            ? 'Checked In (Late) — Listed under Present On-Duty with Late status.'
+            : 'Checked In Successfully — You are now listed as Present On-Duty.'
+        );
       } else {
-        // PERFORM CHECK OUT
+        // PERFORM CHECK OUT (Supports both Today's Shift and Unclosed Prior-Day Shift)
+        const targetDutyDate = myAttendance?.duty_date || todayKey;
+        const wasPriorShift = targetDutyDate < todayKey;
         const updatedRecord: DutyAttendanceRecord = {
           ...(myAttendance || {
             profile_id: currentUserId,
-            duty_date: todayKey,
+            duty_date: targetDutyDate,
             check_in_time: nowIso,
           }),
           check_out_time: nowIso,
@@ -1726,7 +2479,11 @@ export default function ShiftSchedulePage() {
         };
 
         setTodayAttendance((prev) => {
-          const next = [updatedRecord, ...prev.filter((r) => r.profile_id !== currentUserId)];
+          const filtered = prev.filter(
+            (r) => !(r.profile_id === currentUserId && r.duty_date === targetDutyDate)
+          );
+          // If closing a prior-day shift, omit from today's active array so today immediately becomes Default: Absent (Check In ready)
+          const next = wasPriorShift ? filtered : [updatedRecord, ...filtered];
           shiftOperationsMemoryCache.todayAttendance = next;
           try {
             localStorage.setItem(`pdrrmo_duty_attendance_${todayKey}`, JSON.stringify(next));
@@ -1739,11 +2496,27 @@ export default function ShiftSchedulePage() {
           .from('duty_attendance_records')
           .upsert(updatedRecord, { onConflict: 'profile_id,duty_date' });
 
+        try {
+          const unsynced: DutyAttendanceRecord[] = JSON.parse(
+            localStorage.getItem('pdrrmo_duty_attendance_unsynced') || '[]'
+          );
+          const cleaned = unsynced.filter(
+            (r) => !(r.profile_id === currentUserId && r.duty_date === targetDutyDate)
+          );
+          const nextUnsynced =
+            checkOutErr && !wasPriorShift ? [updatedRecord, ...cleaned] : cleaned;
+          localStorage.setItem('pdrrmo_duty_attendance_unsynced', JSON.stringify(nextUnsynced));
+        } catch {}
+
         if (checkOutErr) {
           console.warn('Supabase check-out upsert notice (cached locally):', checkOutErr.message);
         }
 
-        showToast('Checked Out Successfully — Duty shift attendance logged.');
+        showToast(
+          wasPriorShift
+            ? `Unclosed shift (${formatDutyDateShort(targetDutyDate)}) closed — Ready for today's attendance.`
+            : 'Checked Out Successfully — Duty shift completed.'
+        );
       }
 
       if (typeof window !== 'undefined') {
@@ -1762,15 +2535,20 @@ export default function ShiftSchedulePage() {
     }
   }, [
     currentUserId,
+    hasUnclosedPriorShift,
     isMyRestDay,
     isMyTravelOrder,
+    isMyCheckedOutToday,
+    isCheckedIn,
+    isBeforeCheckOutWindow,
+    checkOutUnlockDate,
     userCoords,
     geofenceConfig,
     refreshGpsLocation,
-    isCheckedIn,
     myAttendance,
+    myAssignedSchedule,
     todayKey,
-    liveShiftSchedule?.id,
+    liveShiftSchedule,
   ]);
 
   // Open Edit Attendance Modal with cloned current state
@@ -2200,32 +2978,45 @@ export default function ShiftSchedulePage() {
                 <div className="flex items-start sm:items-center gap-4">
                   <div
                     className={`w-12 h-12 rounded-2xl flex items-center justify-center border shrink-0 shadow-2xs ${
-                      isMyTravelOrder
-                        ? 'bg-purple-500/15 text-purple-600 border-purple-300/80'
-                        : isMyRestDay
-                          ? 'bg-amber-50 text-amber-600 border-amber-200'
-                          : isCheckedIn
-                            ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
-                            : 'bg-slate-100 text-slate-600 border-slate-200'
+                      hasUnclosedPriorShift
+                        ? 'bg-amber-50 text-amber-600 border-amber-300'
+                        : isMyTravelOrder
+                          ? 'bg-purple-500/15 text-purple-600 border-purple-300/80'
+                          : isMyRestDay
+                            ? 'bg-amber-50 text-amber-600 border-amber-200'
+                            : isCheckedIn
+                              ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                              : isMyCheckedOutToday
+                                ? 'bg-blue-50 text-[#004AC6] border-blue-200'
+                                : 'bg-slate-100 text-slate-600 border-slate-200'
                     }`}
                   >
-                    {isMyTravelOrder ? (
+                    {hasUnclosedPriorShift ? (
+                      <AlertCircle className="w-6 h-6" />
+                    ) : isMyTravelOrder ? (
                       <Plane className="w-6 h-6" />
                     ) : isMyRestDay ? (
                       <Coffee className="w-6 h-6" />
                     ) : isCheckedIn ? (
                       <ShieldCheck className="w-6 h-6" />
+                    ) : isMyCheckedOutToday ? (
+                      <CheckCircle2 className="w-6 h-6" />
                     ) : (
                       <Clock className="w-6 h-6" />
                     )}
                   </div>
 
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2.5 flex-wrap">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
                         Duty Attendance Check-In Terminal
                       </h2>
-                      {isMyTravelOrder ? (
+                      {hasUnclosedPriorShift && myAttendance ? (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-300">
+                          <AlertCircle className="w-3 h-3" />
+                          Unclosed Shift ({formatDutyDateShort(myAttendance.duty_date)})
+                        </span>
+                      ) : isMyTravelOrder ? (
                         <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 border border-purple-300/80">
                           <Plane className="w-3 h-3" />
                           Travel Order
@@ -2240,8 +3031,9 @@ export default function ShiftSchedulePage() {
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                           Present On-Duty
                         </span>
-                      ) : myAttendance?.status === 'checked_out' ? (
-                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                      ) : isMyCheckedOutToday ? (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200">
+                          <CheckCircle2 className="w-3 h-3" />
                           Checked Out
                         </span>
                       ) : (
@@ -2249,56 +3041,118 @@ export default function ShiftSchedulePage() {
                           Default: Absent (Not Checked In)
                         </span>
                       )}
+                      {isCheckedIn && isMyLate && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-300">
+                          <Clock className="w-3 h-3" />
+                          Late
+                        </span>
+                      )}
                     </div>
 
                     <p className="text-xs text-[#505F76]">
-                      {isMyTravelOrder
-                        ? 'You are on an Official Travel Order today and are automatically marked Present On-Duty.'
-                        : isMyRestDay
-                          ? 'You are scheduled for a Rest Day today. Check-In and Check-Out are disabled.'
-                          : isCheckedIn && myAttendance?.check_in_time
-                            ? `Checked in at ${format(new Date(myAttendance.check_in_time), 'hh:mm a')} · Click Check Out when completing your shift.`
-                            : myAttendance?.status === 'checked_out' && myAttendance?.check_out_time
-                              ? `Last checked out at ${format(new Date(myAttendance.check_out_time), 'hh:mm a')} · Click Check In to resume active duty.`
-                              : 'All scheduled personnel are marked Absent by default until Checked In within the station geofence.'}
+                      {hasUnclosedPriorShift && myAttendance
+                        ? `You have an unclosed shift from ${formatDutyDateShort(
+                            myAttendance.duty_date
+                          )} (checked in at ${format(
+                            new Date(myAttendance.check_in_time),
+                            'hh:mm a'
+                          )}) · Click Check Out first before checking in for today.`
+                        : isMyTravelOrder
+                          ? 'You are on an Official Travel Order today and are automatically marked Present On-Duty.'
+                          : isMyRestDay
+                            ? 'You are scheduled for a Rest Day today. Check-In and Check-Out are disabled.'
+                            : isCheckedIn && myAttendance?.check_in_time
+                              ? isBeforeCheckOutWindow && checkOutUnlockDate
+                                ? `Checked in at ${format(
+                                    new Date(myAttendance.check_in_time),
+                                    'hh:mm a'
+                                  )} · Check Out unlocks at ${format(
+                                    checkOutUnlockDate,
+                                    'hh:mm a'
+                                  )} (30 mins before shift end).`
+                                : `Checked in at ${format(
+                                    new Date(myAttendance.check_in_time),
+                                    'hh:mm a'
+                                  )} · Click Check Out when completing your shift.`
+                              : isMyCheckedOutToday && myAttendance?.check_out_time
+                                ? `Completed shift — checked out at ${format(
+                                    new Date(myAttendance.check_out_time),
+                                    'hh:mm a'
+                                  )}. Resets automatically at 12:00 AM or on your next scheduled shift.`
+                                : 'All scheduled personnel are marked Absent by default until Checked In within the station geofence.'}
                     </p>
                   </div>
                 </div>
 
-                {/* Right: Check In / Check Out Action Button */}
-                <div className="flex flex-col sm:flex-row lg:flex-col items-stretch sm:items-center lg:items-end justify-end gap-2 shrink-0 border-t lg:border-t-0 pt-4 lg:pt-0 border-[#E2E8F0]">
-                  <button
-                    type="button"
-                    onClick={handleToggleCheckInOut}
-                    disabled={isCheckInOutDisabled}
-                    className={`inline-flex items-center justify-center gap-2.5 px-6 py-3 rounded-2xl text-sm font-bold transition-all shadow-sm ${
-                      isCheckInOutDisabled
-                        ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-75'
-                        : isCheckedIn
-                          ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-600/20 cursor-pointer'
-                          : 'bg-[#004AC6] hover:bg-[#003896] text-white shadow-[#004AC6]/20 cursor-pointer'
-                    }`}
-                  >
-                    {isCheckingInOut ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Processing...</span>
-                      </>
-                    ) : isCheckedIn ? (
-                      <>
-                        <LogOut className="w-4 h-4" />
-                        <span>Check Out</span>
-                      </>
-                    ) : (
-                      <>
-                        <LogIn className="w-4 h-4" />
-                        <span>Check In</span>
-                      </>
-                    )}
-                  </button>
+                {/* Right: Checked Out List Button + Primary Check In / Check Out Action Button */}
+                <div className="flex flex-col items-stretch sm:items-end justify-end gap-2 shrink-0 border-t lg:border-t-0 pt-4 lg:pt-0 border-[#E2E8F0]">
+                  <div className="flex flex-wrap items-center justify-end gap-2.5 w-full sm:w-auto">
+                    {/* Checked Out List Modal Trigger Button (Always Enabled) */}
+                    <button
+                      type="button"
+                      onClick={() => setIsCheckedOutModalOpen(true)}
+                      className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold border border-[#E2E8F0] bg-[#F8FAFC] hover:bg-slate-100 text-[#1E293B] transition-all shadow-2xs cursor-pointer flex-1 sm:flex-initial"
+                    >
+                      <UserCheck className="w-4 h-4 text-[#004AC6]" />
+                      <span>Checked Out</span>
+                      <span className="text-xs font-extrabold px-2 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200 font-mono">
+                        {checkedOutOfficers.length}
+                      </span>
+                    </button>
 
-                  {/* Disabled Reason Indicator */}
-                  {isMyTravelOrder ? (
+                    {/* Primary Check In / Check Out / Checked Out Action Button */}
+                    <button
+                      type="button"
+                      onClick={handleToggleCheckInOut}
+                      disabled={isCheckInOutDisabled}
+                      className={`inline-flex items-center justify-center gap-2.5 px-6 py-3 rounded-2xl text-sm font-bold transition-all shadow-sm flex-1 sm:flex-initial ${
+                        isCheckInOutDisabled
+                          ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-75'
+                          : isCheckedIn
+                            ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-600/20 cursor-pointer'
+                            : 'bg-[#004AC6] hover:bg-[#003896] text-white shadow-[#004AC6]/20 cursor-pointer'
+                      }`}
+                    >
+                      {isCheckingInOut ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Processing...</span>
+                        </>
+                      ) : isCheckedIn ? (
+                        <>
+                          <LogOut className="w-4 h-4" />
+                          <span>Check Out</span>
+                        </>
+                      ) : isMyCheckedOutToday ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>Checked Out</span>
+                        </>
+                      ) : (
+                        <>
+                          <LogIn className="w-4 h-4" />
+                          <span>Check In</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Status / Disabled Reason Indicator */}
+                  {hasUnclosedPriorShift ? (
+                    isOutsideGeofence ? (
+                      <span className="text-[11px] font-semibold text-rose-600 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        {!userCoords
+                          ? 'Disabled: Location is turned OFF'
+                          : 'Disabled: Must be inside GeoFence to close prior shift'}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-semibold text-amber-700 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        Close your {formatDutyDateShort(myAttendance?.duty_date)} shift first to unlock today&apos;s Check In
+                      </span>
+                    )
+                  ) : isMyTravelOrder ? (
                     <span className="text-[11px] font-semibold text-purple-700 flex items-center gap-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                       Disabled on Travel Order (Auto-Present)
@@ -2308,10 +3162,22 @@ export default function ShiftSchedulePage() {
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                       Disabled on Rest Day Schedule
                     </span>
+                  ) : isMyCheckedOutToday ? (
+                    <span className="text-[11px] font-medium text-[#505F76] flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                      Shift Completed · Resets at 12:00 AM or next shift
+                    </span>
                   ) : isOutsideGeofence ? (
                     <span className="text-[11px] font-semibold text-rose-600 flex items-center gap-1">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      Disabled: Must be inside GeoFence coverage area
+                      {!userCoords
+                        ? 'Disabled: Location is turned OFF'
+                        : 'Disabled: Must be inside GeoFence coverage area'}
+                    </span>
+                  ) : isBeforeCheckOutWindow && checkOutUnlockDate ? (
+                    <span className="text-[11px] font-semibold text-amber-700 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 shrink-0" />
+                      Check Out unlocks at {format(checkOutUnlockDate, 'hh:mm a')} (30 mins before shift end)
                     </span>
                   ) : (
                     <span className="text-[11px] font-medium text-emerald-700 flex items-center gap-1">
@@ -2395,15 +3261,24 @@ export default function ShiftSchedulePage() {
                     </div>
                   </div>
 
-                  {/* Controls: Filter Role Dropdown */}
-                  <div className="flex items-center gap-2 pt-1">
-                    <div className="flex-1 min-w-0">
+                  {/* Controls: Icon-Free Roles & Attendance Filters */}
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div className="min-w-0">
                       <CustomDropdown
                         options={roleFilterDropdownOptions}
                         value={selectedRoleFilter}
                         onChange={(val) => setSelectedRoleFilter(val)}
-                        leftIcon={<Shield className="w-3.5 h-3.5 text-[#004AC6]" />}
-                        placeholder="Filter Role"
+                        placeholder="Roles"
+                        size="sm"
+                        pill
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <CustomDropdown
+                        options={attendanceFilterDropdownOptions}
+                        value={selectedAttendanceFilter}
+                        onChange={(val) => setSelectedAttendanceFilter(val)}
+                        placeholder="Attendance"
                         size="sm"
                         pill
                       />
@@ -2432,17 +3307,23 @@ export default function ShiftSchedulePage() {
                       page={presentPage}
                       onPageChange={setPresentPage}
                       renderItem={(member) => (
-                        <PresentOfficerCard key={member.id} member={member} />
+                        <PresentOfficerCard
+                          key={member.id}
+                          member={member}
+                          isClickable={!isShiftViewOnly}
+                          onSelect={handleSelectOfficerForDetail}
+                        />
                       )}
                       emptyState={
-                        presentOfficers.length > 0 && selectedRoleFilter !== 'ALL' ? (
+                        presentOfficers.length > 0 &&
+                        (selectedRoleFilter !== 'ALL' || selectedAttendanceFilter !== 'ALL') ? (
                           <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5 my-auto">
-                            <Shield className="w-6 h-6 text-slate-400 mx-auto" />
+                            <Users className="w-6 h-6 text-slate-400 mx-auto" />
                             <p className="text-xs font-bold text-[#1E293B]">
-                              No {selectedRoleFilter.toUpperCase()} Present
+                              No Matching Personnel
                             </p>
                             <p className="text-[11px] text-[#757680]">
-                              No officers with role &quot;{selectedRoleFilter}&quot; checked in.
+                              No checked-in officers match the selected role and attendance filters.
                             </p>
                           </div>
                         ) : (
@@ -2513,6 +3394,8 @@ export default function ShiftSchedulePage() {
                         <AbsentOfficerCard
                           key={person.id}
                           person={person}
+                          isClickable={!isShiftViewOnly}
+                          onSelect={handleSelectOfficerForDetail}
                         />
                       )}
                       emptyState={
@@ -2579,7 +3462,12 @@ export default function ShiftSchedulePage() {
                       page={restPage}
                       onPageChange={setRestPage}
                       renderItem={(person) => (
-                        <RestDayOfficerCard key={person.id} person={person} />
+                        <RestDayOfficerCard
+                          key={person.id}
+                          person={person}
+                          isClickable={!isShiftViewOnly}
+                          onSelect={handleSelectOfficerForDetail}
+                        />
                       )}
                       emptyState={
                         <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5 my-auto">
@@ -2859,7 +3747,6 @@ export default function ShiftSchedulePage() {
 
                 {liveShiftOfficers.map((officer) => {
                   const isAbsent = tempAbsentOfficerIds.includes(officer.id);
-                  const badge = getRoleBadge(officer.userRole);
 
                   return (
                     <div
@@ -2886,9 +3773,6 @@ export default function ShiftSchedulePage() {
                                 LEAD
                               </span>
                             )}
-                            <span className={`text-[9px] font-semibold px-1.5 py-0.2 rounded border ${badge.badgeClass}`}>
-                              {badge.label}
-                            </span>
                           </div>
                           <p className="text-[11px] text-[#757680] truncate font-medium">
                             {officer.role} · {officer.station}
@@ -2956,6 +3840,474 @@ export default function ShiftSchedulePage() {
       </AnimatePresence>
 
       {/* ========================================================================= */}
+      {/* FLOATING MODAL: CHECKED OUT PERSONNEL LIST (DEBOUNCED SEARCH + PROFILE/NAME/TIME) */}
+      {/* ========================================================================= */}
+      <AnimatePresence>
+        {isCheckedOutModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsCheckedOutModalOpen(false)}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+
+            {/* Floating Modal Dialog */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ duration: 0.2 }}
+              className="relative bg-white border border-[#E2E8F0] rounded-3xl shadow-2xl w-full max-w-md overflow-hidden z-10 flex flex-col max-h-[82vh]"
+            >
+              {/* Header */}
+              <div className="px-5 py-4 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-2xl bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/20 shrink-0">
+                    <UserCheck className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm sm:text-base font-bold text-[#1E293B] truncate">
+                        Checked Out Personnel
+                      </h3>
+                      <span className="text-xs font-extrabold px-2 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200 font-mono shrink-0">
+                        {checkedOutOfficers.length}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#757680] mt-0.5 truncate">
+                      Completed duty check-outs for today ({formatDutyDateShort(todayKey)})
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCheckedOutModalOpen(false)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/60 transition-colors cursor-pointer shrink-0"
+                  aria-label="Close Checked Out Modal"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Debounced Search Bar */}
+              <div className="p-4 border-b border-[#E2E8F0] bg-white shrink-0">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-[#757680] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={checkedOutSearchQuery}
+                    onChange={(e) => setCheckedOutSearchQuery(e.target.value)}
+                    placeholder="Search officer name..."
+                    className="w-full pl-9 pr-9 py-2 rounded-full border border-[#E2E8F0] bg-[#F8FAFC] text-xs sm:text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
+                  />
+                  {checkedOutSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setCheckedOutSearchQuery('')}
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/70 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer"
+                      aria-label="Clear search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Checked Out List (Profile Avatar + Name + Time Checked Out ONLY) */}
+              <div className="p-4 overflow-y-auto space-y-2.5 flex-1">
+                {checkedOutOfficers.length === 0 ? (
+                  <div className="p-8 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
+                    <LogOut className="w-6 h-6 text-slate-400 mx-auto" />
+                    <p className="text-xs font-bold text-[#1E293B]">
+                      No Checked Out Personnel Yet
+                    </p>
+                    <p className="text-[11px] text-[#757680]">
+                      Officers who complete their shift and check out today will appear here.
+                    </p>
+                  </div>
+                ) : filteredCheckedOutOfficers.length === 0 ? (
+                  <div className="p-8 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
+                    <Search className="w-6 h-6 text-slate-400 mx-auto" />
+                    <p className="text-xs font-bold text-[#1E293B]">
+                      No Matching Officer
+                    </p>
+                    <p className="text-[11px] text-[#757680]">
+                      No checked out officer matches &quot;{checkedOutSearchQuery.trim()}&quot;.
+                    </p>
+                  </div>
+                ) : (
+                  filteredCheckedOutOfficers.map((item) => {
+                    const formattedOutTime =
+                      item.checkOutTime && !isNaN(new Date(item.checkOutTime).getTime())
+                        ? format(new Date(item.checkOutTime), 'hh:mm a')
+                        : '—';
+
+                    return (
+                      <div
+                        key={item.officer.id}
+                        className="p-3 rounded-2xl border border-[#E2E8F0] bg-white hover:border-[#CBD5E1] transition-all flex items-center justify-between gap-3 shadow-2xs"
+                      >
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <OfficerAvatar officer={item.officer} size="md" />
+                          <span className="text-xs sm:text-sm font-bold text-[#1E293B] truncate">
+                            {item.officer.name}
+                          </span>
+                        </div>
+                        <span className="text-xs font-bold font-mono text-[#004AC6] bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-full shrink-0">
+                          {formattedOutTime}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ========================================================================= */}
+      {/* 7. SIDE MODAL: PERSONNEL PROFILE & ATTENDANCE DETAILS (FULL ACCESS ONLY) */}
+      {/* ========================================================================= */}
+      <AnimatePresence>
+        {!isShiftViewOnly && selectedOfficerForDetail && (
+          <div className="fixed inset-0 z-50 overflow-hidden">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedOfficerForDetail(null)}
+              className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+            />
+
+            <div className="fixed inset-y-0 right-0 max-w-full flex pl-0 sm:pl-10 w-full sm:w-auto">
+              <motion.div
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 28, stiffness: 280 }}
+                className="w-full sm:w-screen sm:max-w-md md:max-w-lg bg-[#F8FAFC] shadow-2xl flex flex-col h-full border-l border-[#E2E8F0] overflow-hidden z-10"
+              >
+                {/* Drawer Header */}
+                <div className="p-4 sm:p-5 border-b border-[#E2E8F0] bg-white flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-2xl bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/20 shrink-0">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base sm:text-lg font-bold text-[#1E293B] truncate">
+                          Personnel Details
+                        </h2>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200">
+                          Full Access
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#505F76] truncate mt-0.5">
+                        Officer profile and live duty attendance breakdown
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOfficerForDetail(null)}
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+                    aria-label="Close Personnel Details"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Drawer Scrollable Body: Exactly Two Cards */}
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
+                  {/* CARD 1: USER PROFILE */}
+                  <div className="bg-white rounded-3xl border border-[#E2E8F0] p-5 shadow-xs space-y-4">
+                    {/* Card 1 Header */}
+                    <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+                      <div className="flex items-center gap-2">
+                        <User className="w-4 h-4 text-[#004AC6]" />
+                        <h3 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider">
+                          User Profile
+                        </h3>
+                      </div>
+                      <span
+                        className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                          (selectedOfficerForDetail.userRole || '').includes('admin')
+                            ? 'bg-blue-50 text-[#004AC6] border-blue-200'
+                            : (selectedOfficerForDetail.userRole || '').includes('monitoring')
+                            ? 'bg-sky-50 text-sky-700 border-sky-200'
+                            : 'bg-slate-100 text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        {(selectedOfficerForDetail.userRole || 'Staff').toUpperCase()}
+                      </span>
+                    </div>
+
+                    {/* Officer Hero Block */}
+                    <div className="flex items-center gap-3.5">
+                      <OfficerAvatar
+                        officer={selectedOfficerForDetail}
+                        size="xl"
+                        className="shadow-xs border-2 border-white ring-2 ring-[#E2E8F0]"
+                      />
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="text-base sm:text-lg font-bold text-[#1E293B] truncate leading-tight">
+                            {selectedOfficerForDetail.name}
+                          </h4>
+                          {selectedOfficerForDetail.isLead && (
+                            <span className="text-[9px] font-bold bg-blue-100 text-[#004AC6] px-1.5 py-0.2 rounded shrink-0">
+                              LEAD
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-medium text-[#505F76] truncate">
+                          {selectedOfficerForDetail.role}
+                        </p>
+                        <div className="flex items-center gap-1.5 pt-0.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          <span className="text-[11px] font-semibold text-emerald-700">
+                            Active Personnel
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Profile Metadata Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Badge Number
+                        </span>
+                        <span className="text-xs font-bold text-[#1E293B] font-mono mt-0.5 block truncate">
+                          {selectedOfficerForDetail.badgeNumber}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Assigned Station
+                        </span>
+                        <span className="text-xs font-bold text-[#1E293B] mt-0.5 block truncate">
+                          {selectedOfficerForDetail.station || 'DOC Command Center'}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Email Address
+                        </span>
+                        <span
+                          className="text-xs font-bold text-[#1E293B] mt-0.5 block truncate"
+                          title={selectedOfficerForDetail.email || undefined}
+                        >
+                          {selectedOfficerForDetail.email || 'None registered'}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Default Shift
+                        </span>
+                        <span className="text-xs font-bold text-[#1E293B] mt-0.5 block truncate">
+                          {selectedOfficerForDetail.defaultShift || 'Rotational / Dynamic'}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70 sm:col-span-2">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Division / Department
+                        </span>
+                        <span className="text-xs font-bold text-[#1E293B] mt-0.5 block truncate">
+                          {selectedOfficerForDetail.division || 'Provincial Disaster Risk Reduction Management Office'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* CARD 2: ATTENDANCE DETAILS */}
+                  <div className="bg-white rounded-3xl border border-[#E2E8F0] p-5 shadow-xs space-y-4">
+                    {/* Card 2 Header */}
+                    <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+                      <div className="flex items-center gap-2">
+                        <CalendarCheck className="w-4 h-4 text-[#004AC6]" />
+                        <h3 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider">
+                          Attendance Details
+                        </h3>
+                      </div>
+
+                      {/* Current Status Pill */}
+                      {isSelectedOfficerTravelOrder ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-500/15 text-purple-700 border border-purple-300/80">
+                          <Plane className="w-3 h-3" />
+                          Travel Order
+                        </span>
+                      ) : isSelectedOfficerRestDay ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                          <Coffee className="w-3 h-3" />
+                          Rest Day
+                        </span>
+                      ) : selectedOfficerAttendance?.status === 'checked_in' ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Present On-Duty
+                        </span>
+                      ) : selectedOfficerAttendance?.status === 'checked_out' ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Checked Out
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                          Default: Absent
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Contextual Status Banner */}
+                    {selectedOfficerDetailLate ? (
+                      <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-start gap-2.5">
+                        <Clock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                        <div className="text-xs text-amber-900 leading-relaxed">
+                          <span className="font-bold">Late Arrival:</span> Checked in at{' '}
+                          <span className="font-semibold">{selectedOfficerCheckInFormatted}</span>, after the scheduled start time of{' '}
+                          <span className="font-semibold">{selectedOfficerSchedule?.startTime || '08:00'}</span>.
+                        </div>
+                      </div>
+                    ) : isSelectedOfficerTravelOrder ? (
+                      <div className="p-3.5 rounded-2xl bg-purple-500/10 border border-purple-300/80 flex items-start gap-2.5">
+                        <Plane className="w-4 h-4 text-purple-700 shrink-0 mt-0.5" />
+                        <div className="text-xs text-purple-900 leading-relaxed">
+                          <span className="font-bold">Official Travel Order:</span> Deployed on external official travel. Automatically listed as Present On-Duty.
+                        </div>
+                      </div>
+                    ) : isSelectedOfficerRestDay ? (
+                      <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-start gap-2.5">
+                        <Coffee className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                        <div className="text-xs text-amber-900 leading-relaxed">
+                          <span className="font-bold">Rest Day Schedule:</span> Scheduled off-duty today. Shift check-in is not required.
+                        </div>
+                      </div>
+                    ) : selectedOfficerAttendance?.status === 'checked_in' ? (
+                      <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200/80 flex items-start gap-2.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                        <div className="text-xs text-emerald-900 leading-relaxed">
+                          <span className="font-bold">On-Time Arrival:</span> Checked in on time at{' '}
+                          <span className="font-semibold">{selectedOfficerCheckInFormatted}</span>. Currently on active duty.
+                        </div>
+                      </div>
+                    ) : selectedOfficerAttendance?.status === 'checked_out' ? (
+                      <div className="p-3.5 rounded-2xl bg-blue-50 border border-blue-200/80 flex items-start gap-2.5">
+                        <CheckCircle2 className="w-4 h-4 text-[#004AC6] shrink-0 mt-0.5" />
+                        <div className="text-xs text-blue-900 leading-relaxed">
+                          <span className="font-bold">Shift Completed:</span> Checked out today at{' '}
+                          <span className="font-semibold">{selectedOfficerCheckOutFormatted}</span>.
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200/80 flex items-start gap-2.5">
+                        <AlertCircle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                        <div className="text-xs text-rose-900 leading-relaxed">
+                          <span className="font-bold">Not Checked In:</span> Listed as Absent by default until the officer verifies location and clicks Check In.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Attendance Metrics Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Duty Date
+                        </span>
+                        <span className="text-xs font-bold text-[#1E293B] mt-0.5 block truncate">
+                          {selectedOfficerDutyDateFormatted}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Assigned Shift
+                        </span>
+                        <span className="text-xs font-bold text-[#1E293B] mt-0.5 block truncate">
+                          {selectedOfficerSchedule ? `${selectedOfficerSchedule.name} (${selectedOfficerSchedule.time})` : 'Live Shift Rotation'}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Check-In Timestamp
+                        </span>
+                        <span className="text-xs font-bold font-mono text-[#1E293B] mt-0.5 block truncate">
+                          {selectedOfficerCheckInFormatted || 'Not Checked In'}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Check-Out Timestamp
+                        </span>
+                        <span className="text-xs font-bold font-mono text-[#1E293B] mt-0.5 block truncate">
+                          {selectedOfficerCheckOutFormatted || (selectedOfficerAttendance?.status === 'checked_in' ? 'Active On-Duty' : '—')}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Punctuality Status
+                        </span>
+                        <span className="text-xs font-bold text-[#1E293B] mt-0.5 block truncate">
+                          {isSelectedOfficerTravelOrder
+                            ? 'Travel Order (Exempt)'
+                            : isSelectedOfficerRestDay
+                            ? 'Rest Day (Off Duty)'
+                            : selectedOfficerDetailLate
+                            ? 'Late Arrival'
+                            : selectedOfficerAttendance?.status === 'checked_in'
+                            ? 'On Time Check-In'
+                            : selectedOfficerAttendance?.status === 'checked_out'
+                            ? 'Shift Completed'
+                            : 'Pending Check-In'}
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]/70">
+                        <span className="text-[10px] font-bold text-[#757680] uppercase tracking-wider block">
+                          Station GeoFence
+                        </span>
+                        <span className="text-xs font-bold text-[#1E293B] mt-0.5 block truncate">
+                          {geofenceConfig.name || 'DOC Command Perimeter'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Drawer Footer */}
+                <div className="p-4 sm:p-5 border-t border-[#E2E8F0] bg-white flex items-center justify-between shrink-0">
+                  <span className="text-[11px] text-[#757680]">
+                    PDRRMO Disaster Operations Center
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOfficerForDetail(null)}
+                    className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-[#1E293B] transition-colors cursor-pointer"
+                  >
+                    Close
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ========================================================================= */}
       {/* 5. TOAST NOTIFICATION */}
       {/* ========================================================================= */}
       <AnimatePresence>
@@ -2973,6 +4325,29 @@ export default function ShiftSchedulePage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* ========================================================================= */}
+      {/* 6. LOCATION ACCESS NOTIFICATION BANNER (VISIBLE IF PROMPT OR BLOCKED) */}
+      {/* ========================================================================= */}
+      <LocationAccessBanner
+        screenName="Shift Duty Station"
+        onLocationGranted={(coords) => {
+          const newCoords = {
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            accuracyMeters: 10,
+            timestamp: Date.now(),
+          };
+          shiftOperationsMemoryCache.userCoords = newCoords;
+          setUserCoords(newCoords);
+        }}
+        onLocationStateChange={(state) => {
+          if (state !== 'granted') {
+            shiftOperationsMemoryCache.userCoords = null;
+            setUserCoords(null);
+          }
+        }}
+      />
     </AppLayoutShell>
   );
 }

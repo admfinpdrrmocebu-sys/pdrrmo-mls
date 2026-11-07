@@ -16,6 +16,7 @@ import {
   ChevronRight,
   Moon,
   Sun,
+  LayoutGrid,
 } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '@/lib/auth';
@@ -35,6 +36,7 @@ export const defaultNavItems: NavItemDef[] = [
   { label: 'Attendance & Schedule', href: '/shifts', icon: CalendarDays },
   { label: 'Users', href: '/users', icon: Users },
   { label: 'Archives', href: '/archives', icon: Archive },
+  { label: 'Affiliated Apps', href: '/affiliated-apps', icon: LayoutGrid },
 ];
 
 export interface VerticalNavProps {

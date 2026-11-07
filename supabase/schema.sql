@@ -442,6 +442,26 @@ CREATE INDEX IF NOT EXISTS idx_duty_attendance_date ON public.duty_attendance_re
 CREATE INDEX IF NOT EXISTS idx_duty_attendance_profile ON public.duty_attendance_records(profile_id);
 CREATE INDEX IF NOT EXISTS idx_duty_attendance_status ON public.duty_attendance_records(status);
 
+-- -----------------------------------------------------------------------------
+-- Table 18: AFFILIATED APPS (PDRRMO Related Web Applications Directory)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.affiliated_apps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    app_url TEXT NOT NULL,
+    image_url TEXT NOT NULL,
+    storage_path TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    updated_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_affiliated_apps_sort_order ON public.affiliated_apps(sort_order);
+CREATE INDEX IF NOT EXISTS idx_affiliated_apps_active ON public.affiliated_apps(is_active);
+
 -- =============================================================================
 -- 4. ATTACH UPDATED_AT TRIGGERS
 -- =============================================================================
@@ -490,6 +510,9 @@ CREATE TRIGGER trigger_geofence_settings_updated_at BEFORE UPDATE ON public.geof
 
 DROP TRIGGER IF EXISTS trigger_duty_attendance_updated_at ON public.duty_attendance_records;
 CREATE TRIGGER trigger_duty_attendance_updated_at BEFORE UPDATE ON public.duty_attendance_records FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS trigger_affiliated_apps_updated_at ON public.affiliated_apps;
+CREATE TRIGGER trigger_affiliated_apps_updated_at BEFORE UPDATE ON public.affiliated_apps FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 -- =============================================================================
 -- 5. AUTH USER AUTO-CREATION TRIGGER
@@ -563,7 +586,8 @@ VALUES
     ('avatars', 'avatars', true, 5242880, ARRAY['image/png', 'image/jpeg', 'image/webp']),
     ('signatures', 'signatures', true, 5242880, ARRAY['image/png', 'image/svg+xml']),
     ('archive-documents', 'archive-documents', false, 52428800, ARRAY['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']),
-    ('incident-attachments', 'incident-attachments', false, 20971520, ARRAY['image/png', 'image/jpeg', 'image/webp', 'application/pdf'])
+    ('incident-attachments', 'incident-attachments', false, 20971520, ARRAY['image/png', 'image/jpeg', 'image/webp', 'application/pdf']),
+    ('affiliated-apps', 'affiliated-apps', true, 10485760, ARRAY['image/png', 'image/jpeg', 'image/webp'])
 ON CONFLICT (id) DO UPDATE SET
     public = EXCLUDED.public,
     file_size_limit = EXCLUDED.file_size_limit,
@@ -590,6 +614,7 @@ ALTER TABLE public.shift_schedules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.duty_roster_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.geofence_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.duty_attendance_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.affiliated_apps ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: Authenticated users can read/manage all, anon can read
 DROP POLICY IF EXISTS "Allow authenticated read profiles" ON public.profiles;
@@ -658,6 +683,10 @@ CREATE POLICY "Allow authenticated read duty_attendance_records" ON public.duty_
 CREATE POLICY "Allow anon read duty_attendance_records" ON public.duty_attendance_records FOR SELECT TO anon USING (true);
 CREATE POLICY "Allow authenticated manage duty_attendance_records" ON public.duty_attendance_records FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
+-- Affiliated Apps: Authenticated users can read and manage
+CREATE POLICY "Allow authenticated read affiliated_apps" ON public.affiliated_apps FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow authenticated manage affiliated_apps" ON public.affiliated_apps FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
 -- =============================================================================
 -- 8. STORAGE BUCKET SIMPLE RLS POLICIES
 -- =============================================================================
@@ -684,6 +713,13 @@ CREATE POLICY "Archive documents authenticated access" ON storage.objects FOR AL
 DROP POLICY IF EXISTS "Incident attachments authenticated access" ON storage.objects;
 CREATE POLICY "Incident attachments authenticated access" ON storage.objects FOR ALL TO authenticated USING (bucket_id = 'incident-attachments') WITH CHECK (bucket_id = 'incident-attachments');
 
+-- Affiliated Apps Snapshots: Public read, authenticated write
+DROP POLICY IF EXISTS "Affiliated apps public read" ON storage.objects;
+CREATE POLICY "Affiliated apps public read" ON storage.objects FOR SELECT TO public USING (bucket_id = 'affiliated-apps');
+
+DROP POLICY IF EXISTS "Affiliated apps authenticated write" ON storage.objects;
+CREATE POLICY "Affiliated apps authenticated write" ON storage.objects FOR ALL TO authenticated USING (bucket_id = 'affiliated-apps') WITH CHECK (bucket_id = 'affiliated-apps');
+
 -- =============================================================================
 -- 9. REALTIME BROADCASTING
 -- =============================================================================
@@ -703,6 +739,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.invitations;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.duty_roster_assignments;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.geofence_settings;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.duty_attendance_records;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.affiliated_apps;
 
 
 

@@ -111,30 +111,68 @@ export function getUserCoordinates(): Promise<UserCoordinates> {
       return;
     }
 
+    // Insecure context check (required by Safari & modern WebKit/Firefox engines)
+    if (typeof window !== 'undefined' && 'isSecureContext' in window && !window.isSecureContext) {
+      const isLocalhost =
+        window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (!isLocalhost) {
+        reject(
+          new Error(
+            'Geolocation requires a secure connection (HTTPS). Please access via HTTPS or localhost.'
+          )
+        );
+        return;
+      }
+    }
+
+    const handleSuccess = (position: GeolocationPosition) => {
+      try {
+        localStorage.setItem('pdrrmo_location_granted', 'true');
+      } catch {}
+      resolve({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracyMeters: Math.round(position.coords.accuracy || 0),
+        timestamp: position.timestamp,
+      });
+    };
+
+    const handleFinalError = (error: GeolocationPositionError) => {
+      let message = 'Unable to acquire your GPS location.';
+      if (error.code === error.PERMISSION_DENIED) {
+        message =
+          'Location permission denied. Please allow location access in your browser to verify geofence coverage.';
+      } else if (error.code === error.POSITION_UNAVAILABLE) {
+        message =
+          'GPS signal unavailable. Please ensure location services are enabled on your device.';
+      } else if (error.code === error.TIMEOUT) {
+        message = 'GPS location request timed out. Please try refreshing your position.';
+      }
+      reject(new Error(message));
+    };
+
+    // Phase 1: High Accuracy GPS (Satellites + Wi-Fi) with 8s timeout
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        resolve({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracyMeters: Math.round(position.coords.accuracy || 0),
-          timestamp: position.timestamp,
-        });
-      },
-      (error) => {
-        let message = 'Unable to acquire your GPS location.';
-        if (error.code === error.PERMISSION_DENIED) {
-          message =
-            'Location permission denied. Please allow location access in your browser to verify geofence coverage.';
-        } else if (error.code === error.POSITION_UNAVAILABLE) {
-          message = 'GPS signal unavailable. Please ensure location services are enabled on your device.';
-        } else if (error.code === error.TIMEOUT) {
-          message = 'GPS location request timed out. Please try refreshing your position.';
+      handleSuccess,
+      (phase1Error) => {
+        // If high accuracy times out or is unavailable (common in Safari, Firefox, or indoors),
+        // automatically fallback to Phase 2: Standard Wi-Fi / Cell tower positioning
+        if (
+          phase1Error.code === phase1Error.TIMEOUT ||
+          phase1Error.code === phase1Error.POSITION_UNAVAILABLE
+        ) {
+          navigator.geolocation.getCurrentPosition(handleSuccess, handleFinalError, {
+            enableHighAccuracy: false,
+            timeout: 8000,
+            maximumAge: 60000,
+          });
+        } else {
+          handleFinalError(phase1Error);
         }
-        reject(new Error(message));
       },
       {
         enableHighAccuracy: true,
-        timeout: 12000,
+        timeout: 8000,
         maximumAge: 15000,
       }
     );

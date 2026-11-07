@@ -594,7 +594,9 @@ html.dark .shift-personnel-checkbox-disabled {
   border-color: #bfdbfe;
   color: #1d4ed8;
 }
-html.dark .metric-card-duty {
+html.dark .metric-card-duty,
+.dark .metric-card-duty,
+[data-theme="dark"] .metric-card-duty {
   background-color: rgba(59, 130, 246, 0.16) !important;
   border-color: rgba(59, 130, 246, 0.35) !important;
   color: #60a5fa !important;
@@ -605,7 +607,9 @@ html.dark .metric-card-duty {
   border-color: #fde68a;
   color: #b45309;
 }
-html.dark .metric-card-dayoff {
+html.dark .metric-card-dayoff,
+.dark .metric-card-dayoff,
+[data-theme="dark"] .metric-card-dayoff {
   background-color: rgba(245, 158, 11, 0.16) !important;
   border-color: rgba(245, 158, 11, 0.35) !important;
   color: #fbbf24 !important;
@@ -616,7 +620,9 @@ html.dark .metric-card-dayoff {
   border-color: #e9d5ff;
   color: #7e22ce;
 }
-html.dark .metric-card-travel {
+html.dark .metric-card-travel,
+.dark .metric-card-travel,
+[data-theme="dark"] .metric-card-travel {
   background-color: rgba(168, 85, 247, 0.16) !important;
   border-color: rgba(168, 85, 247, 0.35) !important;
   color: #c084fc !important;
@@ -627,8 +633,20 @@ html.dark .metric-card-travel {
   border-color: #e2e8f0;
   color: #475569;
 }
-html.dark .metric-card-unscheduled {
+html.dark .metric-card-unscheduled,
+.dark .metric-card-unscheduled,
+[data-theme="dark"] .metric-card-unscheduled {
   background-color: rgba(30, 41, 59, 0.6) !important;
   border-color: rgba(51, 65, 85, 0.8) !important;
   color: #cbd5e1 !important;
+}
+
+/* ============================================================================
+ * AFFILIATED APPS LAUNCH BADGE DARK MODE HOVER
+ * ============================================================================ */
+html.dark .group:hover .group-hover\:bg-\[\#004AC6\] {
+  background-color: #2563eb !important;
+}
+html.dark .group:hover .group-hover\:text-white {
+  color: #ffffff !important;
 }

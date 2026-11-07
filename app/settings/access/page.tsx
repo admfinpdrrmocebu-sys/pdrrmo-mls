@@ -27,6 +27,7 @@ import {
   Loader2,
   ArrowUpDown,
   Filter,
+  LayoutGrid,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
@@ -320,6 +321,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Settings', level: 'Full Access' },
       { screen: 'Announcements', level: 'Full Access' },
       { screen: 'Shifts', level: 'Full Access' },
+      { screen: 'Affiliated Apps', level: 'Full Access' },
     ],
   },
   {
@@ -339,6 +341,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Settings', level: 'None' },
       { screen: 'Announcements', level: 'Full Access' },
       { screen: 'Shifts', level: 'Full Access' },
+      { screen: 'Affiliated Apps', level: 'View Only' },
     ],
   },
   {
@@ -358,6 +361,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Settings', level: 'None' },
       { screen: 'Announcements', level: 'View Only' },
       { screen: 'Shifts', level: 'View Only' },
+      { screen: 'Affiliated Apps', level: 'View Only' },
     ],
   },
 ];
@@ -371,6 +375,7 @@ const screenList = [
   { name: 'Settings', icon: SettingsIcon },
   { name: 'Announcements', icon: Megaphone },
   { name: 'Shifts', icon: Calendar },
+  { name: 'Affiliated Apps', icon: LayoutGrid },
 ];
 
 // =============================================================================
@@ -487,6 +492,9 @@ export default function ManageAccessPage() {
     Users: 'None',
     Archives: 'View Only',
     Settings: 'None',
+    Announcements: 'Full Access',
+    Shifts: 'Full Access',
+    'Affiliated Apps': 'View Only',
   });
 
   // Shift Schedule State
@@ -530,16 +538,31 @@ export default function ManageAccessPage() {
 
       // Process Roles
       if (!rolesRes.error && rolesRes.data && rolesRes.data.length > 0) {
-        const mappedRoles: RoleItem[] = rolesRes.data.map((r: any) => ({
-          id: r.id,
-          code: r.code,
-          name: r.name,
-          badge: r.badge || 'Operational',
-          badgeType: (r.badge_type as any) || 'operational',
-          description: r.description || '',
-          isSystem: r.is_system ?? false,
-          permissions: Array.isArray(r.permissions) ? r.permissions : [],
-        }));
+        const mappedRoles: RoleItem[] = rolesRes.data.map((r: any) => {
+          const rawPerms: RolePermission[] = Array.isArray(r.permissions) ? [...r.permissions] : [];
+          const hasAffiliatedApps = rawPerms.some(
+            (p) => (p.screen || '').toLowerCase() === 'affiliated apps'
+          );
+          if (!hasAffiliatedApps) {
+            const isRoleAdmin =
+              (r.code || '').toLowerCase() === 'admin' ||
+              (r.name || '').toLowerCase() === 'admin';
+            rawPerms.push({
+              screen: 'Affiliated Apps',
+              level: isRoleAdmin ? 'Full Access' : 'View Only',
+            });
+          }
+          return {
+            id: r.id,
+            code: r.code,
+            name: r.name,
+            badge: r.badge || 'Operational',
+            badgeType: (r.badge_type as any) || 'operational',
+            description: r.description || '',
+            isSystem: r.is_system ?? false,
+            permissions: rawPerms,
+          };
+        });
         setRoles(mappedRoles);
         try {
           localStorage.setItem('pdrrmo_custom_roles', JSON.stringify(mappedRoles));
@@ -722,6 +745,7 @@ export default function ManageAccessPage() {
       Settings: 'None',
       Announcements: 'Full Access',
       Shifts: 'Full Access',
+      'Affiliated Apps': 'View Only',
     });
     setIsRoleModalOpen(true);
   };
@@ -735,6 +759,10 @@ export default function ManageAccessPage() {
     setRoleName(role.name);
     setRoleDescription(role.description);
 
+    const isRoleAdmin =
+      (role.code || '').toLowerCase() === 'admin' ||
+      (role.name || '').toLowerCase() === 'admin';
+
     const permMap: Record<string, 'View Only' | 'Full Access' | 'None'> = {
       Dashboard: 'None',
       Logs: 'None',
@@ -744,6 +772,7 @@ export default function ManageAccessPage() {
       Settings: 'None',
       Announcements: 'None',
       Shifts: 'None',
+      'Affiliated Apps': isRoleAdmin ? 'Full Access' : 'View Only',
     };
     if (role.permissions && Array.isArray(role.permissions)) {
       role.permissions.forEach((p) => {

@@ -16,7 +16,8 @@ export type ScreenName =
   | 'Archives'
   | 'Settings'
   | 'Announcements'
-  | 'Shifts';
+  | 'Shifts'
+  | 'Affiliated Apps';
 
 export type PermissionLevel = 'Full Access' | 'View Only' | 'None';
 
@@ -45,6 +46,7 @@ export const ALL_SCREENS: ScreenName[] = [
   'Settings',
   'Announcements',
   'Shifts',
+  'Affiliated Apps',
 ];
 
 /**
@@ -64,6 +66,7 @@ export const routeToScreenMap: Record<string, ScreenName> = {
   '/settings/logs': 'Settings',
   '/settings/shifts': 'Settings',
   '/settings/geofence': 'Settings',
+  '/settings/affiliated-apps': 'Affiliated Apps',
   '/access': 'Settings',
   '/areas': 'Settings',
   '/announcements': 'Announcements',
@@ -71,6 +74,9 @@ export const routeToScreenMap: Record<string, ScreenName> = {
   '/schedule': 'Shifts',
   'Attendance & Schedule': 'Shifts',
   'attendance & schedule': 'Shifts',
+  '/affiliated-apps': 'Affiliated Apps',
+  'Affiliated Apps': 'Affiliated Apps',
+  'affiliated apps': 'Affiliated Apps',
 };
 
 /**
@@ -94,6 +100,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Settings', level: 'Full Access' },
       { screen: 'Announcements', level: 'Full Access' },
       { screen: 'Shifts', level: 'Full Access' },
+      { screen: 'Affiliated Apps', level: 'Full Access' },
     ],
   },
   {
@@ -113,6 +120,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Settings', level: 'None' },
       { screen: 'Announcements', level: 'Full Access' },
       { screen: 'Shifts', level: 'Full Access' },
+      { screen: 'Affiliated Apps', level: 'View Only' },
     ],
   },
   {
@@ -132,6 +140,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Settings', level: 'None' },
       { screen: 'Announcements', level: 'View Only' },
       { screen: 'Shifts', level: 'View Only' },
+      { screen: 'Affiliated Apps', level: 'View Only' },
     ],
   },
 ];
@@ -209,7 +218,8 @@ export function matchUserRole(
     const staffRole = availableRoles.find(
       (r) => r.code.toLowerCase() === 'staff' || r.name.toLowerCase() === 'staff'
     );
-    return staffRole || defaultBuiltInRoles[2];
+    if (staffRole) return staffRole;
+    return defaultBuiltInRoles[2];
   }
 
   const moRole = availableRoles.find(
@@ -239,6 +249,11 @@ export function getPermissionForScreen(
   // Default fallback for admin if unconfigured
   if (role.code.toLowerCase() === 'admin' || role.name.toLowerCase() === 'admin') {
     return 'Full Access';
+  }
+
+  // Safe default fallback for newly introduced Affiliated Apps screen when not yet saved on legacy role records
+  if (screenName === 'Affiliated Apps') {
+    return 'View Only';
   }
 
   return 'None';

@@ -573,7 +573,14 @@ export default function GeofenceSettingsPage() {
 
   useEffect(() => {
     fetchGeofenceSettings();
-    handleTestMyLocation();
+    // Only test location automatically if already granted previously in this browser.
+    // Suppressing unprompted calls on initial load prevents Firefox, Safari, Edge, & Brave
+    // from silently blocking the browser's native allow access permission prompt.
+    try {
+      if (typeof window !== 'undefined' && localStorage.getItem('pdrrmo_location_granted') === 'true') {
+        handleTestMyLocation();
+      }
+    } catch {}
   }, [fetchGeofenceSettings, handleTestMyLocation]);
 
   // Save Geofence Configuration to Supabase
