@@ -28,6 +28,7 @@ import {
   ArrowUpDown,
   Filter,
   LayoutGrid,
+  Projector,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
@@ -322,6 +323,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Announcements', level: 'Full Access' },
       { screen: 'Shifts', level: 'Full Access' },
       { screen: 'Affiliated Apps', level: 'Full Access' },
+      { screen: 'Screen Projector', level: 'Full Access' },
     ],
   },
   {
@@ -342,6 +344,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Announcements', level: 'Full Access' },
       { screen: 'Shifts', level: 'Full Access' },
       { screen: 'Affiliated Apps', level: 'View Only' },
+      { screen: 'Screen Projector', level: 'View Only' },
     ],
   },
   {
@@ -362,6 +365,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Announcements', level: 'View Only' },
       { screen: 'Shifts', level: 'View Only' },
       { screen: 'Affiliated Apps', level: 'View Only' },
+      { screen: 'Screen Projector', level: 'View Only' },
     ],
   },
 ];
@@ -376,6 +380,7 @@ const screenList = [
   { name: 'Announcements', icon: Megaphone },
   { name: 'Shifts', icon: Calendar },
   { name: 'Affiliated Apps', icon: LayoutGrid },
+  { name: 'Screen Projector', icon: Projector },
 ];
 
 // =============================================================================
@@ -495,6 +500,7 @@ export default function ManageAccessPage() {
     Announcements: 'Full Access',
     Shifts: 'Full Access',
     'Affiliated Apps': 'View Only',
+    'Screen Projector': 'View Only',
   });
 
   // Shift Schedule State
@@ -540,6 +546,18 @@ export default function ManageAccessPage() {
       if (!rolesRes.error && rolesRes.data && rolesRes.data.length > 0) {
         const mappedRoles: RoleItem[] = rolesRes.data.map((r: any) => {
           const rawPerms: RolePermission[] = Array.isArray(r.permissions) ? [...r.permissions] : [];
+          const hasScreenProjector = rawPerms.some(
+            (p) => (p.screen || '').toLowerCase() === 'screen projector'
+          );
+          if (!hasScreenProjector) {
+            const isRoleAdmin =
+              (r.code || '').toLowerCase() === 'admin' ||
+              (r.name || '').toLowerCase() === 'admin';
+            rawPerms.push({
+              screen: 'Screen Projector',
+              level: isRoleAdmin ? 'Full Access' : 'View Only',
+            });
+          }
           const hasAffiliatedApps = rawPerms.some(
             (p) => (p.screen || '').toLowerCase() === 'affiliated apps'
           );
@@ -746,6 +764,7 @@ export default function ManageAccessPage() {
       Announcements: 'Full Access',
       Shifts: 'Full Access',
       'Affiliated Apps': 'View Only',
+    'Screen Projector': 'View Only',
     });
     setIsRoleModalOpen(true);
   };
@@ -773,6 +792,7 @@ export default function ManageAccessPage() {
       Announcements: 'None',
       Shifts: 'None',
       'Affiliated Apps': isRoleAdmin ? 'Full Access' : 'View Only',
+      'Screen Projector': isRoleAdmin ? 'Full Access' : 'View Only',
     };
     if (role.permissions && Array.isArray(role.permissions)) {
       role.permissions.forEach((p) => {

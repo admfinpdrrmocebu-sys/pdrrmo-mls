@@ -462,6 +462,27 @@ CREATE TABLE IF NOT EXISTS public.affiliated_apps (
 CREATE INDEX IF NOT EXISTS idx_affiliated_apps_sort_order ON public.affiliated_apps(sort_order);
 CREATE INDEX IF NOT EXISTS idx_affiliated_apps_active ON public.affiliated_apps(is_active);
 
+-- -----------------------------------------------------------------------------
+-- Table 19: PROJECTOR SCREENS (LED Wall Multi-Screen Grid)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.projector_screens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    web_link TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    device_orders JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_by_name TEXT,
+    updated_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_projector_screens_sort_order ON public.projector_screens(sort_order);
+CREATE INDEX IF NOT EXISTS idx_projector_screens_active ON public.projector_screens(is_active);
+CREATE INDEX IF NOT EXISTS idx_projector_screens_created_by ON public.projector_screens(created_by);
+
 -- =============================================================================
 -- 4. ATTACH UPDATED_AT TRIGGERS
 -- =============================================================================
@@ -513,6 +534,9 @@ CREATE TRIGGER trigger_duty_attendance_updated_at BEFORE UPDATE ON public.duty_a
 
 DROP TRIGGER IF EXISTS trigger_affiliated_apps_updated_at ON public.affiliated_apps;
 CREATE TRIGGER trigger_affiliated_apps_updated_at BEFORE UPDATE ON public.affiliated_apps FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS trigger_projector_screens_updated_at ON public.projector_screens;
+CREATE TRIGGER trigger_projector_screens_updated_at BEFORE UPDATE ON public.projector_screens FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 -- =============================================================================
 -- 5. AUTH USER AUTO-CREATION TRIGGER
@@ -615,6 +639,7 @@ ALTER TABLE public.duty_roster_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.geofence_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.duty_attendance_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.affiliated_apps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.projector_screens ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: Authenticated users can read/manage all, anon can read
 DROP POLICY IF EXISTS "Allow authenticated read profiles" ON public.profiles;
@@ -687,6 +712,12 @@ CREATE POLICY "Allow authenticated manage duty_attendance_records" ON public.dut
 CREATE POLICY "Allow authenticated read affiliated_apps" ON public.affiliated_apps FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Allow authenticated manage affiliated_apps" ON public.affiliated_apps FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
+-- Projector Screens: Authenticated users can read and manage
+DROP POLICY IF EXISTS "Allow authenticated read projector_screens" ON public.projector_screens;
+CREATE POLICY "Allow authenticated read projector_screens" ON public.projector_screens FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated manage projector_screens" ON public.projector_screens;
+CREATE POLICY "Allow authenticated manage projector_screens" ON public.projector_screens FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
 -- =============================================================================
 -- 8. STORAGE BUCKET SIMPLE RLS POLICIES
 -- =============================================================================
@@ -740,6 +771,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.duty_roster_assignments;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.geofence_settings;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.duty_attendance_records;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.affiliated_apps;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.projector_screens;
 
 
 

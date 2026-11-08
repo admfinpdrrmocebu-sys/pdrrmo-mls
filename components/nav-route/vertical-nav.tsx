@@ -17,6 +17,7 @@ import {
   Moon,
   Sun,
   LayoutGrid,
+  Projector,
 } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '@/lib/auth';
@@ -37,6 +38,7 @@ export const defaultNavItems: NavItemDef[] = [
   { label: 'Users', href: '/users', icon: Users },
   { label: 'Archives', href: '/archives', icon: Archive },
   { label: 'Affiliated Apps', href: '/affiliated-apps', icon: LayoutGrid },
+  { label: 'Screen Projector', href: '/screen-projector', icon: Projector },
 ];
 
 export interface VerticalNavProps {

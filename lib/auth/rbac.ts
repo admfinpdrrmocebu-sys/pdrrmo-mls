@@ -17,7 +17,8 @@ export type ScreenName =
   | 'Settings'
   | 'Announcements'
   | 'Shifts'
-  | 'Affiliated Apps';
+  | 'Affiliated Apps'
+  | 'Screen Projector';
 
 export type PermissionLevel = 'Full Access' | 'View Only' | 'None';
 
@@ -47,6 +48,7 @@ export const ALL_SCREENS: ScreenName[] = [
   'Announcements',
   'Shifts',
   'Affiliated Apps',
+  'Screen Projector',
 ];
 
 /**
@@ -77,6 +79,9 @@ export const routeToScreenMap: Record<string, ScreenName> = {
   '/affiliated-apps': 'Affiliated Apps',
   'Affiliated Apps': 'Affiliated Apps',
   'affiliated apps': 'Affiliated Apps',
+  '/screen-projector': 'Screen Projector',
+  'Screen Projector': 'Screen Projector',
+  'screen projector': 'Screen Projector',
 };
 
 /**
@@ -101,6 +106,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Announcements', level: 'Full Access' },
       { screen: 'Shifts', level: 'Full Access' },
       { screen: 'Affiliated Apps', level: 'Full Access' },
+      { screen: 'Screen Projector', level: 'Full Access' },
     ],
   },
   {
@@ -121,6 +127,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Announcements', level: 'Full Access' },
       { screen: 'Shifts', level: 'Full Access' },
       { screen: 'Affiliated Apps', level: 'View Only' },
+      { screen: 'Screen Projector', level: 'View Only' },
     ],
   },
   {
@@ -141,6 +148,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Announcements', level: 'View Only' },
       { screen: 'Shifts', level: 'View Only' },
       { screen: 'Affiliated Apps', level: 'View Only' },
+      { screen: 'Screen Projector', level: 'View Only' },
     ],
   },
 ];
@@ -252,7 +260,7 @@ export function getPermissionForScreen(
   }
 
   // Safe default fallback for newly introduced Affiliated Apps screen when not yet saved on legacy role records
-  if (screenName === 'Affiliated Apps') {
+  if (screenName === 'Affiliated Apps' || screenName === 'Screen Projector') {
     return 'View Only';
   }
 
