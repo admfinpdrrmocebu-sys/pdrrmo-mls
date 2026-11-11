@@ -507,6 +507,24 @@ CREATE INDEX IF NOT EXISTS idx_drone_streams_sort_order ON public.drone_streams(
 CREATE INDEX IF NOT EXISTS idx_drone_streams_active ON public.drone_streams(is_active);
 CREATE INDEX IF NOT EXISTS idx_drone_streams_created_by ON public.drone_streams(created_by);
 
+-- -----------------------------------------------------------------------------
+-- Table 21: PASSWORD RESET OTPS (Custom 4-digit OTP password recovery via SMTP)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.password_reset_otps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT NOT NULL,
+    otp_code TEXT NOT NULL,
+    reset_token TEXT,
+    is_verified BOOLEAN NOT NULL DEFAULT false,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_otps_email ON public.password_reset_otps(email);
+CREATE INDEX IF NOT EXISTS idx_password_reset_otps_reset_token ON public.password_reset_otps(reset_token);
+CREATE INDEX IF NOT EXISTS idx_password_reset_otps_expires_at ON public.password_reset_otps(expires_at);
+
 -- =============================================================================
 -- 4. ATTACH UPDATED_AT TRIGGERS
 -- =============================================================================
@@ -564,6 +582,9 @@ CREATE TRIGGER trigger_projector_screens_updated_at BEFORE UPDATE ON public.proj
 
 DROP TRIGGER IF EXISTS trigger_drone_streams_updated_at ON public.drone_streams;
 CREATE TRIGGER trigger_drone_streams_updated_at BEFORE UPDATE ON public.drone_streams FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS trigger_password_reset_otps_updated_at ON public.password_reset_otps;
+CREATE TRIGGER trigger_password_reset_otps_updated_at BEFORE UPDATE ON public.password_reset_otps FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 -- =============================================================================
 -- 5. AUTH USER AUTO-CREATION TRIGGER
@@ -668,6 +689,7 @@ ALTER TABLE public.duty_attendance_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.affiliated_apps ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.projector_screens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.drone_streams ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.password_reset_otps ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: Authenticated users can read/manage all, anon can read
 DROP POLICY IF EXISTS "Allow authenticated read profiles" ON public.profiles;

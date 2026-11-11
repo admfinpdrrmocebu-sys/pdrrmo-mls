@@ -18,7 +18,6 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { PrimaryButton, SecondaryButton } from '@/components/button';
 import { GeneralCard } from '@/components/card';
-import { supabase } from '@/lib/supabase/client';
 import logoImg from '@/app/assets/image/logo.png';
 
 type Step = 'email' | 'code' | 'password' | 'success';
@@ -34,14 +33,13 @@ export default function ForgotPasswordPage() {
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
 
-  // Step 2: 6-Digit OTP Code State (Standard Supabase Recovery Token)
-  const [code, setCode] = useState(['', '', '', '', '', '']);
+  // Step 2: 4-Digit OTP Code State (Sent via SMTP)
+  const [code, setCode] = useState(['', '', '', '']);
+  const [resetToken, setResetToken] = useState<string | null>(null);
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [resendCountdown, setResendCountdown] = useState(0);
   const inputRefs = [
-    useRef<HTMLInputElement | null>(null),
-    useRef<HTMLInputElement | null>(null),
     useRef<HTMLInputElement | null>(null),
     useRef<HTMLInputElement | null>(null),
     useRef<HTMLInputElement | null>(null),
@@ -57,7 +55,7 @@ export default function ForgotPasswordPage() {
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
   // ---------------------------------------------------------------------------
-  // STEP 1 HANDLER: Send Password Recovery Email via Supabase Auth
+  // STEP 1 HANDLER: Send 4-Digit OTP via SMTP
   // ---------------------------------------------------------------------------
   const handleSendEmail = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,16 +64,24 @@ export default function ForgotPasswordPage() {
     setIsSendingEmail(true);
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'send_otp',
+          email: email.trim(),
+        }),
+      });
 
-      if (error) {
-        setEmailError(error.message || 'Failed to dispatch password recovery email.');
-        setIsSendingEmail(false);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setEmailError(data.error || 'Failed to dispatch password recovery email.');
         return;
       }
 
       setStep('code');
-      setCode(['', '', '', '', '', '']);
+      setCode(['', '', '', '']);
       setResendCountdown(60);
       const timer = setInterval(() => {
         setResendCountdown((prev) => {
@@ -86,6 +92,10 @@ export default function ForgotPasswordPage() {
           return prev - 1;
         });
       }, 1000);
+
+      setTimeout(() => {
+        inputRefs[0].current?.focus();
+      }, 100);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error sending reset code.';
       setEmailError(message);
@@ -95,7 +105,7 @@ export default function ForgotPasswordPage() {
   };
 
   // ---------------------------------------------------------------------------
-  // STEP 2 HANDLERS: 6-Digit OTP Code Inputs
+  // STEP 2 HANDLERS: 4-Digit OTP Code Inputs
   // ---------------------------------------------------------------------------
   const handleDigitChange = (index: number, value: string) => {
     const sanitized = value.replace(/[^0-9]/g, '');
@@ -105,17 +115,17 @@ export default function ForgotPasswordPage() {
     if (sanitized.length <= 1) {
       updated[index] = sanitized;
       setCode(updated);
-      if (sanitized && index < 5) {
+      if (sanitized && index < 3) {
         inputRefs[index + 1].current?.focus();
       }
     } else {
-      // Handle paste of full 6-digit code
-      const digits = sanitized.slice(0, 6).split('');
+      // Handle paste of full 4-digit code
+      const digits = sanitized.slice(0, 4).split('');
       digits.forEach((d, i) => {
-        if (i < 6) updated[i] = d;
+        if (i < 4) updated[i] = d;
       });
       setCode(updated);
-      const nextFocus = Math.min(digits.length, 5);
+      const nextFocus = Math.min(digits.length, 3);
       inputRefs[nextFocus].current?.focus();
     }
   };
@@ -129,8 +139,8 @@ export default function ForgotPasswordPage() {
   const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault();
     const fullCode = code.join('').trim();
-    if (fullCode.length < 6) {
-      setCodeError('Please enter all 6 digits of the verification code.');
+    if (fullCode.length < 4) {
+      setCodeError('Please enter all 4 digits of the verification code.');
       return;
     }
 
@@ -138,20 +148,28 @@ export default function ForgotPasswordPage() {
     setIsVerifyingCode(true);
 
     try {
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: fullCode,
-        type: 'recovery',
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'verify_otp',
+          email: email.trim(),
+          otp: fullCode,
+        }),
       });
 
-      if (error) {
-        setCodeError(error.message || 'Invalid or expired verification code.');
-        setIsVerifyingCode(false);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setCodeError(data.error || 'Invalid or expired verification code.');
         return;
       }
 
-      if (data?.session || data?.user) {
+      if (data.resetToken) {
+        setResetToken(data.resetToken);
         setStep('password');
+      } else {
+        setCodeError('Failed to generate secure reset authorization.');
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error verifying OTP code.';
@@ -164,12 +182,21 @@ export default function ForgotPasswordPage() {
   const handleResendCode = async () => {
     if (resendCountdown > 0) return;
     setCodeError(null);
-    setCode(['', '', '', '', '', '']);
+    setCode(['', '', '', '']);
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
-      if (error) {
-        setCodeError(error.message);
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'send_otp',
+          email: email.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setCodeError(data.error || 'Failed to resend code.');
         return;
       }
 
@@ -207,16 +234,29 @@ export default function ForgotPasswordPage() {
       return;
     }
 
+    if (!resetToken) {
+      setPasswordError('Security reset authorization expired. Please restart the recovery process.');
+      return;
+    }
+
     setIsUpdatingPassword(true);
 
     try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reset_password',
+          email: email.trim(),
+          resetToken,
+          newPassword,
+        }),
       });
 
-      if (error) {
-        setPasswordError(error.message || 'Failed to update password.');
-        setIsUpdatingPassword(false);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setPasswordError(data.error || 'Failed to update password.');
         return;
       }
 
@@ -244,7 +284,7 @@ export default function ForgotPasswordPage() {
             >
               <Image
                 src={logoImg}
-                alt="PDRRMO MLS Official Logo"
+                alt="PDRRMO Official Logo"
                 width={64}
                 height={64}
                 className="w-full h-full object-contain drop-shadow-sm"
@@ -276,7 +316,7 @@ export default function ForgotPasswordPage() {
                 <div className="mb-4 text-center">
                   <h2 className="text-sm font-bold text-[#1E293B]">Confirm Account Email</h2>
                   <p className="text-xs text-[#505F76] mt-0.5">
-                    Enter your registered email address to receive a 6-digit recovery code.
+                    Enter your registered email address to receive a 4-digit verification code via SMTP.
                   </p>
                 </div>
 
@@ -313,14 +353,14 @@ export default function ForgotPasswordPage() {
                     rightIcon={<ArrowRight className="w-4 h-4" />}
                     className="mt-1"
                   >
-                    Send Verification Code
+                    Send 4-Digit Code
                   </PrimaryButton>
                 </form>
               </motion.div>
             )}
 
             {/* ================================================================= */}
-            {/* STEP 2: 6-DIGIT VERIFICATION CODE */}
+            {/* STEP 2: 4-DIGIT VERIFICATION CODE */}
             {/* ================================================================= */}
             {step === 'code' && (
               <motion.div
@@ -332,27 +372,27 @@ export default function ForgotPasswordPage() {
                 className="w-full"
               >
                 <div className="mb-4 text-center">
-                  <h2 className="text-sm font-bold text-[#1E293B]">Enter 6-Digit Code</h2>
+                  <h2 className="text-sm font-bold text-[#1E293B]">Enter 4-Digit Code</h2>
                   <p className="text-xs text-[#505F76] mt-0.5">
-                    Security recovery code dispatched to{' '}
+                    Security verification code dispatched via SMTP to{' '}
                     <span className="font-semibold text-[#1E293B]">{email}</span>
                   </p>
                 </div>
 
                 <form onSubmit={handleVerifyCode} className="w-full flex flex-col gap-4">
-                  {/* 6 Digit Boxes */}
-                  <div className="flex items-center justify-center gap-1.5 sm:gap-2 my-1">
+                  {/* 4 Digit Boxes */}
+                  <div className="flex items-center justify-center gap-2 sm:gap-3 my-2">
                     {code.map((digit, idx) => (
                       <input
                         key={idx}
                         ref={inputRefs[idx]}
                         type="text"
                         inputMode="numeric"
-                        maxLength={6}
+                        maxLength={4}
                         value={digit}
                         onChange={(e) => handleDigitChange(idx, e.target.value)}
                         onKeyDown={(e) => handleKeyDown(idx, e)}
-                        className={`w-10 h-13 sm:w-12 sm:h-14 text-center text-lg sm:text-xl font-bold bg-[#F8FAFC] border rounded-xl focus:outline-none focus:bg-white transition-all font-mono ${
+                        className={`w-12 h-14 sm:w-14 sm:h-16 text-center text-xl sm:text-2xl font-bold bg-[#F8FAFC] border rounded-2xl focus:outline-none focus:bg-white transition-all font-mono ${
                           codeError
                             ? 'border-rose-300 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/15'
                             : 'border-[#E2E8F0] focus:border-[#004AC6] focus:ring-2 focus:ring-[#004AC6]/15'
@@ -378,7 +418,7 @@ export default function ForgotPasswordPage() {
                       <RotateCcw className="w-3 h-3" />
                       {resendCountdown > 0
                         ? `Resend code in ${resendCountdown}s`
-                        : 'Resend 6-digit code'}
+                        : 'Resend 4-digit code'}
                     </button>
                   </div>
 
@@ -547,4 +587,3 @@ export default function ForgotPasswordPage() {
     </main>
   );
 }
-

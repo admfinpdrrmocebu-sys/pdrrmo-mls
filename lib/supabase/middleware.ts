@@ -23,6 +23,8 @@ const PUBLIC_ROUTES = [
   '/manifest.webmanifest',
   '/api/push/vapid-public-key',
   '/api/push/subscribe',
+  '/api/auth/forgot-password',
+  '/api/auth',
 ];
 
 /**

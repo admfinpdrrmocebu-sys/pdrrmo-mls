@@ -6,6 +6,11 @@ import {
   generateInvitationEmailText,
   InvitationEmailData,
 } from './invitation-email';
+import {
+  generateOtpEmailHtml,
+  generateOtpEmailText,
+  OtpEmailData,
+} from './otp-email';
 
 export interface SendEmailResult {
   success: boolean;
@@ -119,6 +124,76 @@ export async function sendInvitationEmail(data: InvitationEmailData): Promise<Se
   } catch (error: unknown) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown SMTP dispatch failure.';
     console.error(`❌ [SMTP ERROR] Failed to deliver invitation to ${data.email}:`, error);
+    return {
+      success: false,
+      error: errorMsg,
+    };
+  }
+}
+
+/**
+ * Dispatches a 4-digit Password Reset OTP email via SMTP.
+ * If SMTP credentials are missing, logs clearly to console and simulates delivery.
+ */
+export async function sendPasswordResetOtpEmail(data: OtpEmailData): Promise<SendEmailResult> {
+  const from =
+    process.env.SMTP_FROM ||
+    (process.env.SMTP_USER
+      ? `"PDRRMO Emergency Operations" <${process.env.SMTP_USER}>`
+      : '"PDRRMO Emergency Operations" <no-reply@mls.pdrrmo.gov.ph>');
+
+  const html = generateOtpEmailHtml(data);
+  const text = generateOtpEmailText(data);
+  const subject = `[PDRRMO] Password Reset Verification Code: ${data.otpCode}`;
+
+  const transporter = getSmtpTransporter();
+
+  if (!transporter) {
+    console.info('================================================================');
+    console.info('✉️ [SMTP SIMULATION] Password Reset OTP Dispatched:');
+    console.info(`   To: ${data.email}`);
+    console.info(`   4-Digit Code: ${data.otpCode}`);
+    console.info(`   Expires In: ${data.expiresMinutes || 10} minutes`);
+    console.info('   Note: Set SMTP_USER and SMTP_PASS in .env.local for live delivery.');
+    console.info('================================================================');
+
+    return {
+      success: true,
+      simulated: true,
+      messageId: `sim-otp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    };
+  }
+
+  try {
+    const logoPath = path.join(process.cwd(), 'app/assets/image/logo.png');
+    const attachments = [];
+
+    if (fs.existsSync(logoPath)) {
+      attachments.push({
+        filename: 'logo.png',
+        path: logoPath,
+        cid: 'pdrrmo-logo',
+      });
+    }
+
+    const info = await transporter.sendMail({
+      from,
+      to: data.email,
+      subject,
+      text,
+      html,
+      attachments,
+    });
+
+    console.info(`✅ [SMTP DISPATCHED] OTP verification code delivered to ${data.email}. Message ID: ${info.messageId}`);
+    return {
+      success: true,
+      simulated: false,
+      messageId: info.messageId,
+    };
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown SMTP dispatch failure.';
+    console.error(`❌ [SMTP ERROR] Failed to deliver OTP to ${data.email}:`, error);
     return {
       success: false,
       error: errorMsg,
