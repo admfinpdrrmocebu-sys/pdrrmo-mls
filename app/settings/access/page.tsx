@@ -29,6 +29,7 @@ import {
   Filter,
   LayoutGrid,
   Projector,
+  Drone,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
@@ -324,6 +325,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Shifts', level: 'Full Access' },
       { screen: 'Affiliated Apps', level: 'Full Access' },
       { screen: 'Screen Projector', level: 'Full Access' },
+      { screen: 'Drone Stream', level: 'Full Access' },
     ],
   },
   {
@@ -345,6 +347,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Shifts', level: 'Full Access' },
       { screen: 'Affiliated Apps', level: 'View Only' },
       { screen: 'Screen Projector', level: 'View Only' },
+      { screen: 'Drone Stream', level: 'Full Access' },
     ],
   },
   {
@@ -366,6 +369,7 @@ const defaultRoles: RoleItem[] = [
       { screen: 'Shifts', level: 'View Only' },
       { screen: 'Affiliated Apps', level: 'View Only' },
       { screen: 'Screen Projector', level: 'View Only' },
+      { screen: 'Drone Stream', level: 'View Only' },
     ],
   },
 ];
@@ -381,6 +385,7 @@ const screenList = [
   { name: 'Shifts', icon: Calendar },
   { name: 'Affiliated Apps', icon: LayoutGrid },
   { name: 'Screen Projector', icon: Projector },
+  { name: 'Drone Stream', icon: Drone },
 ];
 
 // =============================================================================

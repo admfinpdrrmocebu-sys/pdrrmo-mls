@@ -53,8 +53,9 @@ export function AnnouncementNotificationProvider({ children }: { children: React
     registerServiceWorker();
 
     // 3. Subscribe to Supabase Realtime for newly published announcements
+    const channelName = `announcements-global-live-feed-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const channel = supabase
-      .channel('announcements-global-live-feed')
+      .channel(channelName)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'announcements' },

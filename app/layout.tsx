@@ -3,6 +3,7 @@ import { Hanken_Grotesk, Inter } from "next/font/google";
 import { ScreenBackground } from "@/components/layout";
 import { AuthProvider } from "@/lib/auth";
 import { ThemeProvider } from "@/lib/theme";
+import { PersistentOperationsHost } from "@/components/nav-route";
 import "./globals.css";
 
 /**
@@ -55,9 +56,9 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "PDRRMO MLS — Monitoring & Logging System",
+  title: "PDRRMO - IDOCS",
   description:
-    "Provincial Disaster Risk Reduction and Management Office (PDRRMO) Modern Precision Monitoring & Logging System.",
+    "Provincial Disaster Risk Reduction and Management Office Incident Data & Operations Control System (PDRRMO-IDOCS).",
   manifest: "/manifest.json",
   icons: {
     icon: "/logo.png",
@@ -107,7 +108,9 @@ export default function RootLayout({
         <ThemeProvider>
           <ScreenBackground>
             <AuthProvider>
-              {children}
+              <PersistentOperationsHost>
+                {children}
+              </PersistentOperationsHost>
             </AuthProvider>
           </ScreenBackground>
         </ThemeProvider>

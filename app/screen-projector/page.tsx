@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
+import { getCachedProjectorScreens, setCachedProjectorScreens } from '@/lib/cache/screen-data-cache';
 import { PrimaryButton, SecondaryButton } from '@/components/button';
 import { CustomDropdown, CustomDropdownOption } from '@/components/input';
 import { Skeleton } from '@/components/skeleton';
@@ -127,9 +128,10 @@ export default function ScreenProjectorPage() {
     user?.email ||
     'System User';
 
-  // Database state
-  const [screens, setScreens] = useState<ProjectorScreenItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Database state (hydrated synchronously from in-memory cache)
+  const initialCachedScreens = getCachedProjectorScreens();
+  const [screens, setScreens] = useState<ProjectorScreenItem[]>(() => (initialCachedScreens as ProjectorScreenItem[]) || []);
+  const [isLoading, setIsLoading] = useState(!initialCachedScreens);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [tableMissingNotice, setTableMissingNotice] = useState(false);
 
@@ -242,8 +244,10 @@ export default function ScreenProjectorPage() {
   // Fetch Screens + Realtime Sync
   const fetchScreens = useCallback(async (silent = false) => {
     try {
-      if (silent) {
+      if (silent || getCachedProjectorScreens() || screens.length > 0) {
         setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
       }
 
       const { data, error } = await supabase
@@ -282,6 +286,7 @@ export default function ScreenProjectorPage() {
         updatedAt: row.updated_at,
       }));
       setScreens(mapped);
+      setCachedProjectorScreens(mapped as any);
     } catch (err: unknown) {
       console.warn('Error fetching projector screens:', getErrorMessage(err));
     } finally {
@@ -296,8 +301,9 @@ export default function ScreenProjectorPage() {
     }, 0);
 
     let realtimeTimer: ReturnType<typeof setTimeout> | null = null;
+    const channelName = `screen-projector-realtime-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const channel = supabase
-      .channel('screen-projector-realtime')
+      .channel(channelName)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'projector_screens' },

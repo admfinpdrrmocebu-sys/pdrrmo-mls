@@ -88,8 +88,9 @@ export function HeaderNav({
   useEffect(() => {
     checkUnacknowledgedAnnouncements();
 
+    const channelName = `header-announcements-badge-${currentUserId || 'anon'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const channel = supabase
-      .channel(`header-announcements-badge-${currentUserId || 'anon'}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'announcements' },

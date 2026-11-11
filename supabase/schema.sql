@@ -483,6 +483,30 @@ CREATE INDEX IF NOT EXISTS idx_projector_screens_sort_order ON public.projector_
 CREATE INDEX IF NOT EXISTS idx_projector_screens_active ON public.projector_screens(is_active);
 CREATE INDEX IF NOT EXISTS idx_projector_screens_created_by ON public.projector_screens(created_by);
 
+-- -----------------------------------------------------------------------------
+-- Table 20: DRONE STREAMS (MediaMTX / WHEP WebRTC Live Feeds)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.drone_streams (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    webrtc_url TEXT NOT NULL,
+    webrtc_url_med TEXT,
+    webrtc_url_low TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    device_orders JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    notes TEXT,
+    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_by_name TEXT,
+    updated_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_drone_streams_sort_order ON public.drone_streams(sort_order);
+CREATE INDEX IF NOT EXISTS idx_drone_streams_active ON public.drone_streams(is_active);
+CREATE INDEX IF NOT EXISTS idx_drone_streams_created_by ON public.drone_streams(created_by);
+
 -- =============================================================================
 -- 4. ATTACH UPDATED_AT TRIGGERS
 -- =============================================================================
@@ -537,6 +561,9 @@ CREATE TRIGGER trigger_affiliated_apps_updated_at BEFORE UPDATE ON public.affili
 
 DROP TRIGGER IF EXISTS trigger_projector_screens_updated_at ON public.projector_screens;
 CREATE TRIGGER trigger_projector_screens_updated_at BEFORE UPDATE ON public.projector_screens FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS trigger_drone_streams_updated_at ON public.drone_streams;
+CREATE TRIGGER trigger_drone_streams_updated_at BEFORE UPDATE ON public.drone_streams FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 -- =============================================================================
 -- 5. AUTH USER AUTO-CREATION TRIGGER
@@ -640,6 +667,7 @@ ALTER TABLE public.geofence_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.duty_attendance_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.affiliated_apps ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.projector_screens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.drone_streams ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: Authenticated users can read/manage all, anon can read
 DROP POLICY IF EXISTS "Allow authenticated read profiles" ON public.profiles;
@@ -718,6 +746,12 @@ CREATE POLICY "Allow authenticated read projector_screens" ON public.projector_s
 DROP POLICY IF EXISTS "Allow authenticated manage projector_screens" ON public.projector_screens;
 CREATE POLICY "Allow authenticated manage projector_screens" ON public.projector_screens FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
+-- Drone Streams: Authenticated users can read and manage
+DROP POLICY IF EXISTS "Allow authenticated read drone_streams" ON public.drone_streams;
+CREATE POLICY "Allow authenticated read drone_streams" ON public.drone_streams FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow authenticated manage drone_streams" ON public.drone_streams;
+CREATE POLICY "Allow authenticated manage drone_streams" ON public.drone_streams FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
 -- =============================================================================
 -- 8. STORAGE BUCKET SIMPLE RLS POLICIES
 -- =============================================================================
@@ -772,6 +806,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.geofence_settings;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.duty_attendance_records;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.affiliated_apps;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.projector_screens;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.drone_streams;
 
 
 

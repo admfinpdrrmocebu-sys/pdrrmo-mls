@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
+import { getCachedAffiliatedApps, setCachedAffiliatedApps } from '@/lib/cache/screen-data-cache';
 import { PrimaryButton, SecondaryButton } from '@/components/button';
 import { Skeleton } from '@/components/skeleton';
 import { supabase } from '@/lib/supabase/client';
@@ -76,8 +77,10 @@ export default function AffiliatedAppsDirectoryPage() {
   const { canWrite } = useAuth();
   const canManage = canWrite('Affiliated Apps');
 
-  const [apps, setApps] = useState<DirectoryAppItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Synchronous in-memory cache hydration (0ms initial render)
+  const initialCachedApps = getCachedAffiliatedApps();
+  const [apps, setApps] = useState<DirectoryAppItem[]>(() => initialCachedApps || []);
+  const [isLoading, setIsLoading] = useState(!initialCachedApps);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
 
@@ -94,8 +97,11 @@ export default function AffiliatedAppsDirectoryPage() {
 
   const fetchActiveApps = useCallback(async (silent = false) => {
     try {
-      if (!silent) setIsLoading(true);
-      else setIsRefreshing(true);
+      if (!silent && !getCachedAffiliatedApps() && apps.length === 0) {
+        setIsLoading(true);
+      } else {
+        setIsRefreshing(true);
+      }
 
       const { data, error } = await supabase
         .from('affiliated_apps')
@@ -118,6 +124,7 @@ export default function AffiliatedAppsDirectoryPage() {
         updatedAt: row.updated_at,
       }));
       setApps(mapped);
+      setCachedAffiliatedApps(mapped);
     } catch {
       setApps([]);
     } finally {
@@ -129,8 +136,9 @@ export default function AffiliatedAppsDirectoryPage() {
   useEffect(() => {
     fetchActiveApps();
 
+    const channelName = `directory-affiliated-apps-realtime-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const channel = supabase
-      .channel('directory-affiliated-apps-realtime')
+      .channel(channelName)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'affiliated_apps' },

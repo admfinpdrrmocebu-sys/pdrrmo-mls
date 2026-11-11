@@ -18,7 +18,8 @@ export type ScreenName =
   | 'Announcements'
   | 'Shifts'
   | 'Affiliated Apps'
-  | 'Screen Projector';
+  | 'Screen Projector'
+  | 'Drone Stream';
 
 export type PermissionLevel = 'Full Access' | 'View Only' | 'None';
 
@@ -49,6 +50,7 @@ export const ALL_SCREENS: ScreenName[] = [
   'Shifts',
   'Affiliated Apps',
   'Screen Projector',
+  'Drone Stream',
 ];
 
 /**
@@ -82,6 +84,9 @@ export const routeToScreenMap: Record<string, ScreenName> = {
   '/screen-projector': 'Screen Projector',
   'Screen Projector': 'Screen Projector',
   'screen projector': 'Screen Projector',
+  '/drone-stream': 'Drone Stream',
+  'Drone Stream': 'Drone Stream',
+  'drone stream': 'Drone Stream',
 };
 
 /**
@@ -107,6 +112,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Shifts', level: 'Full Access' },
       { screen: 'Affiliated Apps', level: 'Full Access' },
       { screen: 'Screen Projector', level: 'Full Access' },
+      { screen: 'Drone Stream', level: 'Full Access' },
     ],
   },
   {
@@ -128,6 +134,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Shifts', level: 'Full Access' },
       { screen: 'Affiliated Apps', level: 'View Only' },
       { screen: 'Screen Projector', level: 'View Only' },
+      { screen: 'Drone Stream', level: 'Full Access' },
     ],
   },
   {
@@ -149,6 +156,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Shifts', level: 'View Only' },
       { screen: 'Affiliated Apps', level: 'View Only' },
       { screen: 'Screen Projector', level: 'View Only' },
+      { screen: 'Drone Stream', level: 'View Only' },
     ],
   },
 ];
@@ -259,7 +267,15 @@ export function getPermissionForScreen(
     return 'Full Access';
   }
 
-  // Safe default fallback for newly introduced Affiliated Apps screen when not yet saved on legacy role records
+  // Safe default fallback for newly introduced screens when not yet saved on legacy role records
+  if (screenName === 'Drone Stream') {
+    const code = role.code.toLowerCase();
+    if (code === 'admin' || code === 'monitoring' || role.name.toLowerCase().includes('monitoring')) {
+      return 'Full Access';
+    }
+    return 'View Only';
+  }
+
   if (screenName === 'Affiliated Apps' || screenName === 'Screen Projector') {
     return 'View Only';
   }
