@@ -1,10 +1,12 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
-import DroneStreamPage from '@/app/drone-stream/page';
-import ScreenProjectorPage from '@/app/screen-projector/page';
-import AffiliatedAppsPage from '@/app/affiliated-apps/page';
+
+const DroneStreamPage = dynamic(() => import('@/app/drone-stream/page'), { ssr: false });
+const ScreenProjectorPage = dynamic(() => import('@/app/screen-projector/page'), { ssr: false });
+const AffiliatedAppsPage = dynamic(() => import('@/app/affiliated-apps/page'), { ssr: false });
 
 export const PERSISTENT_OPERATIONAL_ROUTES = [
   '/drone-stream',

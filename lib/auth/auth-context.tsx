@@ -15,8 +15,8 @@ import {
   canAccessScreen,
   canWriteScreen,
 } from './rbac';
-import { ShieldAlert, LogOut, Lock, UserX, AlertTriangle } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { Lock, UserX, AlertTriangle, LogOut } from 'lucide-react';
+import { clearOperationalScreensCache } from '@/lib/cache/screen-data-cache';
 
 export interface UserProfile {
   id: string;
@@ -194,14 +194,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await fetchRoles();
   }, [fetchRoles]);
 
-  // 3. Initial Setup & Real-time Subscriptions
+  // 3. Initial Setup & Auth Session Listener
   useEffect(() => {
     let isMounted = true;
 
     async function initializeAuth() {
       try {
-        await fetchRoles();
-
         const {
           data: { session: initialSession },
           error,
@@ -215,7 +213,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setSession(initialSession);
           setUser(initialSession?.user ?? null);
           if (initialSession?.user) {
-            await fetchProfile(initialSession.user);
+            await Promise.all([fetchRoles(), fetchProfile(initialSession.user)]);
           } else {
             setProfile(null);
           }
@@ -240,12 +238,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(currentUser);
 
       if (currentUser) {
-        await fetchProfile(currentUser);
+        await Promise.all([fetchRoles(), fetchProfile(currentUser)]);
       } else {
         setProfile(null);
       }
       setIsLoading(false);
     });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [fetchProfile, fetchRoles]);
+
+  // 4. Real-time Multi-Tab Broadcast & Supabase Profile/Roles Realtime Listeners (Authenticated Only)
+  useEffect(() => {
+    if (!user) return;
 
     // Subscribe to real-time changes on access_roles so permission updates reflect instantly
     const rolesChannel = supabase
@@ -259,7 +267,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       )
       .subscribe();
 
-    // Multi-tab sync via BroadcastChannel & storage event
     let rolesBroadcast: BroadcastChannel | null = null;
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       try {
@@ -279,17 +286,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
     window.addEventListener('storage', handleRoleStorageChange);
 
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe();
-      supabase.removeChannel(rolesChannel);
-      rolesBroadcast?.close();
-      window.removeEventListener('storage', handleRoleStorageChange);
-    };
-  }, [fetchProfile, fetchRoles]);
-
-  // 4. Real-time Multi-Tab Broadcast & Supabase Profile Realtime Listener
-  useEffect(() => {
     let authChannel: BroadcastChannel | null = null;
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       authChannel = new BroadcastChannel('pdrrmo_auth_sync');
@@ -369,17 +365,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener('storage', checkStorageStatus);
 
     return () => {
+      supabase.removeChannel(rolesChannel);
+      rolesBroadcast?.close();
+      window.removeEventListener('storage', handleRoleStorageChange);
       authChannel?.close();
       supabase.removeChannel(profileStatusChannel);
       window.removeEventListener('focus', checkStorageStatus);
       window.removeEventListener('storage', checkStorageStatus);
     };
-  }, [user]);
+  }, [user, fetchRoles]);
 
   const signOut = async () => {
     try {
       setIsLoading(true);
       await supabase.auth.signOut();
+      clearOperationalScreensCache();
       setUser(null);
       setProfile(null);
       setSession(null);
@@ -479,23 +479,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       {/* ===================================================================== */}
       {/* ACCOUNT DEACTIVATED / ACCESS REVOKED MODAL */}
       {/* ===================================================================== */}
-      <AnimatePresence>
-        {(isAccountDeactivated || isAccountRemoved) && (
-          <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-slate-950/85 backdrop-blur-md select-none"
-            />
+      {(isAccountDeactivated || isAccountRemoved) && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md select-none transition-opacity duration-200" />
 
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden z-10"
-            >
+          <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden z-10 transition-all duration-200">
               {/* Top Accent Strip */}
               <div
                 className={`h-2.5 w-full ${
@@ -588,10 +576,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   </button>
                 </div>
               </div>
-            </motion.div>
+            </div>
           </div>
-        )}
-      </AnimatePresence>
+      )}
     </AuthContext.Provider>
   );
 }

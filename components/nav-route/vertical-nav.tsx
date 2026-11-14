@@ -19,10 +19,15 @@ import {
   LayoutGrid,
   Projector,
   Drone,
+  Bell,
+  BellRing,
+  BellOff,
+  Loader2,
 } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
+import { usePushNotifications } from '@/lib/push/push-context';
 
 export interface NavItemDef {
   label: string;
@@ -69,14 +74,19 @@ export function VerticalNav({
 }: VerticalNavProps) {
   const pathname = usePathname();
   const [isHovered, setIsHovered] = useState(false);
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [openMobilePathname, setOpenMobilePathname] = useState<string | null>(null);
+  const isMobileOpen = openMobilePathname === pathname;
+  const setIsMobileOpen = (open: boolean) =>
+    setOpenMobilePathname(open ? pathname : null);
   const { profile, currentRole, signOut, canAccess } = useAuth();
   const { isDark, toggleTheme } = useTheme();
-
-  // Close mobile navigation drawer on route navigation
-  useEffect(() => {
-    setIsMobileOpen(false);
-  }, [pathname]);
+  const {
+    isPushSupported,
+    pushStatus,
+    isPushActive,
+    isSubscribingPush,
+    togglePushNotifications,
+  } = usePushNotifications();
 
   // Lock body scroll when mobile navigation drawer is open
   useEffect(() => {
@@ -94,7 +104,7 @@ export function VerticalNav({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setIsMobileOpen(false);
+        setOpenMobilePathname(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -262,6 +272,17 @@ export function VerticalNav({
               Sign out
             </span>
           </button>
+
+          {/* Push Notification Preference Toggle */}
+          {isPushSupported && (
+            <PushAlertsToggleRow
+              isExpanded={isHovered}
+              pushStatus={pushStatus}
+              isPushActive={isPushActive}
+              isSubscribingPush={isSubscribingPush}
+              onToggle={togglePushNotifications}
+            />
+          )}
 
           {/* Dark Mode Preference Toggle (Below Sign Out) */}
           <button
@@ -462,6 +483,17 @@ export function VerticalNav({
             </span>
           </button>
 
+          {/* Push Notification Preference Toggle */}
+          {isPushSupported && (
+            <PushAlertsToggleRow
+              isExpanded={true}
+              pushStatus={pushStatus}
+              isPushActive={isPushActive}
+              isSubscribingPush={isSubscribingPush}
+              onToggle={togglePushNotifications}
+            />
+          )}
+
           {/* Dark Mode Preference Toggle (Below Sign Out) */}
           <button
             type="button"
@@ -493,6 +525,96 @@ export function VerticalNav({
         </div>
       </aside>
     </>
+  );
+}
+
+interface PushAlertsToggleRowProps {
+  isExpanded: boolean;
+  pushStatus: NotificationPermission;
+  isPushActive: boolean;
+  isSubscribingPush: boolean;
+  onToggle: () => void;
+}
+
+function PushAlertsToggleRow({
+  isExpanded,
+  pushStatus,
+  isPushActive,
+  isSubscribingPush,
+  onToggle,
+}: PushAlertsToggleRowProps) {
+  const isDenied = pushStatus === 'denied';
+  const title = isDenied
+    ? 'Notifications blocked in browser settings'
+    : isPushActive
+    ? 'Phone alerts are ON. Click to turn OFF.'
+    : 'Phone alerts are OFF. Click to turn ON.';
+
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={isPushActive}
+      aria-label={isPushActive ? 'Turn off phone alerts' : 'Turn on phone alerts'}
+      disabled={isSubscribingPush}
+      onClick={onToggle}
+      title={title}
+      className={twMerge(
+        'w-full flex items-center h-12 px-3.5 rounded-xl transition-all duration-200 group text-left',
+        isDenied
+          ? 'text-rose-600 hover:bg-rose-50/70 cursor-not-allowed'
+          : isSubscribingPush
+          ? 'text-[#505F76] bg-slate-50/70 cursor-wait'
+          : isPushActive
+          ? 'text-emerald-700 hover:bg-emerald-50/70 cursor-pointer'
+          : 'text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B] cursor-pointer'
+      )}
+    >
+      <div className="flex items-center justify-center w-5 shrink-0">
+        {isSubscribingPush ? (
+          <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+        ) : isPushActive ? (
+          <BellRing className="w-5 h-5 text-emerald-600" />
+        ) : isDenied ? (
+          <BellOff className="w-5 h-5 text-rose-500" />
+        ) : (
+          <Bell className="w-5 h-5 text-[#757680] group-hover:text-[#1E293B] transition-colors" />
+        )}
+      </div>
+
+      <div
+        className={twMerge(
+          'flex items-center justify-between flex-1 overflow-hidden transition-all duration-300',
+          isExpanded
+            ? 'opacity-100 ml-3 max-w-[170px]'
+            : 'opacity-0 ml-0 max-w-0 pointer-events-none'
+        )}
+      >
+        <div className="flex flex-col min-w-0">
+          <span className="text-sm font-medium whitespace-nowrap">
+            Phone alerts
+          </span>
+          {isDenied && (
+            <span className="text-[10px] font-semibold text-rose-500 leading-tight">
+              Blocked in browser
+            </span>
+          )}
+        </div>
+
+        <div
+          className={twMerge(
+            'w-9 h-5 rounded-full p-0.5 transition-colors duration-200 flex items-center shrink-0',
+            isDenied
+              ? 'bg-slate-200 opacity-50 justify-start'
+              : isPushActive
+              ? 'bg-emerald-500 justify-end'
+              : 'bg-slate-200 justify-start'
+          )}
+        >
+          <div className="w-4 h-4 rounded-full bg-white shadow-xs transition-transform" />
+        </div>
+      </div>
+    </button>
   );
 }
 

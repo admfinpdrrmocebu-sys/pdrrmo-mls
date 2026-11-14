@@ -364,9 +364,14 @@ export async function POST(request: NextRequest) {
           updated = true;
         } else {
           console.warn('[Forgot Password] RPC admin_reset_user_password failed:', rpcErr);
-          updateErrorMsg =
-            rpcErr.message ||
-            'Unable to update password: SUPABASE_SERVICE_ROLE_KEY is required in .env.local, or execute supabase/create_password_reset_rpc.sql in your Supabase SQL Editor.';
+          const isMissingSchemaCacheRpc =
+            rpcErr.code === 'PGRST202' ||
+            /schema cache|Could not find the function/i.test(rpcErr.message || '');
+
+          updateErrorMsg = isMissingSchemaCacheRpc
+            ? 'Password reset service is not yet initialized in Supabase. Run supabase/create_password_reset_rpc.sql in the Supabase SQL Editor (and reload the schema cache) or set SUPABASE_SERVICE_ROLE_KEY in your environment.'
+            : rpcErr.message ||
+              'Unable to update password: SUPABASE_SERVICE_ROLE_KEY is required in .env.local, or execute supabase/create_password_reset_rpc.sql in your Supabase SQL Editor.';
         }
       }
 

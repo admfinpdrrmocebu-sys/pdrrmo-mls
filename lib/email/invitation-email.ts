@@ -1,5 +1,5 @@
 /**
- * PDRRMO MLS - Official Invitation Email Template Generator
+ * PDRRMO - IDOCS - Official Invitation Email Template Generator
  * Designed for high-deliverability, cross-client responsiveness (Gmail, Outlook, Apple Mail),
  * and professional emergency management operations UI/UX.
  */
@@ -43,7 +43,7 @@ export function generateInvitationEmailHtml(data: InvitationEmailData): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>PDRRMO MLS - System Access Invitation</title>
+  <title>PDRRMO - IDOCS - System Access Invitation</title>
   <!--[if mso]>
   <style type="text/css">
     body, table, td, p, a, li, blockquote {font-family: Arial, Helvetica, sans-serif !important;}
@@ -94,7 +94,7 @@ export function generateInvitationEmailHtml(data: InvitationEmailData): string {
   <center style="width: 100%; table-layout: fixed;">
     <!-- Top Preheader Text (Hidden in body, visible in inbox previews) -->
     <div style="display: none; font-size: 1px; line-height: 1px; max-height: 0px; max-width: 0px; opacity: 0; overflow: hidden;">
-      You have been granted official access to the PDRRMO Monitoring & Logging System. Activate your operational terminal credentials.
+      You have been granted official access to PDRRMO - IDOCS (Integrated Data &amp; Operations Control System). Activate your operational terminal credentials.
     </div>
 
     <!-- Main Email Container -->
@@ -134,10 +134,10 @@ export function generateInvitationEmailHtml(data: InvitationEmailData): string {
                           </td>
                           <td style="padding-left: 14px;">
                             <h1 style="margin: 0; font-size: 20px; font-weight: 800; color: #FFFFFF; letter-spacing: -0.3px; line-height: 24px;">
-                              PDRRMO · MLS
+                              PDRRMO - IDOCS
                             </h1>
                             <p style="margin: 2px 0 0 0; font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, 0.9);">
-                              Monitoring &amp; Logging System Operations
+                              Integrated Data &amp; Operations Control System
                             </p>
                           </td>
                         </tr>
@@ -160,7 +160,7 @@ export function generateInvitationEmailHtml(data: InvitationEmailData): string {
                 </h2>
                 
                 <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 22px; color: #505F76;">
-                  You have been authorized by <strong style="color: #1E293B;">${invitedBy}</strong> to access the Provincial Disaster Risk Reduction and Management Office (PDRRMO) Monitoring &amp; Logging System.
+                  You have been authorized by <strong style="color: #1E293B;">${invitedBy}</strong> to access the Provincial Disaster Risk Reduction and Management Office (PDRRMO) - Integrated Data &amp; Operations Control System (IDOCS).
                 </p>
 
                 <!-- Credentials / Assignment Bento Box -->
@@ -309,7 +309,7 @@ export function generateInvitationEmailHtml(data: InvitationEmailData): string {
       <tr>
         <td style="padding-top: 20px; text-align: center;">
           <p style="margin: 0; font-size: 11px; color: #94A3B8;">
-            Automated Operational Dispatch · PDRRMO Monitoring Logging System
+            Automated Operational Dispatch · PDRRMO - IDOCS (Integrated Data &amp; Operations Control System)
           </p>
         </td>
       </tr>
@@ -336,13 +336,13 @@ export function generateInvitationEmailText(data: InvitationEmailData): string {
     role === 'admin' ? 'Administrator' : role === 'monitoring' ? 'Monitoring Officer' : 'Operational Staff';
 
   return `
-PDRRMO MONITORING & LOGGING SYSTEM (MLS)
+PDRRMO - IDOCS (Integrated Data & Operations Control System)
 OFFICIAL SYSTEM ACCESS INVITATION
 =====================================================
 
 Hello,
 
-You have been granted official system access by ${invitedBy} to the Provincial Disaster Risk Reduction and Management Office (PDRRMO) Monitoring & Logging System.
+You have been granted official system access by ${invitedBy} to the Provincial Disaster Risk Reduction and Management Office (PDRRMO) - Integrated Data & Operations Control System (IDOCS).
 
 ASSIGNMENT DETAILS:
 - Authorized Email: ${email}

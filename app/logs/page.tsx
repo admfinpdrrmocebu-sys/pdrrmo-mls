@@ -1,87 +1,104 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import {
-  Radio,
-  FileText,
-  Search,
-  Filter,
-  Plus,
-  Play,
-  Square,
-  MoreVertical,
-  Edit2,
-  Trash2,
-  Eye,
-  X,
-  Calendar,
-  Clock,
-  ChevronLeft,
-  ChevronRight,
-  TrendingUp,
-  BarChart3,
-  ShieldCheck,
-  Tag,
-  Users,
-  CheckCircle2,
-  AlertTriangle,
-  Check,
-  ShieldAlert,
-  PlusCircle,
-  Loader2,
-  Lock,
-  Info,
-  Archive as ArchiveIcon,
-  Sparkles,
-} from 'lucide-react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import dynamic from 'next/dynamic';
+import { CheckCircle2, Info, ShieldAlert } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
-import { PrimaryButton, SecondaryButton, ToggleButton } from '@/components/button';
-import { CustomDropdown, CustomDropdownOption, CheckboxInput, RichTextEditor, stripEmojis } from '@/components/input';
+import { stripEmojis, type CustomDropdownOption } from '@/components/input';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
 import { generateDailyLogsPDF, sortLogsChronologically } from '@/lib/pdf-generator';
-import { Skeleton } from '@/components/skeleton';
-import { format } from 'date-fns';
+import {
+  getCachedLogsScreenData,
+  patchCachedLogsScreenData,
+  setCachedLogsScreenData,
+  type CachedLogsScreenData,
+} from '@/lib/cache/screen-data-cache';
+import {
+  DEFAULT_MONITORING_DETAILS,
+  fallbackPersonnelList,
+  fallbackSchedules,
+  getInitials,
+  getMilitaryTime,
+  type ActiveShiftRecord,
+  type ActiveShiftScheduleInfo,
+  type DutyPersonnel,
+  type LogEntry,
+  type ScheduleEligibility,
+  type ShiftScheduleItem,
+  type ShiftToastState,
+} from './_components/types';
+import { LogsStatusCards } from './_components/logs-status-cards';
+import { LogsTableSection } from './_components/logs-table-section';
 
-// =============================================================================
-// INTERFACES & TYPES
-// =============================================================================
+export type { LogEntry, DutyPersonnel, ActiveShiftRecord, ShiftScheduleItem };
 
-export interface LogEntry {
-  id: string;
-  shift_id?: string | null;
-  time: string;
-  date: string;
-  status: 'Critical' | 'Warning' | 'Active' | 'Info';
-  title: string;
-  reportType: string;
-  reportTypeId?: string | null;
-  description: string;
-  operator: string;
-  operatorId?: string | null;
-  operatorRole?: string | null;
-  operatorShift?: string | null;
-  shiftLabel?: string | null;
-  shiftDate?: string | null;
-  shiftStartTime?: string | null;
-  shiftEndTime?: string | null;
-  shiftStatus?: 'active' | 'completed' | 'cancelled' | null;
-  createdAt?: string;
-}
+const StartShiftModal = dynamic(() => import('./_components/start-shift-modal'), {
+  ssr: false,
+});
+const EndShiftModal = dynamic(() => import('./_components/end-shift-modal'), {
+  ssr: false,
+});
+const AddEditLogDrawer = dynamic(() => import('./_components/add-edit-log-drawer'), {
+  ssr: false,
+});
+const ViewLogModal = dynamic(() => import('./_components/view-log-modal'), {
+  ssr: false,
+});
+const AddCategoryModal = dynamic(() => import('./_components/add-category-modal'), {
+  ssr: false,
+});
 
-export interface DutyPersonnel {
+const FALLBACK_POLL_MS = 30_000;
+const REALTIME_DEBOUNCE_MS = 400;
+const ITEMS_PER_PAGE = 10;
+
+const PROFILE_COLUMNS =
+  'id, full_name, position_title, role, avatar_url, default_shift';
+const REPORT_TYPE_COLUMNS = 'id, name, description, color, is_active, created_at';
+const SCHEDULE_COLUMNS =
+  'id, name, start_time, end_time, duration, color, is_active, sort_order';
+
+interface SupabaseReportTypeRow {
   id: string;
   name: string;
-  role: string;
-  avatarInitials: string;
-  badgeNumber: string;
-  avatarUrl?: string | null;
-  defaultShift?: string | null;
+  description?: string | null;
+  color?: string | null;
+  is_active?: boolean | null;
 }
 
-export interface ActiveShiftRecord {
+interface SupabaseScheduleRow {
+  id: string;
+  name: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  duration?: string | null;
+  color?: string | null;
+  is_active?: boolean | null;
+  sort_order?: number | null;
+}
+
+interface SupabaseProfileRow {
+  id: string;
+  full_name?: string | null;
+  position_title?: string | null;
+  role?: string | null;
+  avatar_url?: string | null;
+  default_shift?: string | null;
+}
+
+interface SupabaseShiftPersonnelJoinedRow {
+  id: string;
+  profile_id: string;
+  role_in_shift?: string | null;
+  is_lead?: boolean | null;
+  present_at_end?: boolean | null;
+  profile?: SupabaseProfileRow | SupabaseProfileRow[] | null;
+}
+
+interface SupabaseActiveShiftRow {
   id: string;
   shift_label: string;
   shift_date: string;
@@ -89,160 +106,188 @@ export interface ActiveShiftRecord {
   end_time?: string | null;
   status: 'active' | 'completed' | 'cancelled';
   lead_officer_id: string;
-  lead_officer_name?: string;
-  lead_officer_avatar?: string | null;
-  lead_officer_role?: string | null;
   start_monitoring_details?: string | null;
   started_at: string;
-  personnel: DutyPersonnel[];
+  lead_officer?: SupabaseProfileRow | SupabaseProfileRow[] | null;
+  shift_duty_personnel?: SupabaseShiftPersonnelJoinedRow[] | null;
 }
 
-export interface ShiftScheduleItem {
+interface SupabaseJoinedShiftSummary {
   id: string;
-  name: string;
-  start_time: string;
-  end_time: string;
-  duration: string;
-  color?: string;
-  is_active: boolean;
-  sort_order?: number;
+  shift_label?: string | null;
+  shift_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  status?: 'active' | 'completed' | 'cancelled' | null;
+  lead_officer_id?: string | null;
 }
 
-// =============================================================================
-// FALLBACK SEED DATA
-// =============================================================================
-
-const fallbackPersonnelList: DutyPersonnel[] = [
-  { id: 'p-1', name: 'Alex Thompson', role: 'System Admin / Lead Officer', avatarInitials: 'AT', badgeNumber: 'OPC-1001', defaultShift: 'Day Shift (Alpha)' },
-  { id: 'p-2', name: 'Supervisor Elena Cruz', role: 'Chief Dispatch Operations', avatarInitials: 'EC', badgeNumber: 'OPC-1042', defaultShift: 'Day Shift (Alpha)' },
-  { id: 'p-3', name: 'Mark Salazar', role: 'SecOps Node #04 Responder', avatarInitials: 'MS', badgeNumber: 'OPC-8821', defaultShift: 'Day Shift (Alpha)' },
-  { id: 'p-4', name: 'Sarah Jenkins', role: 'Telemetry & Radio Operator', avatarInitials: 'SJ', badgeNumber: 'OPC-3012', defaultShift: 'Swing Shift (Bravo)' },
-  { id: 'p-5', name: 'David Tan', role: 'Emergency Dispatcher', avatarInitials: 'DT', badgeNumber: 'OPC-2045', defaultShift: 'Swing Shift (Bravo)' },
-  { id: 'p-6', name: 'Maria Santos', role: 'Communications Specialist', avatarInitials: 'MS', badgeNumber: 'OPC-4109', defaultShift: 'Graveyard Shift (Charlie)' },
-];
-
-const fallbackSchedules: ShiftScheduleItem[] = [
-  { id: 'sched-1', name: 'Day Shift (Alpha)', start_time: '06:00', end_time: '14:00', duration: '8 Hours', is_active: true, sort_order: 1 },
-  { id: 'sched-2', name: 'Swing Shift (Bravo)', start_time: '14:00', end_time: '22:00', duration: '8 Hours', is_active: true, sort_order: 2 },
-  { id: 'sched-3', name: 'Graveyard Shift (Charlie)', start_time: '22:00', end_time: '06:00', duration: '8 Hours', is_active: true, sort_order: 3 },
-];
-
-// Helper to compute initials from full name
-function getInitials(name: string): string {
-  if (!name) return 'MO';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-  }
-  return name.slice(0, 2).toUpperCase();
+interface SupabaseShiftLogRow {
+  id: string;
+  shift_id?: string | null;
+  title: string;
+  report_type_id?: string | null;
+  report_type_name: string;
+  log_date?: string | null;
+  log_time?: string | null;
+  status?: string | null;
+  description?: string | null;
+  operator_id?: string | null;
+  operator_name?: string | null;
+  created_at?: string | null;
+  shift?: SupabaseJoinedShiftSummary | SupabaseJoinedShiftSummary[] | null;
 }
 
-// Helper to format shift start time concisely
-function formatShiftStartTime(shift: ActiveShiftRecord | null): string {
-  if (!shift) return '';
-  if (shift.started_at) {
-    try {
-      const d = new Date(shift.started_at);
-      if (!isNaN(d.getTime())) {
-        return format(d, 'h:mm a');
-      }
-    } catch (_) {}
-  }
-  if (shift.start_time) {
-    const cleaned = shift.start_time.replace(/[^0-9:]/g, '');
-    if (cleaned.includes(':')) {
-      const [h, m] = cleaned.split(':').map(Number);
-      if (!isNaN(h) && !isNaN(m)) {
-        const dummy = new Date();
-        dummy.setHours(h, m, 0, 0);
-        return format(dummy, 'h:mm a');
-      }
-    }
-    return shift.start_time;
-  }
-  return 'Recently';
-}
-
-// OfficerAvatar component with profile image & fallback initials
-interface OfficerAvatarProps {
-  officer?: {
-    name?: string;
-    avatarUrl?: string | null;
-    avatarInitials?: string;
+interface ArchiveDutyPersonnelRow {
+  profile_id: string;
+  role_in_shift?: string | null;
+  present_at_end?: boolean | null;
+  profile?: {
+    id?: string;
+    full_name?: string | null;
+    position_title?: string | null;
+    default_shift?: string | null;
   } | null;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
-  fallbackBg?: string;
-  className?: string;
 }
 
-function OfficerAvatar({
-  officer,
-  size = 'md',
-  fallbackBg,
-  className = '',
-}: OfficerAvatarProps) {
-  const [imgError, setImgError] = useState(false);
+interface ArchiveRawLogRow {
+  id: string;
+  shift_id: string | null;
+  log_time: string;
+  log_date: string;
+  created_at: string;
+  status: string;
+  title: string;
+  report_type_name: string;
+  description: string;
+  operator_name: string;
+  operator_id: string | null;
+}
 
-  useEffect(() => {
-    setImgError(false);
-  }, [officer?.avatarUrl]);
+function buildLogsSignature(params: {
+  logs: LogEntry[];
+  activeShift: ActiveShiftRecord | null;
+  availableOfficers: DutyPersonnel[];
+  shiftSchedules: ShiftScheduleItem[];
+  reportTypeOptionsList: CustomDropdownOption[];
+}): string {
+  const {
+    logs,
+    activeShift,
+    availableOfficers,
+    shiftSchedules,
+    reportTypeOptionsList,
+  } = params;
 
-  const sizeClasses = {
-    sm: 'w-8 h-8 text-[10px]',
-    md: 'w-10 h-10 text-xs',
-    lg: 'w-12 h-12 text-sm',
-    xl: 'w-14 h-14 text-base',
-  };
+  const shiftKey = activeShift
+    ? `${activeShift.id}:${activeShift.status}:${activeShift.shift_label}:${activeShift.lead_officer_id}:${activeShift.lead_officer_name ?? ''}:${activeShift.lead_officer_avatar ?? ''}:${activeShift.started_at}:${activeShift.personnel.map((p) => p.id).join(',')}`
+    : 'none';
 
-  const hasImage = Boolean(officer?.avatarUrl && !imgError);
-  const initials = officer?.avatarInitials || getInitials(officer?.name || 'OP');
-  const defaultBg = fallbackBg || 'bg-[#004AC6] text-white';
+  const logsKey = logs
+    .map(
+      (l) =>
+        `${l.id}|${l.title}|${l.reportType}|${l.time}|${l.date}|${l.status}|${l.shiftStatus ?? ''}|${l.description.length}`
+    )
+    .join(';');
 
-  if (hasImage) {
-    return (
-      <img
-        src={officer!.avatarUrl!}
-        alt={officer?.name || 'Officer Avatar'}
-        onError={() => setImgError(true)}
-        className={`${sizeClasses[size]} rounded-full object-cover border border-[#E2E8F0] shadow-xs shrink-0 ${className}`}
-      />
+  const typesKey = reportTypeOptionsList
+    .map((r) => `${r.value}:${r.dotColor ?? ''}`)
+    .join(',');
+
+  const schedulesKey = shiftSchedules
+    .map((s) => `${s.id}:${s.name}:${s.start_time}:${s.end_time}:${s.sort_order ?? 0}`)
+    .join(',');
+
+  const officersKey = availableOfficers
+    .map((o) => `${o.id}:${o.name}:${o.defaultShift ?? ''}:${o.avatarUrl ?? ''}`)
+    .join(',');
+
+  return [shiftKey, logsKey, typesKey, schedulesKey, officersKey].join('::');
+}
+
+function computeActiveShiftScheduleInfo(
+  userDefaultShift: string,
+  shiftSchedules: ShiftScheduleItem[]
+): ActiveShiftScheduleInfo {
+  if (userDefaultShift) {
+    const match = shiftSchedules.find(
+      (s) => s.name.toLowerCase() === userDefaultShift.toLowerCase()
     );
+    if (match) {
+      return {
+        name: match.name,
+        time: `${match.start_time} - ${match.end_time}`,
+        item: match,
+      };
+    }
+    return { name: userDefaultShift, time: '', item: null };
   }
 
-  return (
-    <div
-      className={`${sizeClasses[size]} rounded-full font-bold flex items-center justify-center shadow-xs shrink-0 select-none ${defaultBg} ${className}`}
-    >
-      {initials}
-    </div>
-  );
-}
+  const now = new Date();
+  const currentMins = now.getHours() * 60 + now.getMinutes();
 
-// Helper to format timestamps to 24H military notation: "1430H"
-function getMilitaryTime(date: Date = new Date()): string {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}${minutes}H`;
-}
+  for (const sched of shiftSchedules) {
+    const [sH, sM] = (sched.start_time || '06:00')
+      .split(':')
+      .map((v) => parseInt(v, 10) || 0);
+    const [eH, eM] = (sched.end_time || '14:00')
+      .split(':')
+      .map((v) => parseInt(v, 10) || 0);
+    const startMins = sH * 60 + sM;
+    const endMins = eH * 60 + eM;
 
-// =============================================================================
-// MAIN COMPONENT
-// =============================================================================
+    if (startMins < endMins) {
+      if (currentMins >= startMins && currentMins < endMins) {
+        return {
+          name: sched.name,
+          time: `${sched.start_time} - ${sched.end_time}`,
+          item: sched,
+        };
+      }
+    } else if (currentMins >= startMins || currentMins < endMins) {
+      return {
+        name: sched.name,
+        time: `${sched.start_time} - ${sched.end_time}`,
+        item: sched,
+      };
+    }
+  }
+
+  const fallback = shiftSchedules[0] || fallbackSchedules[0];
+  return {
+    name: fallback.name,
+    time: `${fallback.start_time} - ${fallback.end_time}`,
+    item: fallback,
+  };
+}
 
 export default function LogsPage() {
   const { user, profile, isAdmin, canWrite, isViewOnly } = useAuth();
   const isLogsViewOnly = isViewOnly('Logs') || !canWrite('Logs');
   const canModifyLogs = canWrite('Logs') && !isViewOnly('Logs');
 
-  // Loading States
-  const [isLoading, setIsLoading] = useState(true);
+  const [initialCache] = useState<CachedLogsScreenData | null>(() =>
+    getCachedLogsScreenData()
+  );
+
+  // Loading & Submission States
+  const [isLoading, setIsLoading] = useState<boolean>(() => !initialCache);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Data States
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
-  const [reportTypeFilter, setReportTypeFilter] = useState<string>('ALL');
+  // Data States (hydrated synchronously from SWR cache on navigation return)
+  const [logs, setLogs] = useState<LogEntry[]>(() => initialCache?.logs ?? []);
+  const [searchQuery, setSearchQuery] = useState<string>(
+    () => initialCache?.searchQuery ?? ''
+  );
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>(
+    () => initialCache?.searchQuery ?? ''
+  );
+  const [reportTypeFilter, setReportTypeFilter] = useState<string>(
+    () => initialCache?.reportTypeFilter ?? 'ALL'
+  );
+  const [currentPage, setCurrentPage] = useState<number>(
+    () => initialCache?.currentPage ?? 1
+  );
 
   // Debounce search input by 300ms for fast and responsive table filtering
   useEffect(() => {
@@ -253,28 +298,41 @@ export default function LogsPage() {
   }, [searchQuery]);
 
   // Shift States (Dynamic & Realtime from Supabase)
-  const [activeShift, setActiveShift] = useState<ActiveShiftRecord | null>(null);
-  const [availableOfficers, setAvailableOfficers] = useState<DutyPersonnel[]>(fallbackPersonnelList);
-  const [shiftSchedules, setShiftSchedules] = useState<ShiftScheduleItem[]>(fallbackSchedules);
+  const [activeShift, setActiveShift] = useState<ActiveShiftRecord | null>(
+    () => initialCache?.activeShift ?? null
+  );
+  const [availableOfficers, setAvailableOfficers] = useState<DutyPersonnel[]>(
+    () => initialCache?.availableOfficers ?? fallbackPersonnelList
+  );
+  const [shiftSchedules, setShiftSchedules] = useState<ShiftScheduleItem[]>(
+    () => initialCache?.shiftSchedules ?? fallbackSchedules
+  );
 
   // Modals & Drawers
   const [isStartShiftModalOpen, setIsStartShiftModalOpen] = useState(false);
   const [isEndShiftModalOpen, setIsEndShiftModalOpen] = useState(false);
-  const [selectedPersonnelIds, setSelectedPersonnelIds] = useState<string[]>([]);
+  const [selectedPersonnelIds, setSelectedPersonnelIds] = useState<string[]>(
+    () => initialCache?.activeShift?.personnel.map((p) => p.id) ?? []
+  );
   const [isIncidentReportOn, setIsIncidentReportOn] = useState(false);
   const [incidentDetails, setIncidentDetails] = useState('');
-  const [shiftToast, setShiftToast] = useState<{ message: string; submessage?: string; type: 'start' | 'end' | 'info' } | null>(null);
+  const [shiftToast, setShiftToast] = useState<ShiftToastState | null>(null);
 
-  // Start Shift Monitoring Details State with Visual Rich Text Editor
-  const defaultMonitoringDetails =
-    '<ul><li>Coastal and inland telemetry stations operating normally</li><li>Weather radar scanning for localized precipitation</li><li><strong>142.500 MHz</strong> primary emergency frequency monitoring active</li></ul>';
-  const [startShiftMonitoringDetails, setStartShiftMonitoringDetails] = useState(defaultMonitoringDetails);
+  const [startShiftMonitoringDetails, setStartShiftMonitoringDetails] =
+    useState(DEFAULT_MONITORING_DETAILS);
 
-  // Report Type Options State (strictly queried from public.report_types)
-  const [reportTypeOptionsList, setReportTypeOptionsList] = useState<CustomDropdownOption[]>([]);
-  const [filterDropdownOptions, setFilterDropdownOptions] = useState<CustomDropdownOption[]>([
-    { value: 'ALL', label: 'All Report Types' },
-  ]);
+  // Report Type Options State
+  const [reportTypeOptionsList, setReportTypeOptionsList] = useState<
+    CustomDropdownOption[]
+  >(() => initialCache?.reportTypeOptionsList ?? []);
+  const [filterDropdownOptions, setFilterDropdownOptions] = useState<
+    CustomDropdownOption[]
+  >(
+    () =>
+      initialCache?.filterDropdownOptions ?? [
+        { value: 'ALL', label: 'All Report Types' },
+      ]
+  );
 
   // Add Category Modal State
   const [isAddCategoryModalOpen, setIsAddCategoryModalOpen] = useState(false);
@@ -293,9 +351,49 @@ export default function LogsPage() {
   // Form State for Log Drawer
   const [formTitle, setFormTitle] = useState('');
   const [formReportType, setFormReportType] = useState('');
-  const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
-  const [formTime, setFormTime] = useState(getMilitaryTime());
+  const [formDate, setFormDate] = useState(() =>
+    new Date().toISOString().split('T')[0]
+  );
+  const [formTime, setFormTime] = useState(() => getMilitaryTime());
   const [formDescription, setFormDescription] = useState('');
+
+  // Concurrency, staleness, & UI state refs (updated only outside render)
+  const mountedRef = useRef(true);
+  const syncInFlightRef = useRef<Promise<void> | null>(null);
+  const signatureRef = useRef<string>(initialCache?.signature ?? '');
+  const shiftModalOpenRef = useRef(false);
+  const officersRef = useRef<DutyPersonnel[]>(availableOfficers);
+  const shiftSchedulesRef = useRef<ShiftScheduleItem[]>(shiftSchedules);
+  const reportTypeOptionsRef = useRef<CustomDropdownOption[]>(reportTypeOptionsList);
+  const filterOptionsRef = useRef<CustomDropdownOption[]>(filterDropdownOptions);
+  const activeShiftRef = useRef<ActiveShiftRecord | null>(activeShift);
+  const logsRef = useRef<LogEntry[]>(logs);
+  const searchQueryRef = useRef(searchQuery);
+  const reportTypeFilterRef = useRef(reportTypeFilter);
+  const currentPageRef = useRef(currentPage);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    shiftModalOpenRef.current = isStartShiftModalOpen || isEndShiftModalOpen;
+  }, [isStartShiftModalOpen, isEndShiftModalOpen]);
+
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
+
+  useEffect(() => {
+    reportTypeFilterRef.current = reportTypeFilter;
+  }, [reportTypeFilter]);
+
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
 
   // Derived Shift Active Status
   const isShiftActive = activeShift !== null;
@@ -304,9 +402,7 @@ export default function LogsPage() {
   // 1. SHIFT SCHEDULE & HANDOVER ELIGIBILITY ENGINE
   // ===========================================================================
 
-  // Evaluates if user can START a shift
-  const scheduleEligibility = useMemo(() => {
-    // 1. System Admins have permanent clearance to start shifts anytime
+  const scheduleEligibility: ScheduleEligibility = useMemo(() => {
     if (isAdmin || profile?.role === 'admin') {
       return {
         isEligible: true,
@@ -316,35 +412,40 @@ export default function LogsPage() {
       };
     }
 
-    // 2. Determine user's assigned default shift
     const userShiftName = profile?.default_shift || 'Day Shift (Alpha)';
     const matchedSchedule =
-      shiftSchedules.find((s) => s.name.toLowerCase() === userShiftName.toLowerCase()) ||
+      shiftSchedules.find(
+        (s) => s.name.toLowerCase() === userShiftName.toLowerCase()
+      ) ||
       shiftSchedules[0] ||
       fallbackSchedules[0];
 
     const startTimeStr = matchedSchedule.start_time || '06:00';
     const endTimeStr = matchedSchedule.end_time || '14:00';
 
-    // Parse start & end hours/minutes
-    const [startH, startM] = startTimeStr.split(':').map((v) => parseInt(v, 10) || 0);
-    const [endH, endM] = endTimeStr.split(':').map((v) => parseInt(v, 10) || 0);
+    const [startH, startM] = startTimeStr
+      .split(':')
+      .map((v) => parseInt(v, 10) || 0);
+    const [endH, endM] = endTimeStr
+      .split(':')
+      .map((v) => parseInt(v, 10) || 0);
 
     const now = new Date();
     const currentMins = now.getHours() * 60 + now.getMinutes();
     const startMins = startH * 60 + startM;
     const endMins = endH * 60 + endM;
 
-    // Buffer: Allow starting up to 45 minutes before shift starts and up to 45 minutes after shift ends for handover
     const bufferMins = 45;
     let isWithinWindow = false;
 
     if (startMins < endMins) {
-      // Normal daytime shift (e.g. 06:00 to 14:00)
-      isWithinWindow = currentMins >= startMins - bufferMins && currentMins <= endMins + bufferMins;
+      isWithinWindow =
+        currentMins >= startMins - bufferMins &&
+        currentMins <= endMins + bufferMins;
     } else {
-      // Overnight / Graveyard shift crossing midnight (e.g. 22:00 to 06:00)
-      isWithinWindow = currentMins >= startMins - bufferMins || currentMins <= endMins + bufferMins;
+      isWithinWindow =
+        currentMins >= startMins - bufferMins ||
+        currentMins <= endMins + bufferMins;
     }
 
     return {
@@ -357,104 +458,53 @@ export default function LogsPage() {
     };
   }, [isAdmin, profile, shiftSchedules]);
 
-  // Evaluates if user can END the active shift (Prevents non-designated users from stopping someone else's shift)
   const canEndCurrentShift = useMemo(() => {
     if (!activeShift) return false;
-    // 1. System Admins can always perform handover/end shift
     if (isAdmin || profile?.role === 'admin') return true;
 
     const currentUserId = profile?.id || user?.id;
+    if (currentUserId && activeShift.lead_officer_id === currentUserId)
+      return true;
+    if (
+      currentUserId &&
+      activeShift.personnel.some((p) => p.id === currentUserId)
+    )
+      return true;
 
-    // 2. Lead Officer who started this active shift
-    if (currentUserId && activeShift.lead_officer_id === currentUserId) return true;
-
-    // 3. Officer is explicitly present in the active shift's duty personnel roster
-    if (currentUserId && activeShift.personnel.some((p) => p.id === currentUserId)) return true;
-
-    // 4. Officer's assigned default_shift matches the active shift's label
-    const userShift = (profile?.default_shift || 'Day Shift (Alpha)').trim().toLowerCase();
+    const userShift = (profile?.default_shift || 'Day Shift (Alpha)')
+      .trim()
+      .toLowerCase();
     const activeShiftLabel = (activeShift.shift_label || '').trim().toLowerCase();
-    if (userShift === activeShiftLabel) return true;
-
-    return false;
+    return userShift === activeShiftLabel;
   }, [activeShift, isAdmin, profile, user]);
 
-  // Derived canAddLogs (Requires active shift, write permissions, and duty/schedule authorization)
   const canAddLogs = isShiftActive && canModifyLogs && canEndCurrentShift;
 
-  // Auto-detect designated shift schedule based on user profile or current time
-  const activeShiftScheduleInfo = useMemo(() => {
-    // 1. If user profile has an assigned default_shift, look up matching schedule
-    const userDefault = profile?.default_shift?.trim();
-    if (userDefault) {
-      const match = shiftSchedules.find((s) => s.name.toLowerCase() === userDefault.toLowerCase());
-      if (match) {
-        return {
-          name: match.name,
-          time: `${match.start_time} - ${match.end_time}`,
-          item: match,
-        };
-      }
-      return {
-        name: userDefault,
-        time: '',
-        item: null,
-      };
-    }
+  const userDefaultShift = profile?.default_shift?.trim() ?? '';
 
-    // 2. Otherwise auto-detect current shift by current time
-    const now = new Date();
-    const currentMins = now.getHours() * 60 + now.getMinutes();
+  const activeShiftScheduleInfo: ActiveShiftScheduleInfo = useMemo(
+    () => computeActiveShiftScheduleInfo(userDefaultShift, shiftSchedules),
+    [userDefaultShift, shiftSchedules]
+  );
 
-    for (const sched of shiftSchedules) {
-      const [sH, sM] = (sched.start_time || '06:00').split(':').map((v) => parseInt(v, 10) || 0);
-      const [eH, eM] = (sched.end_time || '14:00').split(':').map((v) => parseInt(v, 10) || 0);
-      const startMins = sH * 60 + sM;
-      const endMins = eH * 60 + eM;
-
-      if (startMins < endMins) {
-        if (currentMins >= startMins && currentMins < endMins) {
-          return {
-            name: sched.name,
-            time: `${sched.start_time} - ${sched.end_time}`,
-            item: sched,
-          };
-        }
-      } else {
-        if (currentMins >= startMins || currentMins < endMins) {
-          return {
-            name: sched.name,
-            time: `${sched.start_time} - ${sched.end_time}`,
-            item: sched,
-          };
-        }
-      }
-    }
-
-    const fallback = shiftSchedules[0] || fallbackSchedules[0];
-    return {
-      name: fallback.name,
-      time: `${fallback.start_time} - ${fallback.end_time}`,
-      item: fallback,
-    };
-  }, [profile?.default_shift, shiftSchedules]);
-
-  // Designated Personnel filtered specifically to the auto-fetched shift schedule
   const designatedOfficers = useMemo(() => {
     const shiftTarget = activeShiftScheduleInfo.name.trim().toLowerCase();
     const filtered = availableOfficers.filter((officer) => {
-      const officerShift = (officer.defaultShift || 'Day Shift (Alpha)').trim().toLowerCase();
+      const officerShift = (officer.defaultShift || 'Day Shift (Alpha)')
+        .trim()
+        .toLowerCase();
       return officerShift === shiftTarget;
     });
 
     return filtered.length > 0 ? filtered : availableOfficers;
   }, [availableOfficers, activeShiftScheduleInfo.name]);
 
-  // Shift Schedule Sequence Engine (determines first shift, last shift, and if active shift is the final shift of the sequence)
   const shiftScheduleSequenceInfo = useMemo(() => {
-    // Only shifts with sort_order >= 1 participate in the 24/7 monitoring sequence
-    const monitoringShifts = shiftSchedules.filter((s) => (s.sort_order ?? 0) >= 1);
-    const activeList = monitoringShifts.length > 0 ? monitoringShifts : shiftSchedules;
+    const monitoringShifts = shiftSchedules.filter(
+      (s) => (s.sort_order ?? 0) >= 1
+    );
+    const activeList =
+      monitoringShifts.length > 0 ? monitoringShifts : shiftSchedules;
 
     if (activeList.length === 0) {
       return {
@@ -464,11 +514,15 @@ export default function LogsPage() {
       };
     }
 
-    const sorted = [...activeList].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    const sorted = [...activeList].sort(
+      (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+    );
     const first = sorted[0];
     const last = sorted[sorted.length - 1];
     const activeLabel = (activeShift?.shift_label || '').trim().toLowerCase();
-    const isLast = Boolean(last && activeLabel === last.name.trim().toLowerCase());
+    const isLast = Boolean(
+      last && activeLabel === last.name.trim().toLowerCase()
+    );
 
     return {
       firstShift: first,
@@ -477,133 +531,158 @@ export default function LogsPage() {
     };
   }, [activeShift?.shift_label, shiftSchedules]);
 
-  // Determines if the shift schedule being started is the first / lowest sort order shift schedule
   const isStartingFirstShift = useMemo(() => {
-    if (!activeShiftScheduleInfo.item || !shiftScheduleSequenceInfo.firstShift) return true;
+    if (!activeShiftScheduleInfo.item || !shiftScheduleSequenceInfo.firstShift)
+      return true;
     const currentSort = activeShiftScheduleInfo.item.sort_order ?? 0;
     const firstSort = shiftScheduleSequenceInfo.firstShift.sort_order ?? 0;
     return (
-      activeShiftScheduleInfo.item.id === shiftScheduleSequenceInfo.firstShift.id ||
-      currentSort <= firstSort
+      activeShiftScheduleInfo.item.id ===
+        shiftScheduleSequenceInfo.firstShift.id || currentSort <= firstSort
     );
   }, [activeShiftScheduleInfo.item, shiftScheduleSequenceInfo.firstShift]);
 
-  // Dynamic duty title based on schedule sequence: "Start of monitoring Duty" for first shift sort, "Assume monitoring Duty" for the rest
-  const startShiftDutyTitle = isStartingFirstShift ? 'Start of monitoring Duty' : 'Assume monitoring Duty';
+  const startShiftDutyTitle = isStartingFirstShift
+    ? 'Start of monitoring Duty'
+    : 'Assume monitoring Duty';
 
   // ===========================================================================
-  // 2. DATA FETCHING (SUPABASE & REALTIME)
+  // 2. DATA FETCHING (CONSOLIDATED QUERIES, DEDUPLICATION, SNAPSHOT DIFFING)
   // ===========================================================================
 
-  // Fetch Report Types strictly from public.report_types (matches Settings > Logs)
-  const fetchReportTypes = useCallback(async () => {
+  const persistCache = useCallback(
+    (next: {
+      logs: LogEntry[];
+      activeShift: ActiveShiftRecord | null;
+      availableOfficers: DutyPersonnel[];
+      shiftSchedules: ShiftScheduleItem[];
+      reportTypeOptionsList: CustomDropdownOption[];
+      filterDropdownOptions: CustomDropdownOption[];
+      signature: string;
+    }) => {
+      setCachedLogsScreenData({
+        ...next,
+        searchQuery: searchQueryRef.current,
+        reportTypeFilter: reportTypeFilterRef.current,
+        currentPage: currentPageRef.current,
+        fetchedAt: Date.now(),
+      });
+    },
+    []
+  );
+
+  const queryReportTypes = useCallback(async (): Promise<{
+    modalOpts: CustomDropdownOption[];
+    filterOpts: CustomDropdownOption[];
+  }> => {
     try {
       const { data, error } = await supabase
         .from('report_types')
-        .select('*')
+        .select(REPORT_TYPE_COLUMNS)
         .order('created_at', { ascending: true });
 
       if (!error && data && data.length > 0) {
-        const activeTypes = data.filter((rt: any) => rt.is_active !== false);
-        const modalOpts: CustomDropdownOption[] = activeTypes.map((rt: any) => ({
+        const rows = (data as SupabaseReportTypeRow[]).filter(
+          (rt) => rt.is_active !== false
+        );
+        const modalOpts: CustomDropdownOption[] = rows.map((rt) => ({
           value: rt.name,
           label: rt.name,
           description: rt.description || `${rt.name} operational classification`,
           dotColor: rt.color || '#004AC6',
         }));
-        setReportTypeOptionsList(modalOpts);
-
         const filterOpts: CustomDropdownOption[] = [
           { value: 'ALL', label: 'All Report Types' },
-          ...activeTypes.map((rt: any) => ({
+          ...rows.map((rt) => ({
             value: rt.name,
             label: rt.name,
             dotColor: rt.color || '#004AC6',
           })),
         ];
-        setFilterDropdownOptions(filterOpts);
-      } else {
-        setReportTypeOptionsList([]);
-        setFilterDropdownOptions([
-          { value: 'ALL', label: 'All Report Types' },
-        ]);
+        return { modalOpts, filterOpts };
       }
     } catch (err) {
       console.warn('Could not load report_types from database:', err);
-      setReportTypeOptionsList([]);
-      setFilterDropdownOptions([
-        { value: 'ALL', label: 'All Report Types' },
-      ]);
     }
+    return {
+      modalOpts: [],
+      filterOpts: [{ value: 'ALL', label: 'All Report Types' }],
+    };
   }, []);
 
-  // Fetch Shift Schedules from public.shift_schedules
-  const fetchShiftSchedules = useCallback(async () => {
+  const queryShiftSchedules = useCallback(async (): Promise<
+    ShiftScheduleItem[]
+  > => {
     try {
       const { data, error } = await supabase
         .from('shift_schedules')
-        .select('*')
+        .select(SCHEDULE_COLUMNS)
         .eq('is_active', true)
         .order('sort_order', { ascending: true });
 
       if (!error && data && data.length > 0) {
-        const mapped: ShiftScheduleItem[] = data.map((s: any) => ({
-          id: s.id,
-          name: s.name,
-          start_time: s.start_time || '08:00',
-          end_time: s.end_time || '16:00',
-          duration: s.duration || '8 Hours',
-          color: s.color || '#004AC6',
-          is_active: s.is_active ?? true,
-          sort_order: s.sort_order ?? 0,
-        }));
-
-        // Rule: Only shift schedules with sort_order >= 1 undergo the 24/7 rotational monitoring cycle.
-        // Shift schedules with sort_order = 0 are defined as default/general schedules and excluded from monitoring log sequence.
-        const monitoringShifts = mapped.filter((s) => (s.sort_order ?? 0) >= 1);
-        setShiftSchedules(monitoringShifts.length > 0 ? monitoringShifts : mapped);
-      } else {
-        setShiftSchedules(fallbackSchedules);
+        const mapped: ShiftScheduleItem[] = (data as SupabaseScheduleRow[]).map(
+          (s) => ({
+            id: s.id,
+            name: s.name,
+            start_time: s.start_time || '08:00',
+            end_time: s.end_time || '16:00',
+            duration: s.duration || '8 Hours',
+            color: s.color || '#004AC6',
+            is_active: s.is_active ?? true,
+            sort_order: s.sort_order ?? 0,
+          })
+        );
+        const monitoringShifts = mapped.filter(
+          (s) => (s.sort_order ?? 0) >= 1
+        );
+        return monitoringShifts.length > 0 ? monitoringShifts : mapped;
       }
     } catch (err) {
       console.warn('Could not load shift_schedules, using fallbacks:', err);
     }
+    return fallbackSchedules;
   }, []);
 
-  // Fetch Available Officers from public.profiles
-  const fetchAvailableOfficers = useCallback(async () => {
+  const queryAvailableOfficers = useCallback(async (): Promise<
+    DutyPersonnel[]
+  > => {
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('*')
+        .select(PROFILE_COLUMNS)
         .eq('is_active', true)
         .order('full_name', { ascending: true });
 
       if (!error && data && data.length > 0) {
-        const mapped: DutyPersonnel[] = data.map((p: any) => ({
+        return (data as SupabaseProfileRow[]).map((p) => ({
           id: p.id,
           name: p.full_name || 'Monitoring Personnel',
-          role: p.position_title || (p.role === 'admin' ? 'System Administrator' : 'Monitoring Officer'),
+          role:
+            p.position_title ||
+            (p.role === 'admin' ? 'System Administrator' : 'Monitoring Officer'),
           avatarInitials: getInitials(p.full_name || ''),
           badgeNumber: `OPC-${p.id.slice(0, 4).toUpperCase()}`,
           avatarUrl: p.avatar_url,
           defaultShift: p.default_shift || 'Day Shift (Alpha)',
         }));
-        setAvailableOfficers(mapped);
-      } else {
-        setAvailableOfficers(fallbackPersonnelList);
       }
     } catch (err) {
       console.warn('Could not load profiles, using fallback duty roster:', err);
     }
+    return fallbackPersonnelList;
   }, []);
 
-  // Fetch Active Shift & Linked Personnel from public.shifts & public.shift_duty_personnel
-  const fetchActiveShift = useCallback(async () => {
+  const queryActiveShift = useCallback(async (): Promise<{
+    shift: ActiveShiftRecord | null;
+    ok: boolean;
+  }> => {
     try {
-      const { data: shiftData, error: shiftError } = await supabase
+      // Single-pass active shift query with embedded lead officer and duty personnel
+      const { data, error } = await supabase
         .from('shifts')
-        .select(`
+        .select(
+          `
           id,
           shift_label,
           shift_date,
@@ -613,68 +692,82 @@ export default function LogsPage() {
           lead_officer_id,
           start_monitoring_details,
           started_at,
-          lead_officer:profiles!shifts_lead_officer_id_fkey(id, full_name, position_title, role, avatar_url)
-        `)
-        .eq('status', 'active')
-        .order('started_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (shiftError) {
-        console.warn('Error querying active shift:', shiftError.message);
-        setActiveShift(null);
-        return;
-      }
-
-      if (shiftData) {
-        // Fetch linked duty personnel
-        const { data: personnelData } = await supabase
-          .from('shift_duty_personnel')
-          .select(`
+          lead_officer:profiles!shifts_lead_officer_id_fkey(id, full_name, position_title, role, avatar_url),
+          shift_duty_personnel(
             id,
             profile_id,
             role_in_shift,
             is_lead,
             profile:profiles!shift_duty_personnel_profile_id_fkey(id, full_name, position_title, avatar_url, default_shift)
-          `)
-          .eq('shift_id', shiftData.id);
+          )
+        `
+        )
+        .eq('status', 'active')
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-        const mappedPersonnel: DutyPersonnel[] =
-          personnelData && personnelData.length > 0
-            ? personnelData.map((dp: any) => ({
-                id: dp.profile?.id || dp.profile_id,
-                name: dp.profile?.full_name || 'Monitoring Officer',
-                role: dp.role_in_shift || dp.profile?.position_title || 'Monitoring Officer',
-                avatarInitials: getInitials(dp.profile?.full_name || ''),
-                badgeNumber: `OPC-${(dp.profile?.id || dp.profile_id).slice(0, 4).toUpperCase()}`,
-                avatarUrl: dp.profile?.avatar_url,
-                defaultShift: dp.profile?.default_shift || 'Day Shift (Alpha)',
-              }))
-            : [];
+      if (error) {
+        console.warn('Error querying active shift:', error.message);
+        return { shift: null, ok: false };
+      }
 
-        const leadOfficerObj = shiftData.lead_officer as any;
-        let leadOfficerName = leadOfficerObj?.full_name;
-        let leadOfficerAvatar = leadOfficerObj?.avatar_url;
-        let leadOfficerRole = leadOfficerObj?.position_title || (leadOfficerObj?.role === 'admin' ? 'System Administrator' : 'Lead Officer');
+      const shiftData = data as SupabaseActiveShiftRow | null;
+      if (!shiftData) {
+        return { shift: null, ok: true };
+      }
 
-        if ((!leadOfficerName || !leadOfficerAvatar) && shiftData.lead_officer_id) {
-          const { data: leadProf } = await supabase
-            .from('profiles')
-            .select('full_name, avatar_url, position_title, role')
-            .eq('id', shiftData.lead_officer_id)
-            .maybeSingle();
-          if (leadProf) {
-            if (leadProf.full_name) leadOfficerName = leadProf.full_name;
-            if (leadProf.avatar_url) leadOfficerAvatar = leadProf.avatar_url;
-            if (leadProf.position_title) {
-              leadOfficerRole = leadProf.position_title;
-            } else if (leadProf.role === 'admin') {
-              leadOfficerRole = 'System Administrator';
-            }
+      const joinedPersonnel = shiftData.shift_duty_personnel || [];
+      const mappedPersonnel: DutyPersonnel[] = joinedPersonnel.map((dp) => {
+        const dpProfile = Array.isArray(dp.profile)
+          ? dp.profile[0]
+          : dp.profile;
+        const pid = dpProfile?.id || dp.profile_id;
+        return {
+          id: pid,
+          name: dpProfile?.full_name || 'Monitoring Officer',
+          role:
+            dp.role_in_shift ||
+            dpProfile?.position_title ||
+            'Monitoring Officer',
+          avatarInitials: getInitials(dpProfile?.full_name || ''),
+          badgeNumber: `OPC-${pid.slice(0, 4).toUpperCase()}`,
+          avatarUrl: dpProfile?.avatar_url,
+          defaultShift: dpProfile?.default_shift || 'Day Shift (Alpha)',
+        };
+      });
+
+      const leadRaw = shiftData.lead_officer;
+      const leadOfficerObj = Array.isArray(leadRaw) ? leadRaw[0] : leadRaw;
+      let leadOfficerName = leadOfficerObj?.full_name ?? undefined;
+      let leadOfficerAvatar = leadOfficerObj?.avatar_url ?? null;
+      let leadOfficerRole =
+        leadOfficerObj?.position_title ||
+        (leadOfficerObj?.role === 'admin'
+          ? 'System Administrator'
+          : 'Lead Officer');
+
+      if ((!leadOfficerName || !leadOfficerAvatar) && shiftData.lead_officer_id) {
+        const { data: leadProf } = await supabase
+          .from('profiles')
+          .select('full_name, avatar_url, position_title, role')
+          .eq('id', shiftData.lead_officer_id)
+          .maybeSingle();
+
+        const profRow = leadProf as SupabaseProfileRow | null;
+        if (profRow) {
+          if (profRow.full_name) leadOfficerName = profRow.full_name;
+          if (profRow.avatar_url) leadOfficerAvatar = profRow.avatar_url;
+          if (profRow.position_title) {
+            leadOfficerRole = profRow.position_title;
+          } else if (profRow.role === 'admin') {
+            leadOfficerRole = 'System Administrator';
           }
         }
+      }
 
-        const activeRec: ActiveShiftRecord = {
+      return {
+        shift: {
           id: shiftData.id,
           shift_label: shiftData.shift_label,
           shift_date: shiftData.shift_date,
@@ -688,110 +781,255 @@ export default function LogsPage() {
           start_monitoring_details: shiftData.start_monitoring_details,
           started_at: shiftData.started_at,
           personnel: mappedPersonnel,
-        };
-
-        setActiveShift(activeRec);
-        setSelectedPersonnelIds(mappedPersonnel.map((p) => p.id));
-      } else {
-        setActiveShift(null);
-      }
+        },
+        ok: true,
+      };
     } catch (err) {
       console.error('Error fetching active shift:', err);
-      setActiveShift(null);
+      return { shift: null, ok: false };
     }
   }, []);
 
-  // Fetch Operational Logs from public.shift_logs
-  const fetchLogs = useCallback(async (isBackground = false) => {
-    try {
-      if (!isBackground) setIsLoading(true);
-      const { data, error } = await supabase
-        .from('shift_logs')
-        .select(`
-          id,
-          shift_id,
-          title,
-          report_type_id,
-          report_type_name,
-          log_date,
-          log_time,
-          status,
-          description,
-          operator_id,
-          operator_name,
-          created_at,
-          shift:shifts(id, shift_label, shift_date, start_time, end_time, status, lead_officer_id)
-        `)
-        .order('created_at', { ascending: false });
+  const queryLogs = useCallback(
+    async (
+      officersSnapshot: DutyPersonnel[],
+      shiftSnapshot: ActiveShiftRecord | null
+    ): Promise<LogEntry[] | null> => {
+      try {
+        const { data, error } = await supabase
+          .from('shift_logs')
+          .select(
+            `
+            id,
+            shift_id,
+            title,
+            report_type_id,
+            report_type_name,
+            log_date,
+            log_time,
+            status,
+            description,
+            operator_id,
+            operator_name,
+            created_at,
+            shift:shifts(id, shift_label, shift_date, start_time, end_time, status, lead_officer_id)
+          `
+          )
+          .order('created_at', { ascending: false });
 
-      if (error) {
-        console.warn('Could not fetch shift_logs:', error.message);
-      } else if (data) {
-        const mappedLogs: LogEntry[] = data.map((item: any) => {
+        if (error || !data) {
+          if (error) console.warn('Could not fetch shift_logs:', error.message);
+          return null;
+        }
+
+        const officerById = new Map(officersSnapshot.map((o) => [o.id, o]));
+        const fallbackToday = new Date().toISOString().split('T')[0];
+
+        return (data as SupabaseShiftLogRow[]).map((item) => {
           const shiftObj = Array.isArray(item.shift) ? item.shift[0] : item.shift;
-          const operatorObj = availableOfficers.find((o) => o.id === item.operator_id);
+          const operatorObj = item.operator_id
+            ? officerById.get(item.operator_id)
+            : undefined;
+          const matchesActive = Boolean(
+            shiftSnapshot && shiftSnapshot.id === item.shift_id
+          );
 
           return {
             id: item.id,
             shift_id: item.shift_id,
             time: item.log_time || '1200H',
-            date: item.log_date || new Date().toISOString().split('T')[0],
-            status: (item.status as any) || 'Active',
+            date: item.log_date || fallbackToday,
+            status: (item.status as LogEntry['status']) || 'Active',
             title: item.title,
             reportType: item.report_type_name,
             reportTypeId: item.report_type_id,
-            description: item.description,
-            operator: item.operator_name || operatorObj?.name || 'Monitoring Officer',
+            description: item.description || '',
+            operator:
+              item.operator_name || operatorObj?.name || 'Monitoring Officer',
             operatorId: item.operator_id,
             operatorRole: operatorObj?.role || 'Monitoring Personnel',
-            operatorShift: operatorObj?.defaultShift || shiftObj?.shift_label || 'Day Shift (Alpha)',
-            shiftLabel: shiftObj?.shift_label || (activeShift && activeShift.id === item.shift_id ? activeShift.shift_label : 'Operational Shift'),
+            operatorShift:
+              operatorObj?.defaultShift ||
+              shiftObj?.shift_label ||
+              'Day Shift (Alpha)',
+            shiftLabel:
+              shiftObj?.shift_label ||
+              (matchesActive && shiftSnapshot
+                ? shiftSnapshot.shift_label
+                : 'Operational Shift'),
             shiftDate: shiftObj?.shift_date || item.log_date,
             shiftStartTime: shiftObj?.start_time || '06:00',
             shiftEndTime: shiftObj?.end_time || '14:00',
-            shiftStatus: shiftObj?.status || (activeShift && activeShift.id === item.shift_id ? 'active' : 'completed'),
-            createdAt: item.created_at,
+            shiftStatus:
+              shiftObj?.status || (matchesActive ? 'active' : 'completed'),
+            createdAt: item.created_at ?? undefined,
           };
         });
-        setLogs(mappedLogs);
+      } catch (err) {
+        console.error('Error fetching shift_logs:', err);
+        return null;
       }
-    } catch (err) {
-      console.error('Error fetching shift_logs:', err);
-    } finally {
-      if (!isBackground) setIsLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
+
+  const syncLogsScreen = useCallback(
+    async (options?: { isBackground?: boolean; includeMeta?: boolean }) => {
+      const isBackground = options?.isBackground ?? true;
+      const includeMeta = options?.includeMeta ?? false;
+
+      if (syncInFlightRef.current) {
+        return syncInFlightRef.current;
+      }
+
+      const run = async () => {
+        try {
+          if (!isBackground && mountedRef.current) {
+            setIsLoading(true);
+          }
+
+          let nextReportTypes = reportTypeOptionsRef.current;
+          let nextFilterOpts = filterOptionsRef.current;
+          let nextSchedules = shiftSchedulesRef.current;
+          let nextOfficers = officersRef.current;
+
+          const metaPromise = includeMeta
+            ? Promise.all([
+                queryReportTypes(),
+                queryShiftSchedules(),
+                queryAvailableOfficers(),
+              ])
+            : null;
+
+          const activeShiftPromise = queryActiveShift();
+
+          if (metaPromise) {
+            const [typesRes, schedulesRes, officersRes] = await metaPromise;
+            nextReportTypes = typesRes.modalOpts;
+            nextFilterOpts = typesRes.filterOpts;
+            nextSchedules = schedulesRes;
+            nextOfficers = officersRes;
+          }
+
+          const shiftRes = await activeShiftPromise;
+          const nextShift = shiftRes.ok ? shiftRes.shift : activeShiftRef.current;
+
+          const fetchedLogs = await queryLogs(nextOfficers, nextShift);
+          const nextLogs = fetchedLogs ?? logsRef.current;
+
+          const nextSignature = buildLogsSignature({
+            logs: nextLogs,
+            activeShift: nextShift,
+            availableOfficers: nextOfficers,
+            shiftSchedules: nextSchedules,
+            reportTypeOptionsList: nextReportTypes,
+          });
+
+          if (
+            nextSignature === signatureRef.current &&
+            signatureRef.current !== ''
+          ) {
+            patchCachedLogsScreenData({ fetchedAt: Date.now() });
+            return;
+          }
+
+          signatureRef.current = nextSignature;
+          officersRef.current = nextOfficers;
+          shiftSchedulesRef.current = nextSchedules;
+          reportTypeOptionsRef.current = nextReportTypes;
+          filterOptionsRef.current = nextFilterOpts;
+          activeShiftRef.current = nextShift;
+          logsRef.current = nextLogs;
+
+          persistCache({
+            logs: nextLogs,
+            activeShift: nextShift,
+            availableOfficers: nextOfficers,
+            shiftSchedules: nextSchedules,
+            reportTypeOptionsList: nextReportTypes,
+            filterDropdownOptions: nextFilterOpts,
+            signature: nextSignature,
+          });
+
+          if (!mountedRef.current) return;
+
+          setReportTypeOptionsList(nextReportTypes);
+          setFilterDropdownOptions(nextFilterOpts);
+          setShiftSchedules(nextSchedules);
+          setAvailableOfficers(nextOfficers);
+          setActiveShift(nextShift);
+          setLogs(nextLogs);
+
+          if (nextShift && !shiftModalOpenRef.current) {
+            setSelectedPersonnelIds(nextShift.personnel.map((p) => p.id));
+          }
+        } catch (err) {
+          console.error('Error syncing logs screen:', err);
+        } finally {
+          syncInFlightRef.current = null;
+          if (mountedRef.current) {
+            setIsLoading(false);
+          }
+        }
+      };
+
+      const promise = run();
+      syncInFlightRef.current = promise;
+      return promise;
+    },
+    [
+      persistCache,
+      queryActiveShift,
+      queryAvailableOfficers,
+      queryLogs,
+      queryReportTypes,
+      queryShiftSchedules,
+    ]
+  );
 
   // Helper to broadcast changes across all active tabs in realtime
-  const broadcastSync = useCallback((event: 'shift_logs_updated' | 'shift_state_updated' | 'archives_updated') => {
-    try {
-      supabase.channel('pdrrmo-mls-live-logs').send({
-        type: 'broadcast',
-        event,
-        payload: { timestamp: Date.now() },
-      });
-    } catch (err) {
-      console.warn('Realtime broadcast notice skipped:', err);
-    }
-  }, []);
+  const broadcastSync = useCallback(
+    (
+      event:
+        | 'shift_logs_updated'
+        | 'shift_state_updated'
+        | 'archives_updated'
+    ) => {
+      try {
+        void supabase.channel('pdrrmo-mls-live-logs').send({
+          type: 'broadcast',
+          event,
+          payload: { timestamp: Date.now() },
+        });
+      } catch (err) {
+        console.warn('Realtime broadcast notice skipped:', err);
+      }
+    },
+    []
+  );
 
-  // Initialize Data, Subscriptions & Background Polling Sync
+  // Initialize Data, Debounced Realtime Subscriptions & Visibility-Gated Polling
   useEffect(() => {
-    const initialize = async () => {
-      setIsLoading(true);
-      await Promise.all([
-        fetchReportTypes(),
-        fetchShiftSchedules(),
-        fetchAvailableOfficers(),
-        fetchActiveShift(),
-        fetchLogs(),
-      ]);
-      setIsLoading(false);
+    void syncLogsScreen({
+      isBackground: Boolean(initialCache),
+      includeMeta: true,
+    });
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingMeta = false;
+
+    const scheduleRefresh = (includeMeta = false) => {
+      if (document.hidden) return;
+      if (includeMeta) pendingMeta = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const shouldFetchMeta = pendingMeta;
+        pendingMeta = false;
+        debounceTimer = null;
+        void syncLogsScreen({ isBackground: true, includeMeta: shouldFetchMeta });
+      }, REALTIME_DEBOUNCE_MS);
     };
 
-    initialize();
-
-    // Set up Realtime channel with Postgres changes & WebSocket broadcasts
     const channel = supabase
       .channel('pdrrmo-mls-live-logs', {
         config: {
@@ -801,73 +1039,61 @@ export default function LogsPage() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shift_logs' },
-        () => {
-          fetchLogs(true);
-        }
+        () => scheduleRefresh(false)
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shifts' },
-        () => {
-          fetchActiveShift();
-          fetchLogs(true);
-        }
+        () => scheduleRefresh(false)
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shift_duty_personnel' },
-        () => {
-          fetchActiveShift();
-        }
+        () => scheduleRefresh(false)
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'report_types' },
-        () => {
-          fetchReportTypes();
-        }
+        () => scheduleRefresh(true)
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'profiles' },
-        () => {
-          fetchAvailableOfficers();
-        }
+        { event: 'INSERT', schema: 'public', table: 'profiles' },
+        () => scheduleRefresh(true)
       )
-      .on('broadcast', { event: 'shift_logs_updated' }, () => {
-        fetchLogs(true);
-      })
-      .on('broadcast', { event: 'shift_state_updated' }, () => {
-        fetchActiveShift();
-        fetchLogs(true);
-      })
-      .subscribe((status) => {
-        console.log('[Realtime logs-sync status]:', status);
-      });
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'profiles' },
+        () => scheduleRefresh(true)
+      )
+      .on('broadcast', { event: 'shift_logs_updated' }, () =>
+        scheduleRefresh(false)
+      )
+      .on('broadcast', { event: 'shift_state_updated' }, () =>
+        scheduleRefresh(false)
+      )
+      .subscribe();
 
-    // 4-second continuous background auto-sync so all users see data without manual refresh
     const syncInterval = setInterval(() => {
-      fetchLogs(true);
-      fetchActiveShift();
-    }, 4000);
+      if (!document.hidden) {
+        void syncLogsScreen({ isBackground: true, includeMeta: false });
+      }
+    }, FALLBACK_POLL_MS);
 
-    // Visibility / Tab focus sync
     const handleVisibilitySync = () => {
       if (!document.hidden) {
-        fetchLogs(true);
-        fetchActiveShift();
+        void syncLogsScreen({ isBackground: true, includeMeta: false });
       }
     };
     document.addEventListener('visibilitychange', handleVisibilitySync);
-    window.addEventListener('focus', handleVisibilitySync);
 
     return () => {
-      supabase.removeChannel(channel);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      void supabase.removeChannel(channel);
       clearInterval(syncInterval);
       document.removeEventListener('visibilitychange', handleVisibilitySync);
-      window.removeEventListener('focus', handleVisibilitySync);
     };
-  }, [fetchReportTypes, fetchShiftSchedules, fetchAvailableOfficers, fetchActiveShift, fetchLogs]);
+  }, [initialCache, syncLogsScreen]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -876,9 +1102,22 @@ export default function LogsPage() {
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
 
-  // Pagination State (10 items per page max)
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const handleSearchChange = useCallback((val: string) => {
+    setSearchQuery(val);
+    setCurrentPage(1);
+    patchCachedLogsScreenData({ searchQuery: val, currentPage: 1 });
+  }, []);
+
+  const handleReportTypeFilterChange = useCallback((val: string) => {
+    setReportTypeFilter(val);
+    setCurrentPage(1);
+    patchCachedLogsScreenData({ reportTypeFilter: val, currentPage: 1 });
+  }, []);
+
+  const handlePageChange = useCallback((page: number) => {
+    setCurrentPage(page);
+    patchCachedLogsScreenData({ currentPage: page });
+  }, []);
 
   // Filtered Logs with Debounced Search Query & Report Type Filtering
   const filteredLogs = useMemo(() => {
@@ -898,52 +1137,37 @@ export default function LogsPage() {
     });
   }, [logs, debouncedSearchQuery, reportTypeFilter]);
 
-  const totalLogsCount = filteredLogs.length;
-  const totalPages = Math.max(1, Math.ceil(totalLogsCount / itemsPerPage));
+  const totalFilteredCount = filteredLogs.length;
+  const totalPages = Math.max(1, Math.ceil(totalFilteredCount / ITEMS_PER_PAGE));
+  const effectivePage = Math.min(currentPage, totalPages);
 
-  // Reset page to 1 when filters or search query change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [debouncedSearchQuery, reportTypeFilter]);
-
-  // Adjust page if total pages shrank below current page
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
-
-  // Paginated subset of logs for the active page
   const paginatedLogs = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    return filteredLogs.slice(start, start + itemsPerPage);
-  }, [filteredLogs, currentPage, itemsPerPage]);
+    const start = (effectivePage - 1) * ITEMS_PER_PAGE;
+    return filteredLogs.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredLogs, effectivePage]);
 
   // ===========================================================================
   // 3. LOG CRUD HANDLERS
   // ===========================================================================
 
-  // Evaluates if a specific log can be edited or deleted (Only allowed during its active shift)
-  const canEditLog = useCallback((log: LogEntry | null): boolean => {
-    if (!log) return false;
-    // 1. Must have log write permissions
-    if (!canModifyLogs) return false;
-    // 2. An active shift must be currently running
-    if (!isShiftActive || !activeShift) return false;
-    // 3. User must be authorized for current active shift
-    if (!canEndCurrentShift) return false;
-    // 4. If log is linked to a shift, it must be the currently active shift
-    if (log.shift_id && activeShift.id !== log.shift_id) return false;
-    // 5. If shift status is completed or cancelled, editing is locked
-    if (log.shiftStatus === 'completed' || log.shiftStatus === 'cancelled') return false;
-    // 6. If log date does not match active shift date
-    if (log.date && activeShift.shift_date && log.date !== activeShift.shift_date) return false;
+  const canEditLog = useCallback(
+    (log: LogEntry | null): boolean => {
+      if (!log) return false;
+      if (!canModifyLogs) return false;
+      if (!isShiftActive || !activeShift) return false;
+      if (!canEndCurrentShift) return false;
+      if (log.shift_id && activeShift.id !== log.shift_id) return false;
+      if (log.shiftStatus === 'completed' || log.shiftStatus === 'cancelled')
+        return false;
+      if (log.date && activeShift.shift_date && log.date !== activeShift.shift_date)
+        return false;
 
-    return true;
-  }, [canModifyLogs, isShiftActive, activeShift, canEndCurrentShift]);
+      return true;
+    },
+    [canModifyLogs, isShiftActive, activeShift, canEndCurrentShift]
+  );
 
-  // Open Add Modal (Only allowed if shift is active and user is authorized)
-  const handleOpenAddModal = () => {
+  const handleOpenAddModal = useCallback(() => {
     if (!canAddLogs) return;
     setEditingLogId(null);
     setFormTitle('');
@@ -953,26 +1177,28 @@ export default function LogsPage() {
     setFormDescription('');
     setIsAddModalOpen(true);
     setActiveMenuId(null);
-  };
+  }, [canAddLogs, reportTypeOptionsList]);
 
-  // Open Edit Modal (Only allowed if log's shift is currently active)
-  const handleOpenEditModal = (log: LogEntry) => {
-    if (!canEditLog(log)) return;
-    setEditingLogId(log.id);
-    setFormTitle(log.title);
-    setFormReportType(log.reportType);
-    setFormDate(log.date);
-    setFormTime(log.time);
-    setFormDescription(log.description);
-    setIsAddModalOpen(true);
-    setActiveMenuId(null);
-    if (viewLog) setViewLog(null);
-  };
+  const handleOpenEditModal = useCallback(
+    (log: LogEntry) => {
+      if (!canEditLog(log)) return;
+      setEditingLogId(log.id);
+      setFormTitle(log.title);
+      setFormReportType(log.reportType);
+      setFormDate(log.date);
+      setFormTime(log.time);
+      setFormDescription(log.description);
+      setIsAddModalOpen(true);
+      setActiveMenuId(null);
+      setViewLog(null);
+    },
+    [canEditLog]
+  );
 
-  // Save Log (Create or Update to public.shift_logs)
   const handleSaveLog = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle.trim() || isSubmitting || !canModifyLogs || !canEndCurrentShift) return;
+    if (!formTitle.trim() || isSubmitting || !canModifyLogs || !canEndCurrentShift)
+      return;
 
     const isCreating = !editingLogId;
     try {
@@ -991,7 +1217,6 @@ export default function LogsPage() {
       const timeToSave = formTime.trim() || getMilitaryTime();
 
       if (editingLogId) {
-        // Update existing log
         const { error } = await supabase
           .from('shift_logs')
           .update({
@@ -1002,9 +1227,7 @@ export default function LogsPage() {
           })
           .eq('id', editingLogId);
 
-        if (error) {
-          throw error;
-        }
+        if (error) throw error;
 
         setShiftToast({
           type: 'start',
@@ -1014,7 +1237,6 @@ export default function LogsPage() {
         setIsAddModalOpen(false);
         setEditingLogId(null);
       } else {
-        // Insert new log
         const { error } = await supabase.from('shift_logs').insert({
           shift_id: activeShift?.id || null,
           title: titleToSave,
@@ -1027,9 +1249,7 @@ export default function LogsPage() {
           operator_name: operatorName,
         });
 
-        if (error) {
-          throw error;
-        }
+        if (error) throw error;
 
         setShiftToast({
           type: 'start',
@@ -1038,11 +1258,12 @@ export default function LogsPage() {
         });
       }
 
-      await fetchLogs(true);
+      await syncLogsScreen({ isBackground: true, includeMeta: false });
       broadcastSync('shift_logs_updated');
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('Error saving log:', err);
-      alert(`Could not save log entry: ${err.message || err}`);
+      alert(`Could not save log entry: ${msg}`);
     } finally {
       setIsSubmitting(false);
       setIsAddingLog(false);
@@ -1051,78 +1272,88 @@ export default function LogsPage() {
     }
   };
 
-  // Delete Log
-  const handleDeleteLog = async (id: string) => {
-    if (isSubmitting || !canModifyLogs || !canEndCurrentShift) return;
-    try {
-      setIsSubmitting(true);
-      const { error } = await supabase.from('shift_logs').delete().eq('id', id);
-      if (error) throw error;
+  const handleDeleteLog = useCallback(
+    async (id: string) => {
+      if (isSubmitting || !canModifyLogs || !canEndCurrentShift) return;
+      try {
+        setIsSubmitting(true);
+        const { error } = await supabase.from('shift_logs').delete().eq('id', id);
+        if (error) throw error;
 
-      await fetchLogs(true);
-      broadcastSync('shift_logs_updated');
-      if (viewLog?.id === id) setViewLog(null);
-      setActiveMenuId(null);
+        await syncLogsScreen({ isBackground: true, includeMeta: false });
+        broadcastSync('shift_logs_updated');
+        setViewLog((prev) => (prev?.id === id ? null : prev));
+        setActiveMenuId(null);
 
-      setShiftToast({
-        type: 'info',
-        message: 'Log Entry Deleted',
-        submessage: 'The record was removed from telemetry logs.',
-      });
-      setTimeout(() => setShiftToast(null), 3500);
-    } catch (err: any) {
-      console.error('Error deleting log:', err);
-      alert(`Could not delete log: ${err.message || err}`);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+        setShiftToast({
+          type: 'info',
+          message: 'Log Entry Deleted',
+          submessage: 'The record was removed from telemetry logs.',
+        });
+        setTimeout(() => setShiftToast(null), 3500);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('Error deleting log:', err);
+        alert(`Could not delete log: ${msg}`);
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [broadcastSync, canEndCurrentShift, canModifyLogs, isSubmitting, syncLogsScreen]
+  );
 
   // ===========================================================================
   // 4. SHIFT LIFECYCLE (START & END SHIFT)
   // ===========================================================================
 
-  // Shift Button Click Handler
-  const handleShiftButtonClick = () => {
+  const handleShiftButtonClick = useCallback(() => {
+    if (isLoading) return;
     if (!isShiftActive) {
-      // Must be eligible by schedule or admin to start
       if (!scheduleEligibility.isEligible) return;
 
-      // Auto pre-select all officers designated for this auto-fetched shift schedule
       const shiftTarget = activeShiftScheduleInfo.name.trim().toLowerCase();
       const matchedOfficers = availableOfficers.filter(
-        (o) => (o.defaultShift || 'Day Shift (Alpha)').trim().toLowerCase() === shiftTarget
+        (o) =>
+          (o.defaultShift || 'Day Shift (Alpha)').trim().toLowerCase() ===
+          shiftTarget
       );
-      const initialSelection = matchedOfficers.length > 0 ? matchedOfficers : availableOfficers;
+      const initialSelection =
+        matchedOfficers.length > 0 ? matchedOfficers : availableOfficers;
       setSelectedPersonnelIds(initialSelection.map((o) => o.id));
       setIsStartShiftModalOpen(true);
     } else {
-      // Must be designated on duty, lead, or admin to end shift
       if (!canEndCurrentShift) return;
 
       setIsIncidentReportOn(false);
       setIncidentDetails('');
       setIsEndShiftModalOpen(true);
     }
-  };
+  }, [
+    activeShiftScheduleInfo.name,
+    availableOfficers,
+    canEndCurrentShift,
+    isLoading,
+    isShiftActive,
+    scheduleEligibility.isEligible,
+  ]);
 
-  // Toggle Personnel Selection in Start Shift Modal
-  const handleTogglePersonnel = (id: string) => {
+  const handleTogglePersonnel = useCallback((id: string) => {
     setSelectedPersonnelIds((prev) =>
       prev.includes(id) ? prev.filter((pId) => pId !== id) : [...prev, id]
     );
-  };
+  }, []);
 
-  // Select / Clear All Designated Personnel
-  const handleSelectAllPersonnel = (selectAll: boolean) => {
-    if (selectAll) {
-      setSelectedPersonnelIds(designatedOfficers.map((p) => p.id));
-    } else {
-      setSelectedPersonnelIds([]);
-    }
-  };
+  const handleSelectAllPersonnel = useCallback(
+    (selectAll: boolean) => {
+      if (selectAll) {
+        setSelectedPersonnelIds(designatedOfficers.map((p) => p.id));
+      } else {
+        setSelectedPersonnelIds([]);
+      }
+    },
+    [designatedOfficers]
+  );
 
-  // Confirm Start Shift (Inserts public.shifts, public.shift_duty_personnel, and public.shift_logs)
   const handleConfirmStartShift = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedPersonnelIds.length === 0 || isSubmitting) return;
@@ -1140,7 +1371,6 @@ export default function LogsPage() {
       const timeFormatted = getMilitaryTime(now);
       const dateFormatted = now.toISOString().split('T')[0];
 
-      // 1. Insert into public.shifts
       const { data: newShift, error: shiftError } = await supabase
         .from('shifts')
         .insert({
@@ -1159,7 +1389,6 @@ export default function LogsPage() {
         throw new Error(shiftError?.message || 'Failed to start shift');
       }
 
-      // 2. Insert assigned personnel into public.shift_duty_personnel
       if (assignedPersonnel.length > 0) {
         const dutyPersonnelRows = assignedPersonnel.map((p) => ({
           shift_id: newShift.id,
@@ -1172,8 +1401,9 @@ export default function LogsPage() {
         await supabase.from('shift_duty_personnel').insert(dutyPersonnelRows);
       }
 
-      // 3. Insert Start/Assume Shift record into public.shift_logs
-      const personnelNames = assignedPersonnel.map((p) => `${p.name} (${p.role})`).join(', ');
+      const personnelNames = assignedPersonnel
+        .map((p) => `${p.name} (${p.role})`)
+        .join(', ');
       const cleanBriefing = stripEmojis(startShiftMonitoringDetails.trim());
       const descriptionContent = cleanBriefing
         ? `<p><strong>Active personnel assigned on duty:</strong> ${personnelNames}</p><br /><p><strong>Monitoring Details & Briefing:</strong></p>${cleanBriefing}`
@@ -1193,27 +1423,26 @@ export default function LogsPage() {
         operator_name: leadOfficerName,
       });
 
-      // Refresh states
-      await Promise.all([fetchActiveShift(), fetchLogs(true)]);
+      setIsStartShiftModalOpen(false);
+      await syncLogsScreen({ isBackground: true, includeMeta: false });
       broadcastSync('shift_state_updated');
       broadcastSync('shift_logs_updated');
 
-      setIsStartShiftModalOpen(false);
       setShiftToast({
         message: `${startShiftDutyTitle} Logged`,
         submessage: `${assignedPersonnel.length} personnel on duty. "Add Logs" is now enabled in real-time.`,
         type: 'start',
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('Error starting shift:', err);
-      alert(`Could not start shift: ${err.message || err}`);
+      alert(`Could not start shift: ${msg}`);
     } finally {
       setIsSubmitting(false);
       setTimeout(() => setShiftToast(null), 4000);
     }
   };
 
-  // Confirm End Shift (Updates public.shifts, adds end log, and compiles consolidated daily archive on last shift)
   const handleConfirmEndShift = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeShift || !canEndCurrentShift || isSubmitting) return;
@@ -1235,7 +1464,6 @@ export default function LogsPage() {
           ? `Incident Report: ${cleanIncidentDetails}`
           : 'Situation Remain Normal';
 
-      // 1. Update active public.shifts record to completed
       const { error: updateShiftError } = await supabase
         .from('shifts')
         .update({
@@ -1243,24 +1471,27 @@ export default function LogsPage() {
           end_time: timeFormatted,
           ended_at: now.toISOString(),
           end_shift_handover_status: situationText,
-          incident_report_details: isIncidentReportOn && cleanIncidentDetails ? cleanIncidentDetails : null,
+          incident_report_details:
+            isIncidentReportOn && cleanIncidentDetails
+              ? cleanIncidentDetails
+              : null,
           updated_at: now.toISOString(),
         })
         .eq('id', activeShift.id);
 
-      if (updateShiftError) {
-        throw updateShiftError;
-      }
+      if (updateShiftError) throw updateShiftError;
 
-      // 2. Insert End Shift Log into public.shift_logs
       const leadOfficerId = profile?.id || user?.id;
       const leadOfficerName = profile?.full_name || 'Monitoring Officer';
-      const leadOfficerRole = profile?.position_title || 'Lead Operations Officer';
+      const leadOfficerRole =
+        profile?.position_title || 'Lead Operations Officer';
 
       await supabase.from('shift_logs').insert({
         shift_id: activeShift.id,
         title: 'End of monitoringduty (List of personnel assigned on this shift)',
-        report_type_name: isIncidentReportOn ? 'Incident Report' : 'Roll Call Alert',
+        report_type_name: isIncidentReportOn
+          ? 'Incident Report'
+          : 'Roll Call Alert',
         log_date: dateFormatted,
         log_time: timeFormatted,
         status: isIncidentReportOn ? 'Warning' : 'Info',
@@ -1269,8 +1500,6 @@ export default function LogsPage() {
         operator_name: leadOfficerName,
       });
 
-      // 3. Automatic Operational Shift Archiving:
-      // Every end shift strictly generates its own single-shift operations PDF file scoped only to activeShift.id
       let archiveFilename: string | null = null;
 
       try {
@@ -1281,11 +1510,11 @@ export default function LogsPage() {
           .replace(/^-|-$/g, '');
         archiveFilename = `PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-${shiftSlug}.pdf`;
 
-        // Query duty personnel, logs, and profiles strictly for this shift
         const [dutyPersonnelRes, shiftLogsRes, profilesRes] = await Promise.all([
           supabase
             .from('shift_duty_personnel')
-            .select(`
+            .select(
+              `
               id,
               shift_id,
               profile_id,
@@ -1293,35 +1522,46 @@ export default function LogsPage() {
               is_lead,
               present_at_end,
               profile:profiles!shift_duty_personnel_profile_id_fkey(id, full_name, position_title, default_shift)
-            `)
+            `
+            )
             .eq('shift_id', activeShift.id),
           supabase
             .from('shift_logs')
             .select('*')
             .eq('shift_id', activeShift.id)
             .order('created_at', { ascending: true }),
-          supabase
-            .from('profiles')
-            .select('id, full_name, position_title'),
+          supabase.from('profiles').select('id, full_name, position_title'),
         ]);
 
-        const dutyPersonnel = dutyPersonnelRes.data || [];
-        const rawShiftLogs = shiftLogsRes.data || [];
-        const allProfiles = profilesRes.data || [];
+        const dutyPersonnel = (dutyPersonnelRes.data ||
+          []) as ArchiveDutyPersonnelRow[];
+        const rawShiftLogs = (shiftLogsRes.data || []) as ArchiveRawLogRow[];
+        const allProfiles = (profilesRes.data || []) as Array<{
+          id: string;
+          full_name: string | null;
+          position_title: string | null;
+        }>;
 
-        const profMap = new Map<string, any>();
+        const profMap = new Map<
+          string,
+          { full_name?: string | null; position_title?: string | null }
+        >();
         allProfiles.forEach((p) => {
           if (p.id) profMap.set(p.id.toLowerCase(), p);
           if (p.full_name) profMap.set(p.full_name.toLowerCase().trim(), p);
         });
         if (profile) {
           if (profile.id) profMap.set(profile.id.toLowerCase(), profile);
-          if (profile.full_name) profMap.set(profile.full_name.toLowerCase().trim(), profile);
+          if (profile.full_name)
+            profMap.set(profile.full_name.toLowerCase().trim(), profile);
         }
 
-        const shiftRoster = (dutyPersonnel || []).map((dp: any) => ({
+        const shiftRoster = dutyPersonnel.map((dp) => ({
           name: dp.profile?.full_name || 'Officer',
-          role: dp.role_in_shift || dp.profile?.position_title || 'Monitoring Officer',
+          role:
+            dp.role_in_shift ||
+            dp.profile?.position_title ||
+            'Monitoring Officer',
           badgeNumber: `OPC-${(dp.profile_id || '').slice(0, 4).toUpperCase()}`,
           presentAtEnd: dp.present_at_end !== false,
         }));
@@ -1340,13 +1580,20 @@ export default function LogsPage() {
           logsCount: rawShiftLogs.length,
         };
 
-        const sortedShiftLogs = sortLogsChronologically(rawShiftLogs, activeShift.start_time || '0800H');
+        const sortedShiftLogs = sortLogsChronologically(
+          rawShiftLogs,
+          activeShift.start_time || '0800H'
+        );
 
-        const allShiftLogs = sortedShiftLogs.map((l: any) => {
-          const opProf = profMap.get(l.operator_id?.toLowerCase()) || profMap.get(l.operator_name?.toLowerCase()?.trim());
+        const allShiftLogs = sortedShiftLogs.map((l) => {
+          const opProf =
+            (l.operator_id ? profMap.get(l.operator_id.toLowerCase()) : undefined) ||
+            (l.operator_name
+              ? profMap.get(l.operator_name.toLowerCase().trim())
+              : undefined);
           return {
             id: l.id,
-            shift_id: l.shift_id,
+            shift_id: l.shift_id ?? undefined,
             time: l.log_time,
             date: l.log_date,
             created_at: l.created_at,
@@ -1355,9 +1602,9 @@ export default function LogsPage() {
             reportType: l.report_type_name,
             description: l.description,
             operator: l.operator_name,
-            operator_id: l.operator_id,
+            operator_id: l.operator_id ?? undefined,
             operatorRole: opProf?.position_title || 'Monitoring',
-            signatureUrl: null, // Physical signing underline only
+            signatureUrl: null,
           };
         });
 
@@ -1381,10 +1628,13 @@ export default function LogsPage() {
           generatedAt: now.toISOString(),
         };
 
-        // Compute SHA-256 Hash across the single shift snapshot
         const payloadString = JSON.stringify(shiftSnapshot);
         let fileHash = 'sha256-' + Math.random().toString(36).substring(2, 15);
-        if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
+        if (
+          typeof window !== 'undefined' &&
+          window.crypto &&
+          window.crypto.subtle
+        ) {
           try {
             const enc = new TextEncoder().encode(payloadString);
             const hashBuf = await window.crypto.subtle.digest('SHA-256', enc);
@@ -1396,7 +1646,6 @@ export default function LogsPage() {
           }
         }
 
-        // 1. Generate official single-shift operations PDF (no digital signature images, underline for physical signing)
         const { blob: pdfBlob, sizeBytes: pdfSize } = await generateDailyLogsPDF({
           filename: archiveFilename,
           dailyReportDate: dateFormatted,
@@ -1412,9 +1661,6 @@ export default function LogsPage() {
           snapshotPayload: shiftSnapshot,
         });
 
-        console.log(`[Shift Logs] Official Single-Shift PDF generated: ${archiveFilename} (${pdfSize} bytes)`);
-
-        // 2. Upload official PDF to Supabase storage bucket 'archive-documents' (MLS folder)
         let storagePath = `MLS/${archiveFilename}`;
         let fileUrl = null;
         try {
@@ -1427,17 +1673,20 @@ export default function LogsPage() {
 
           if (!uploadErr && uploadData) {
             storagePath = uploadData.path;
-            const { data: urlData } = supabase.storage.from('archive-documents').getPublicUrl(storagePath);
+            const { data: urlData } = supabase.storage
+              .from('archive-documents')
+              .getPublicUrl(storagePath);
             fileUrl = urlData?.publicUrl || null;
-            console.log(`[Shift Logs] Uploaded to storage bucket: ${storagePath}`);
           } else if (uploadErr) {
             console.warn('Shift log storage upload notice:', uploadErr.message);
           }
         } catch (sErr) {
-          console.warn('Could not upload shift log PDF to storage bucket:', sErr);
+          console.warn(
+            'Could not upload shift log PDF to storage bucket:',
+            sErr
+          );
         }
 
-        // 3. Insert record into public.archives
         await supabase.from('archives').insert({
           filename: archiveFilename,
           category: 'log',
@@ -1463,12 +1712,10 @@ export default function LogsPage() {
         console.error('Archival process notice:', archErr);
       }
 
-      // Refresh states
-      await Promise.all([fetchActiveShift(), fetchLogs(true)]);
+      setIsEndShiftModalOpen(false);
+      await syncLogsScreen({ isBackground: true, includeMeta: false });
       broadcastSync('shift_state_updated');
       broadcastSync('shift_logs_updated');
-
-      setIsEndShiftModalOpen(false);
 
       if (archiveFilename) {
         setShiftToast({
@@ -1483,24 +1730,23 @@ export default function LogsPage() {
           type: 'info',
         });
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('Error ending shift:', err);
-      alert(`Could not complete shift handover: ${err.message || err}`);
+      alert(`Could not complete shift handover: ${msg}`);
     } finally {
       setIsSubmitting(false);
       setTimeout(() => setShiftToast(null), 5000);
     }
   };
 
-  // Open Add Category Modal
-  const handleOpenAddCategory = () => {
+  const handleOpenAddCategory = useCallback(() => {
     if (isLogsViewOnly || !canModifyLogs) return;
     setNewCategoryName('');
     setNewCategoryColor('#004AC6');
     setIsAddCategoryModalOpen(true);
-  };
+  }, [canModifyLogs, isLogsViewOnly]);
 
-  // Save New Category to public.report_types
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLogsViewOnly || !canModifyLogs) return;
@@ -1523,7 +1769,7 @@ export default function LogsPage() {
 
       if (error) throw error;
 
-      await fetchReportTypes();
+      await syncLogsScreen({ isBackground: true, includeMeta: true });
       broadcastSync('shift_logs_updated');
       setFormReportType(trimmedName);
       setIsAddCategoryModalOpen(false);
@@ -1534,67 +1780,13 @@ export default function LogsPage() {
         submessage: `"${trimmedName}" is now available in telemetry classifications.`,
       });
       setTimeout(() => setShiftToast(null), 3500);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('Error saving report type:', err);
-      alert(`Could not add report type: ${err.message || err}`);
+      alert(`Could not add report type: ${msg}`);
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  // Formatted Text Parser for Log Details View
-  const renderFormattedDescription = (content: string) => {
-    if (!content) return <span className="text-[#757680] italic">No operational remarks recorded.</span>;
-
-    if (content.includes('<') && content.includes('>')) {
-      return (
-        <div
-          className="text-sm text-[#1E293B] leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_ol]:my-2 [&_b]:font-bold [&_strong]:font-bold"
-          dangerouslySetInnerHTML={{ __html: content }}
-        />
-      );
-    }
-
-    const lines = content.split('\n');
-    return (
-      <div className="space-y-1 text-sm text-[#1E293B]">
-        {lines.map((line, lineIdx) => {
-          const isBullet = line.trim().startsWith('•');
-          const cleanLine = isBullet ? line.replace(/^\s*•\s*/, '') : line;
-          const segments = cleanLine.split(/(\*\*.*?\*\*)/g);
-
-          const renderedSegments = segments.map((seg, segIdx) => {
-            if (seg.startsWith('**') && seg.endsWith('**')) {
-              return (
-                <strong key={segIdx} className="font-bold text-[#1E293B]">
-                  {seg.slice(2, -2)}
-                </strong>
-              );
-            }
-            return seg;
-          });
-
-          if (isBullet) {
-            return (
-              <div key={lineIdx} className="flex items-start gap-2 pl-2">
-                <span className="text-[#004AC6] font-bold shrink-0 leading-relaxed">•</span>
-                <span className="leading-relaxed flex-1">{renderedSegments}</span>
-              </div>
-            );
-          }
-
-          if (line.trim() === '') {
-            return <div key={lineIdx} className="h-2" />;
-          }
-
-          return (
-            <p key={lineIdx} className="leading-relaxed">
-              {renderedSegments}
-            </p>
-          );
-        })}
-      </div>
-    );
   };
 
   return (
@@ -1613,127 +1805,13 @@ export default function LogsPage() {
           </p>
         </div>
 
-        {/* ========================================================================= */}
-        {/* 1. TOP STATS & CURRENT SHIFT SUPERVISOR CARDS */}
-        {/* ========================================================================= */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-6 items-stretch">
-          {/* Shift Supervisor / Started By Card */}
-          <div className="col-span-1 md:col-span-1 lg:col-span-7 bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm p-5 sm:p-6 flex flex-col justify-between relative overflow-hidden group">
-            <div
-              className={`absolute top-0 right-0 w-32 h-32 rounded-bl-[100px] -mr-6 -mt-6 pointer-events-none transition-transform duration-300 group-hover:scale-110 ${
-                isShiftActive ? 'bg-emerald-500/5' : 'bg-slate-500/5'
-              }`}
-            />
-
-            <div className="flex items-center justify-between gap-3 mb-4 relative z-10">
-              <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider flex items-center gap-1.5">
-                <Radio className="w-3.5 h-3.5 text-[#004AC6]" />
-                Current Shift Duty
-              </span>
-              {isShiftActive ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold shadow-2xs">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600" />
-                  </span>
-                  Active Shift
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-[#505F76] border border-slate-200 text-xs font-semibold">
-                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                  Shift Inactive
-                </span>
-              )}
-            </div>
-
-            <div className="relative z-10 flex items-center gap-4">
-              {isLoading ? (
-                <div className="flex items-center gap-3.5 w-full">
-                  <Skeleton variant="circular" className="w-12 h-12 shrink-0" />
-                  <div className="space-y-1.5 flex-1">
-                    <Skeleton variant="rounded" className="h-5 w-36" />
-                    <Skeleton variant="rounded" className="h-3.5 w-48" />
-                  </div>
-                </div>
-              ) : isShiftActive && activeShift ? (
-                <>
-                  <OfficerAvatar
-                    officer={{
-                      name: activeShift.lead_officer_name || 'Lead Officer',
-                      avatarUrl: activeShift.lead_officer_avatar,
-                      avatarInitials: getInitials(activeShift.lead_officer_name || ''),
-                    }}
-                    size="lg"
-                    className="ring-2 ring-emerald-500/20 shadow-xs shrink-0"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-base sm:text-lg font-bold text-[#1E293B] truncate">
-                        {activeShift.lead_officer_name || 'Lead Officer'}
-                      </h3>
-                      {activeShift.shift_label && (
-                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200 shadow-2xs shrink-0">
-                          {activeShift.shift_label}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5 text-xs text-[#505F76] font-medium mt-1">
-                      <Clock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                      <span>
-                        Started at <strong className="text-[#1E293B] font-semibold">{formatShiftStartTime(activeShift)}</strong>
-                      </span>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center border border-slate-200 shrink-0">
-                    <Clock className="w-5 h-5 text-slate-400" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
-                      No Operational Shift Active
-                    </h3>
-                    <p className="text-xs text-[#757680] mt-0.5">
-                      Duty session is currently inactive. Click &quot;Start Shift&quot; below to begin.
-                    </p>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Summary Stat Card */}
-          <div className="col-span-1 md:col-span-1 lg:col-span-5 bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm p-5 sm:p-6 flex flex-col justify-between relative overflow-hidden group">
-            <div className="absolute top-0 right-0 w-28 h-28 bg-[#004AC6]/5 rounded-bl-[100px] -mr-6 -mt-6 pointer-events-none transition-transform duration-300 group-hover:scale-110" />
-
-            <div className="flex justify-between items-start mb-3 relative z-10">
-              <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider flex items-center gap-1.5">
-                <BarChart3 className="w-3.5 h-3.5 text-[#004AC6]" />
-                Total Logs Recorded
-              </span>
-              <div className="w-8 h-8 rounded-full bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/15">
-                <BarChart3 className="w-4 h-4" />
-              </div>
-            </div>
-
-            <div className="relative z-10 flex items-baseline justify-between gap-3">
-              <div>
-                {isLoading ? (
-                  <Skeleton variant="rounded" className="h-9 w-20" />
-                ) : (
-                  <span className="text-3xl sm:text-4xl font-bold tracking-tight text-[#1E293B]">
-                    {logs.length}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200/60 px-2.5 py-0.5 rounded-full text-xs font-semibold">
-                <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Realtime Active</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* 1. Top Status & Summary Cards */}
+        <LogsStatusCards
+          isLoading={isLoading}
+          isShiftActive={isShiftActive}
+          activeShift={activeShift}
+          totalLogsCount={logs.length}
+        />
 
         {/* View-Only Banner */}
         <ViewOnlyNotice
@@ -1741,1276 +1819,128 @@ export default function LogsPage() {
           message="Shift duty start/end operations and new incident logging are disabled under View-Only clearance."
         />
 
-        {/* ========================================================================= */}
-        {/* 2. LOG TABLE SECTION */}
-        {/* ========================================================================= */}
-        <div className="bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm overflow-hidden flex flex-col">
-          {/* Table Header Actions & Toolbar */}
-          <div className="p-5 sm:p-6 border-b border-[#E2E8F0] flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4 bg-white">
-            {/* Search Input with Debounced Filtering */}
-            <div className="relative flex-1 sm:w-80">
-              <Search className="w-4 h-4 text-[#94A3B8] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search logs by title, type, or ID..."
-                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full py-2.5 pl-10 pr-10 text-xs sm:text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
-              />
-              {searchQuery !== debouncedSearchQuery ? (
-                <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#94A3B8] pointer-events-none">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#004AC6]" />
-                </div>
-              ) : searchQuery ? (
-                <button
-                  type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#94A3B8] hover:text-[#1E293B] transition-colors cursor-pointer"
-                  title="Clear search"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              ) : null}
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
-              {/* Filter Custom Dropdown */}
-              <div className="w-48 shrink-0">
-                <CustomDropdown
-                  options={filterDropdownOptions}
-                  value={reportTypeFilter}
-                  onChange={(val) => setReportTypeFilter(val)}
-                  leftIcon={<Filter className="w-3.5 h-3.5" />}
-                  size="sm"
-                  pill
-                />
-              </div>
-
-              {canModifyLogs && (
-                <>
-                  {/* Start / End Shift Button with Schedule Window Verification & Handover Authority Check */}
-                  <div className="relative group">
-                    <button
-                      type="button"
-                      onClick={handleShiftButtonClick}
-                      disabled={
-                        isShiftActive
-                          ? !canEndCurrentShift
-                          : !scheduleEligibility.isEligible
-                      }
-                      className={`flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-xs sm:text-sm font-bold transition-all shadow-sm border ${
-                        isShiftActive
-                          ? canEndCurrentShift
-                            ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 shadow-amber-500/20 cursor-pointer'
-                            : 'bg-slate-200 text-slate-400 border-slate-300 opacity-60 cursor-not-allowed shadow-none'
-                          : scheduleEligibility.isEligible
-                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-emerald-600/20 cursor-pointer'
-                          : 'bg-slate-200 text-slate-400 border-slate-300 opacity-60 cursor-not-allowed shadow-none'
-                      }`}
-                    >
-                      {isShiftActive ? (
-                        <>
-                          {canEndCurrentShift ? (
-                            <Square className="w-3.5 h-3.5 fill-white" />
-                          ) : (
-                            <Lock className="w-3.5 h-3.5 text-slate-400" />
-                          )}
-                          <span>End Shift</span>
-                        </>
-                      ) : (
-                        <>
-                          {scheduleEligibility.isEligible ? (
-                            <Play className="w-3.5 h-3.5 fill-white" />
-                          ) : (
-                            <Lock className="w-3.5 h-3.5 text-slate-400" />
-                          )}
-                          <span>Start Shift</span>
-                        </>
-                      )}
-                    </button>
-
-                    {/* Tooltip explaining disabled status if not eligible to start */}
-                    {!isShiftActive && !scheduleEligibility.isEligible && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30 min-w-[280px]">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-2 px-3 rounded-xl shadow-xl leading-relaxed text-center">
-                          <p className="font-bold text-amber-300 mb-0.5">Shift Window Inactive</p>
-                          <p className="text-slate-200">{scheduleEligibility.reason}</p>
-                        </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
-                      </div>
-                    )}
-
-                    {/* Tooltip explaining disabled status if not eligible to end someone else's shift */}
-                    {isShiftActive && !canEndCurrentShift && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30 min-w-[280px]">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-2 px-3 rounded-xl shadow-xl leading-relaxed text-center">
-                          <p className="font-bold text-amber-300 mb-0.5">Shift Handover Restricted</p>
-                          <p className="text-slate-200">
-                            Only personnel designated for {activeShift?.shift_label} or System Administrators can end this active shift.
-                          </p>
-                        </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Add Logs Primary Button (Disabled when shift is not started or user is not designated for this shift) */}
-                  <div className="relative group">
-                    <PrimaryButton
-                      size="md"
-                      pill
-                      disabled={!canAddLogs}
-                      onClick={handleOpenAddModal}
-                      leftIcon={!canAddLogs && isShiftActive && !canEndCurrentShift ? <Lock className="w-4 h-4 text-slate-400" /> : <Plus className="w-4 h-4" />}
-                      className={`shrink-0 ${
-                        !canAddLogs
-                          ? 'opacity-40 cursor-not-allowed bg-slate-300 text-slate-500 border-slate-300 shadow-none hover:bg-slate-300 pointer-events-auto'
-                          : ''
-                      }`}
-                    >
-                      Add Logs
-                    </PrimaryButton>
-
-                    {/* Tooltip when disabled: Shift not started */}
-                    {!isShiftActive && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-1.5 px-3 rounded-xl whitespace-nowrap shadow-lg">
-                          Please click "Start Shift" to enable adding logs
-                        </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
-                      </div>
-                    )}
-
-                    {/* Tooltip when disabled: View Only permission */}
-                    {isShiftActive && !canModifyLogs && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-1.5 px-3 rounded-xl whitespace-nowrap shadow-lg">
-                          You have view-only access to Operational Logs
-                        </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
-                      </div>
-                    )}
-
-                    {/* Tooltip when disabled: Not designated to active shift schedule */}
-                    {isShiftActive && canModifyLogs && !canEndCurrentShift && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30 min-w-[280px]">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-2 px-3 rounded-xl shadow-xl leading-relaxed text-center">
-                          <p className="font-bold text-amber-300 mb-0.5">Logging Restricted</p>
-                          <p className="text-slate-200">
-                            Only personnel designated for {activeShift?.shift_label} or System Administrators can record incident logs.
-                          </p>
-                        </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Data Table */}
-          <div className="overflow-x-auto min-h-[320px] pb-12">
-            <table className="w-full text-left border-collapse min-w-[700px]">
-              <thead>
-                <tr className="bg-[#F8FAFC]/80 border-b border-[#E2E8F0] text-[#505F76] text-xs uppercase tracking-wider font-semibold">
-                  <th className="py-3.5 px-6 w-28">Time</th>
-                  <th className="py-3.5 px-6">Title</th>
-                  <th className="py-3.5 px-6 w-56">Report Type</th>
-                  <th className="py-3.5 px-6 text-right w-28">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E2E8F0] text-sm font-medium text-[#1E293B]">
-                {/* 1. Newly Added Log In-Flight Skeleton Loader Row */}
-                {isAddingLog && (
-                  <tr className="bg-[#004AC6]/5 border-b border-[#004AC6]/20 transition-all duration-300 animate-pulse">
-                    <td className="py-4 px-6">
-                      <div className="h-4 w-16 bg-[#004AC6]/20 rounded-md" />
-                    </td>
-                    <td className="py-4 px-6">
-                      <div className="space-y-1.5 max-w-lg">
-                        <div className="h-4 w-3/4 bg-[#004AC6]/25 rounded-md" />
-                        <div className="h-3 w-1/2 bg-[#004AC6]/15 rounded-md" />
-                      </div>
-                    </td>
-                    <td className="py-4 px-6">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full bg-[#004AC6]/40 animate-ping" />
-                        <div className="h-4 w-28 bg-[#004AC6]/20 rounded-md" />
-                      </div>
-                    </td>
-                    <td className="py-4 px-6 text-right">
-                      <div className="w-8 h-8 rounded-full bg-[#004AC6]/10 inline-flex items-center justify-center">
-                        <Loader2 className="w-4 h-4 text-[#004AC6] animate-spin" />
-                      </div>
-                    </td>
-                  </tr>
-                )}
-
-                {/* 2. Initial Full Table Loading Skeleton */}
-                {isLoading ? (
-                  Array.from({ length: 5 }).map((_, idx) => (
-                    <tr key={idx}>
-                      <td className="py-4 px-6"><Skeleton variant="rounded" className="h-4 w-16" /></td>
-                      <td className="py-4 px-6"><Skeleton variant="rounded" className="h-4 w-64" /></td>
-                      <td className="py-4 px-6"><Skeleton variant="rounded" className="h-4 w-32" /></td>
-                      <td className="py-4 px-6 text-right"><Skeleton variant="circular" className="w-7 h-7 inline-block" /></td>
-                    </tr>
-                  ))
-                ) : filteredLogs.length === 0 && !isAddingLog ? (
-                  <tr>
-                    <td colSpan={4} className="py-12 text-center text-[#757680]">
-                      <div className="flex flex-col items-center justify-center gap-2">
-                        <FileText className="w-8 h-8 text-[#94A3B8] opacity-50" />
-                        <p className="text-sm font-semibold text-[#505F76]">No logs found</p>
-                        <p className="text-xs text-[#94A3B8]">
-                          {isShiftActive
-                            ? 'Start logging incident telemetry or adjust your search filter.'
-                            : 'Click "Start Shift" above to initiate duty and log entries.'}
-                        </p>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  paginatedLogs.map((log) => (
-                    <tr
-                      key={log.id}
-                      className={`hover:bg-slate-50/80 transition-colors group relative ${activeMenuId === log.id ? 'z-50 relative' : 'z-0'}`}
-                    >
-                      {/* Time */}
-                      <td className="py-4 px-6 text-[#505F76] font-mono text-xs font-semibold">
-                        {log.time}
-                      </td>
-
-                      {/* Title */}
-                      <td className="py-4 px-6">
-                        <span
-                          onClick={() => setViewLog(log)}
-                          className="font-semibold text-[#1E293B] hover:text-[#004AC6] transition-colors cursor-pointer block max-w-xl truncate"
-                        >
-                          {log.title}
-                        </span>
-                      </td>
-
-                      {/* Report Type */}
-                      <td className="py-4 px-6 text-[#505F76] text-xs font-semibold">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="w-2 h-2 rounded-full shrink-0"
-                            style={{
-                              backgroundColor:
-                                reportTypeOptionsList.find((r) => r.value === log.reportType)?.dotColor || '#004AC6',
-                            }}
-                          />
-                          <span className="truncate">{log.reportType}</span>
-                        </div>
-                      </td>
-
-                      {/* Actions: Three Dots Menu */}
-                      <td className={`py-4 px-6 text-right ${activeMenuId === log.id ? 'relative z-50' : ''}`}>
-                        <div className="relative inline-block text-left">
-                          <button
-                            type="button"
-                            title="Log Actions"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActiveMenuId(activeMenuId === log.id ? null : log.id);
-                            }}
-                            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
-                              activeMenuId === log.id
-                                ? 'bg-slate-200 text-[#1E293B]'
-                                : 'text-[#757680] hover:text-[#1E293B] hover:bg-slate-100'
-                            }`}
-                          >
-                            <MoreVertical className="w-4 h-4" />
-                          </button>
-
-                          {/* Popover Dropdown (Floating on top of all rows) */}
-                          <AnimatePresence>
-                            {activeMenuId === log.id && (
-                              <motion.div
-                                initial={{ opacity: 0, scale: 0.95, y: 4 }}
-                                animate={{ opacity: 1, scale: 1, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.95, y: 4 }}
-                                transition={{ duration: 0.12 }}
-                                onClick={(e) => e.stopPropagation()}
-                                className="absolute right-0 top-full mt-1.5 z-[100] w-40 bg-white/95 backdrop-blur-md border border-[#E2E8F0] rounded-2xl shadow-2xl shadow-slate-900/15 p-1.5 space-y-1 text-left ring-1 ring-black/10"
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setViewLog(log);
-                                    setActiveMenuId(null);
-                                  }}
-                                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-[#1E293B] hover:bg-[#F8FAFC] rounded-xl transition-colors cursor-pointer"
-                                >
-                                  <Eye className="w-3.5 h-3.5 text-[#004AC6]" />
-                                  <span>View Details</span>
-                                </button>
-                                {canEditLog(log) && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenEditModal(log)}
-                                      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-[#1E293B] hover:bg-[#F8FAFC] rounded-xl transition-colors cursor-pointer"
-                                    >
-                                      <Edit2 className="w-3.5 h-3.5 text-amber-600" />
-                                      <span>Edit Log</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteLog(log.id)}
-                                      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                                      <span>Delete</span>
-                                    </button>
-                                  </>
-                                )}
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pagination Footer */}
-          <div className="p-4 sm:p-5 border-t border-[#E2E8F0] bg-[#F8FAFC]/50 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-[#757680]">
-            <span className="font-medium">
-              Showing <span className="font-bold text-[#1E293B]">{totalLogsCount > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0}</span> to{' '}
-              <span className="font-bold text-[#1E293B]">{Math.min(currentPage * itemsPerPage, totalLogsCount)}</span> of{' '}
-              <span className="font-bold text-[#1E293B]">{totalLogsCount}</span> entries
-            </span>
-
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                className="w-8 h-8 rounded-full border border-[#E2E8F0] bg-white flex items-center justify-center text-[#505F76] hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-2xs"
-                title="Previous page"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-
-              {Array.from({ length: totalPages }).map((_, i) => {
-                const pageNum = i + 1;
-                // Show first, last, current, and adjacent pages
-                if (
-                  totalPages <= 7 ||
-                  pageNum === 1 ||
-                  pageNum === totalPages ||
-                  Math.abs(pageNum - currentPage) <= 1
-                ) {
-                  return (
-                    <button
-                      key={pageNum}
-                      type="button"
-                      onClick={() => setCurrentPage(pageNum)}
-                      className={`w-8 h-8 rounded-full text-xs font-semibold flex items-center justify-center transition-all cursor-pointer ${
-                        currentPage === pageNum
-                          ? 'bg-[#004AC6] text-white shadow-xs font-bold'
-                          : 'border border-[#E2E8F0] bg-white text-[#505F76] hover:bg-slate-50 shadow-2xs'
-                      }`}
-                    >
-                      {pageNum}
-                    </button>
-                  );
-                } else if (
-                  (pageNum === 2 && currentPage > 3) ||
-                  (pageNum === totalPages - 1 && currentPage < totalPages - 2)
-                ) {
-                  return (
-                    <span key={pageNum} className="px-1 text-slate-400 font-bold">
-                      ...
-                    </span>
-                  );
-                }
-                return null;
-              })}
-
-              <button
-                type="button"
-                disabled={currentPage === totalPages || totalPages === 0}
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                className="w-8 h-8 rounded-full border border-[#E2E8F0] bg-white flex items-center justify-center text-[#505F76] hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer shadow-2xs"
-                title="Next page"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        </div>
+        {/* 2. Search Toolbar, Shift Action Button, Data Table & Pagination */}
+        <LogsTableSection
+          isLoading={isLoading}
+          isAddingLog={isAddingLog}
+          searchQuery={searchQuery}
+          debouncedSearchQuery={debouncedSearchQuery}
+          onSearchChange={handleSearchChange}
+          filterDropdownOptions={filterDropdownOptions}
+          reportTypeFilter={reportTypeFilter}
+          onReportTypeFilterChange={handleReportTypeFilterChange}
+          reportTypeOptionsList={reportTypeOptionsList}
+          canModifyLogs={canModifyLogs}
+          isShiftActive={isShiftActive}
+          activeShift={activeShift}
+          canEndCurrentShift={canEndCurrentShift}
+          canAddLogs={canAddLogs}
+          scheduleEligibility={scheduleEligibility}
+          onShiftButtonClick={handleShiftButtonClick}
+          onOpenAddModal={handleOpenAddModal}
+          paginatedLogs={paginatedLogs}
+          filteredLogsCount={totalFilteredCount}
+          currentPage={effectivePage}
+          totalPages={totalPages}
+          itemsPerPage={ITEMS_PER_PAGE}
+          onPageChange={handlePageChange}
+          activeMenuId={activeMenuId}
+          onToggleMenu={setActiveMenuId}
+          onSelectLog={setViewLog}
+          onEditLog={handleOpenEditModal}
+          onDeleteLog={handleDeleteLog}
+          canEditLog={canEditLog}
+        />
       </div>
 
-      {/* ========================================================================= */}
-      {/* 3. MODAL: START SHIFT (Personnel Checklist + Visual Rich Text Editor) */}
-      {/* ========================================================================= */}
+      {/* 3. Lazy-loaded Modals & Drawers */}
       <AnimatePresence>
         {isStartShiftModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => !isSubmitting && setIsStartShiftModalOpen(false)}
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-
-            {/* Modal Dialog */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              transition={{ duration: 0.2 }}
-              className="relative bg-white border border-[#E2E8F0] rounded-3xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden z-10"
-            >
-              {/* Header */}
-              <div className="px-6 py-5 border-b border-[#E2E8F0] bg-[#F8FAFC]/80 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center border border-emerald-200 shrink-0">
-                    <Users className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h2 className="text-base sm:text-lg font-bold text-[#1E293B] leading-tight">
-                        {startShiftDutyTitle}
-                      </h2>
-                      <span className="text-[11px] font-bold text-[#004AC6] bg-blue-50 border border-[#004AC6]/20 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                        <Clock className="w-3 h-3 text-[#004AC6]" />
-                        <span>{activeShiftScheduleInfo.name}</span>
-                        {activeShiftScheduleInfo.time && (
-                          <span className="text-blue-500 font-mono text-[10px]">
-                            ({activeShiftScheduleInfo.time})
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[#757680] mt-0.5">
-                      Auto-fetched active personnel designated for {activeShiftScheduleInfo.name}.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsStartShiftModalOpen(false)}
-                  disabled={isSubmitting}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/60 transition-colors cursor-pointer shrink-0"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Form Content */}
-              <form onSubmit={handleConfirmStartShift} className="flex flex-col">
-                <div className="p-6 space-y-5 max-h-[62vh] overflow-y-auto custom-scrollbar">
-                  {/* Quick Action Toolbar */}
-                  <div className="flex items-center justify-between bg-slate-50 border border-[#E2E8F0] rounded-2xl px-4 py-2.5">
-                    <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider">
-                      Duty Personnel Roster ({selectedPersonnelIds.length} of {designatedOfficers.length} Selected)
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectAllPersonnel(true)}
-                        className="text-xs font-bold text-[#004AC6] hover:underline cursor-pointer"
-                      >
-                        Select All
-                      </button>
-                      <span className="text-slate-300 text-xs">•</span>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectAllPersonnel(false)}
-                        className="text-xs font-bold text-[#757680] hover:underline cursor-pointer"
-                      >
-                        Clear All
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Checklist of Personnel - Auto-fetched designated schedule personnel */}
-                  <div className="space-y-2.5">
-                    {designatedOfficers.length === 0 ? (
-                      <div className="p-6 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
-                        <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                        <p className="text-xs font-bold text-slate-600">
-                          No personnel designated for {activeShiftScheduleInfo.name}
-                        </p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          Assign officers to this shift in User Management (/users).
-                        </p>
-                      </div>
-                    ) : (
-                      designatedOfficers.map((person) => {
-                        const isSelected = selectedPersonnelIds.includes(person.id);
-
-                        return (
-                          <div
-                            key={person.id}
-                            onClick={() => handleTogglePersonnel(person.id)}
-                            className={`flex items-center justify-between p-3.5 rounded-2xl border transition-all cursor-pointer select-none ${
-                              isSelected
-                                ? 'bg-blue-50/50 border-[#004AC6]/30 shadow-2xs ring-1 ring-[#004AC6]/10'
-                                : 'bg-white border-[#E2E8F0] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'
-                            }`}
-                          >
-                            <div className="flex items-center gap-3.5">
-                              <CheckboxInput
-                                checked={isSelected}
-                                onChange={() => handleTogglePersonnel(person.id)}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                              <div className="w-9 h-9 rounded-full bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center font-bold text-xs border border-[#004AC6]/15 shrink-0">
-                                {person.avatarInitials}
-                              </div>
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <h4 className="text-sm font-bold text-[#1E293B]">{person.name}</h4>
-                                  {person.defaultShift && (
-                                    <span className="text-[10px] font-medium text-blue-700 bg-blue-50 border border-blue-100 px-1.5 py-0.2 rounded">
-                                      {person.defaultShift}
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-[#757680] font-medium">{person.role}</p>
-                              </div>
-                            </div>
-
-                            <span className="text-[11px] font-mono font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-[#505F76] border border-slate-200">
-                              {person.badgeNumber}
-                            </span>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-
-                  {/* Monitoring Details with Visual WYSIWYG Rich Text Editor */}
-                  <div className="pt-3 border-t border-slate-200">
-                    <RichTextEditor
-                      label="Monitoring Details & Briefing"
-                      value={startShiftMonitoringDetails}
-                      onChange={(html) => setStartShiftMonitoringDetails(html)}
-                      placeholder="Enter shift briefing notes, monitoring priorities, or telemetric instructions..."
-                      minHeight="110px"
-                    />
-                  </div>
-                </div>
-
-                {/* Footer */}
-                <div className="px-6 py-4.5 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 flex items-center justify-between gap-3">
-                  <SecondaryButton
-                    type="button"
-                    size="md"
-                    pill
-                    disabled={isSubmitting}
-                    onClick={() => setIsStartShiftModalOpen(false)}
-                  >
-                    Cancel
-                  </SecondaryButton>
-
-                  <PrimaryButton
-                    type="submit"
-                    size="md"
-                    pill
-                    disabled={selectedPersonnelIds.length === 0 || isSubmitting}
-                    leftIcon={isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-white" />}
-                  >
-                    {isSubmitting
-                      ? (isStartingFirstShift ? 'Starting Shift...' : 'Assuming Duty...')
-                      : `Confirm ${isStartingFirstShift ? 'Start Shift' : 'Assume Duty'} (${selectedPersonnelIds.length})`}
-                  </PrimaryButton>
-                </div>
-              </form>
-            </motion.div>
-          </div>
+          <StartShiftModal
+            isSubmitting={isSubmitting}
+            startShiftDutyTitle={startShiftDutyTitle}
+            isStartingFirstShift={isStartingFirstShift}
+            activeShiftScheduleInfo={activeShiftScheduleInfo}
+            designatedOfficers={designatedOfficers}
+            selectedPersonnelIds={selectedPersonnelIds}
+            startShiftMonitoringDetails={startShiftMonitoringDetails}
+            onClose={() => setIsStartShiftModalOpen(false)}
+            onSelectAll={handleSelectAllPersonnel}
+            onTogglePersonnel={handleTogglePersonnel}
+            onMonitoringDetailsChange={setStartShiftMonitoringDetails}
+            onSubmit={handleConfirmStartShift}
+          />
         )}
       </AnimatePresence>
 
-      {/* ========================================================================= */}
-      {/* 4. MODAL: END SHIFT (Present Personnel & Incident Report Toggle) */}
-      {/* ========================================================================= */}
       <AnimatePresence>
         {isEndShiftModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => !isSubmitting && setIsEndShiftModalOpen(false)}
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-
-            {/* Modal Dialog */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              transition={{ duration: 0.2 }}
-              className="relative bg-white border border-[#E2E8F0] rounded-3xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden z-10"
-            >
-              {/* Header */}
-              <div className="px-6 py-5 border-b border-[#E2E8F0] bg-[#F8FAFC]/80 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-800 flex items-center justify-center border border-amber-200 shrink-0">
-                    <ShieldAlert className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h2 className="text-base sm:text-lg font-bold text-[#1E293B] leading-tight">
-                      End of monitoringduty (List of personnel assigned on this shift)
-                    </h2>
-                    <p className="text-xs text-[#757680] mt-0.5">
-                      Verify present shift personnel and report incident status before closing shift.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsEndShiftModalOpen(false)}
-                  disabled={isSubmitting}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/60 transition-colors cursor-pointer shrink-0"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Form Content */}
-              <form onSubmit={handleConfirmEndShift} className="flex flex-col">
-                <div className="p-6 space-y-5 max-h-[60vh] overflow-y-auto custom-scrollbar">
-                  {/* Section 1: Present Personnel in this shift */}
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wider flex items-center gap-1.5">
-                        <Users className="w-3.5 h-3.5 text-[#004AC6]" />
-                        Present Personnel on Duty ({activeShift?.personnel.length || selectedPersonnelIds.length})
-                      </span>
-                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                        Shift Verified
-                      </span>
-                    </div>
-
-                    <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-3 space-y-2">
-                      {(activeShift?.personnel && activeShift.personnel.length > 0
-                        ? activeShift.personnel
-                        : availableOfficers.filter((p) => selectedPersonnelIds.includes(p.id))
-                      ).map((person) => (
-                        <div
-                          key={person.id}
-                          className="flex items-center justify-between p-2.5 rounded-xl bg-white border border-[#E2E8F0] shadow-2xs"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold text-xs border border-emerald-200 shrink-0">
-                              {person.avatarInitials}
-                            </div>
-                            <div>
-                              <span className="text-xs font-bold text-[#1E293B] block">
-                                {person.name}
-                              </span>
-                              <span className="text-[11px] text-[#757680]">{person.role}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1 text-[11px] font-semibold text-emerald-600 bg-emerald-50/80 px-2 py-0.5 rounded-full">
-                            <Check className="w-3 h-3" /> Present
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Section 2: Automatic Single-Shift Operations Archive Notice */}
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4.5 space-y-2.5">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-xl bg-blue-50 text-[#004AC6] flex items-center justify-center border border-blue-100 shrink-0">
-                        <ArchiveIcon className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="text-sm font-bold text-[#1E293B]">Automatic Shift Operations Archive</h4>
-                          <span className="text-[10px] font-bold text-[#004AC6] bg-blue-50 border border-[#004AC6]/20 px-2 py-0.5 rounded-full">
-                            {activeShift?.shift_label || 'Current Shift'}
-                          </span>
-                        </div>
-                        <p className="text-xs text-[#757680] mt-0.5">
-                          Ending this shift automatically generates a certified <strong>{activeShift?.shift_label || 'Current Shift'}</strong> operations PDF document in <strong>Archives</strong>, formatted with signature fields ready for in-person physical signing.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="p-2.5 bg-blue-50/70 border border-blue-200/80 rounded-xl text-xs text-[#004AC6] flex items-center gap-2">
-                      <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-[#004AC6]" />
-                      <span>
-                        <strong>Shift-Specific Record:</strong> Personnel roster, timestamps, and Area of Responsibility logs for this shift will be sealed with a SHA-256 integrity hash and securely uploaded to the archive repository.
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Section 3: Incident Report Toggle */}
-                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4.5 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h4 className="text-sm font-bold text-[#1E293B]">Incident Report</h4>
-                        <p className="text-xs text-[#757680] mt-0.5">
-                          Toggle ON if incidents occurred during shift duty.
-                        </p>
-                      </div>
-
-                      <ToggleButton
-                        checked={isIncidentReportOn}
-                        onChange={(checked) => setIsIncidentReportOn(checked)}
-                      />
-                    </div>
-
-                    {/* Conditional Input: Details input if ON, default "Situation Remain Normal" if OFF */}
-                    <AnimatePresence mode="wait">
-                      {!isIncidentReportOn ? (
-                        <motion.div
-                          key="normal-state"
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl p-3.5 flex items-center gap-3"
-                        >
-                          <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                            <ShieldCheck className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <span className="text-xs font-bold text-emerald-800 uppercase tracking-wide block">
-                              Handover Status
-                            </span>
-                            <p className="text-sm font-bold text-emerald-900">
-                              Situation Remain Normal
-                            </p>
-                          </div>
-                        </motion.div>
-                      ) : (
-                        <motion.div
-                          key="incident-input"
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="space-y-1.5 pt-2"
-                        >
-                          <label className="text-xs font-semibold text-rose-700 uppercase tracking-wide flex items-center gap-1.5">
-                            <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-                            Incident Report Details (Required)
-                          </label>
-                          <textarea
-                            rows={4}
-                            required={isIncidentReportOn}
-                            value={incidentDetails}
-                            onChange={(e) => setIncidentDetails(stripEmojis(e.target.value))}
-                            placeholder="Enter details of incidents encountered, dispatch responses, ongoing advisories, or critical notes for the incoming shift..."
-                            className="w-full bg-white border border-rose-200 rounded-2xl p-3.5 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-500/15 transition-all resize-none leading-relaxed"
-                          />
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                </div>
-
-                {/* Footer */}
-                <div className="px-6 py-4.5 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 flex items-center justify-between gap-3">
-                  <SecondaryButton
-                    type="button"
-                    size="md"
-                    pill
-                    disabled={isSubmitting}
-                    onClick={() => setIsEndShiftModalOpen(false)}
-                  >
-                    Cancel
-                  </SecondaryButton>
-
-                  <PrimaryButton
-                    type="submit"
-                    size="md"
-                    pill
-                    disabled={(isIncidentReportOn && !incidentDetails.trim()) || isSubmitting}
-                    leftIcon={isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4 fill-white" />}
-                    className="bg-amber-600 hover:bg-amber-700 border-amber-700"
-                  >
-                    {isSubmitting ? 'Closing Shift...' : 'Confirm End Shift'}
-                  </PrimaryButton>
-                </div>
-              </form>
-            </motion.div>
-          </div>
+          <EndShiftModal
+            isSubmitting={isSubmitting}
+            activeShift={activeShift}
+            availableOfficers={availableOfficers}
+            selectedPersonnelIds={selectedPersonnelIds}
+            isIncidentReportOn={isIncidentReportOn}
+            incidentDetails={incidentDetails}
+            onClose={() => setIsEndShiftModalOpen(false)}
+            onToggleIncidentReport={setIsIncidentReportOn}
+            onIncidentDetailsChange={setIncidentDetails}
+            onSubmit={handleConfirmEndShift}
+          />
         )}
       </AnimatePresence>
 
-      {/* ========================================================================= */}
-      {/* 5. SLIDE-OVER DRAWER / MODAL: ADD / EDIT LOG */}
-      {/* ========================================================================= */}
       <AnimatePresence>
         {isAddModalOpen && (
-          <div className="fixed inset-0 z-50 flex justify-end">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => !isSubmitting && setIsAddModalOpen(false)}
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-
-            {/* Slide-over Drawer Panel */}
-            <motion.aside
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-              className="relative w-full sm:w-[500px] bg-white h-full shadow-2xl border-l border-[#E2E8F0] flex flex-col justify-between overflow-hidden z-10"
-            >
-              {/* Header */}
-              <div className="p-6 border-b border-[#E2E8F0] bg-[#F8FAFC]/80 flex justify-between items-center sticky top-0 z-10 backdrop-blur-sm">
-                <div>
-                  <h2 className="text-lg font-bold text-[#1E293B]">
-                    {editingLogId ? 'Edit Incident Log' : 'Add New Log'}
-                  </h2>
-                  <p className="text-xs text-[#757680]">Enter details for the environmental event</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  disabled={isSubmitting}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/60 transition-colors cursor-pointer"
-                  aria-label="Close drawer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Form Content */}
-              <form onSubmit={handleSaveLog} className="flex-1 flex flex-col justify-between overflow-hidden">
-                <div className="p-6 overflow-y-auto space-y-5 flex-1">
-                  {/* Event Title */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                      Event Title
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={formTitle}
-                      onChange={(e) => setFormTitle(stripEmojis(e.target.value))}
-                      placeholder="e.g., Seismic Activity: Magnitude 6.2 Detected"
-                      className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full py-2.5 px-4 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
-                    />
-                  </div>
-
-                  {/* Report Type Dropdown */}
-                  <div>
-                    <CustomDropdown
-                      label="Report Type"
-                      labelRight={
-                        <button
-                          type="button"
-                          onClick={handleOpenAddCategory}
-                          className="text-xs font-semibold text-[#004AC6] hover:text-[#003594] flex items-center gap-1 transition-colors group cursor-pointer"
-                        >
-                          <PlusCircle className="w-3.5 h-3.5 group-hover:scale-110 transition-transform text-[#004AC6]" />
-                          <span>Add Category</span>
-                        </button>
-                      }
-                      options={reportTypeOptionsList}
-                      value={formReportType}
-                      onChange={(val) => setFormReportType(val)}
-                      size="md"
-                      pill
-                    />
-                  </div>
-
-                  {/* Timestamp: Date & Time (Disabled) */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                      Timestamp
-                    </label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="relative">
-                        <input
-                          type="text"
-                          disabled
-                          value={formDate}
-                          className="w-full bg-slate-100 border border-[#E2E8F0] rounded-full py-2.5 pl-4 pr-9 text-sm text-[#505F76] opacity-75 cursor-not-allowed focus:outline-none select-none"
-                        />
-                        <Calendar className="w-4 h-4 text-[#94A3B8] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      </div>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          disabled
-                          value={formTime}
-                          className="w-full bg-slate-100 border border-[#E2E8F0] rounded-full py-2.5 pl-4 pr-9 text-sm text-[#505F76] font-mono opacity-75 cursor-not-allowed focus:outline-none select-none"
-                        />
-                        <Clock className="w-4 h-4 text-[#94A3B8] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Detailed Description with Visual WYSIWYG Rich Text Editor */}
-                  <RichTextEditor
-                    label="Detailed Description"
-                    value={formDescription}
-                    onChange={(html) => setFormDescription(html)}
-                    placeholder="Provide a detailed operational summary of the event..."
-                    minHeight="140px"
-                  />
-                </div>
-
-                {/* Footer Actions */}
-                <div className="p-6 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 flex gap-3">
-                  <SecondaryButton
-                    type="button"
-                    size="md"
-                    pill
-                    disabled={isSubmitting}
-                    onClick={() => setIsAddModalOpen(false)}
-                    className="flex-1 justify-center"
-                  >
-                    Cancel
-                  </SecondaryButton>
-                  <PrimaryButton
-                    type="submit"
-                    size="md"
-                    pill
-                    disabled={isSubmitting}
-                    className="flex-1 justify-center"
-                  >
-                    {isSubmitting ? (
-                      <Loader2 className="w-4 h-4 animate-spin mx-auto" />
-                    ) : editingLogId ? (
-                      'Save Changes'
-                    ) : (
-                      'Save Log'
-                    )}
-                  </PrimaryButton>
-                </div>
-              </form>
-            </motion.aside>
-          </div>
+          <AddEditLogDrawer
+            isSubmitting={isSubmitting}
+            editingLogId={editingLogId}
+            formTitle={formTitle}
+            formReportType={formReportType}
+            formDate={formDate}
+            formTime={formTime}
+            formDescription={formDescription}
+            reportTypeOptionsList={reportTypeOptionsList}
+            onClose={() => setIsAddModalOpen(false)}
+            onTitleChange={setFormTitle}
+            onReportTypeChange={setFormReportType}
+            onDescriptionChange={setFormDescription}
+            onOpenAddCategory={handleOpenAddCategory}
+            onSubmit={handleSaveLog}
+          />
         )}
       </AnimatePresence>
 
-      {/* ========================================================================= */}
-      {/* 6. DETAILS VIEW MODAL / DRAWER */}
-      {/* ========================================================================= */}
       <AnimatePresence>
         {viewLog && (
-          <div className="fixed inset-0 z-50 flex justify-end">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setViewLog(null)}
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-
-            {/* View Drawer */}
-            <motion.aside
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-              className="relative w-full sm:w-[480px] bg-white h-full shadow-2xl border-l border-[#E2E8F0] flex flex-col justify-between overflow-hidden z-10"
-            >
-              {/* Header */}
-              <div className="p-6 border-b border-[#E2E8F0] bg-[#F8FAFC]/80 flex justify-between items-center sticky top-0 z-10 backdrop-blur-sm">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/15">
-                    <FileText className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-[#1E293B]">Incident Log Details</h2>
-                    <p className="text-xs text-[#757680] font-mono">{viewLog.id}</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setViewLog(null)}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/60 transition-colors cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Content */}
-              <div className="p-6 space-y-6 overflow-y-auto flex-1">
-                {/* Title Card */}
-                <div className="bg-[#F8FAFC] rounded-2xl p-5 border border-[#E2E8F0] space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                      {viewLog.reportType}
-                    </span>
-                  </div>
-                  <h3 className="text-xl font-bold text-[#1E293B] leading-snug">
-                    {viewLog.title}
-                  </h3>
-                </div>
-
-                {/* Formatted Operational Description with bold and bullets */}
-                <div className="space-y-2">
-                  <span className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                    Operational Description
-                  </span>
-                  <div className="p-4 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] leading-relaxed">
-                    {renderFormattedDescription(viewLog.description)}
-                  </div>
-                </div>
-
-                {/* Timestamp & Operator Info */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] shadow-2xs space-y-1">
-                    <div className="text-xs text-[#757680] font-medium flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-[#505F76]" /> Log Time
-                    </div>
-                    <div className="text-sm font-bold text-[#1E293B] font-mono">
-                      {viewLog.time} · {viewLog.date}
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] shadow-2xs space-y-1">
-                    <div className="text-xs text-[#757680] font-medium flex items-center gap-1.5">
-                      <ShieldCheck className="w-3.5 h-3.5 text-[#505F76]" /> Operator
-                    </div>
-                    <div className="text-sm font-semibold text-[#1E293B] truncate">
-                      {viewLog.operator}
-                    </div>
-                  </div>
-                </div>
-
-                {/* User's Shift & Duty Operations Details */}
-                <div className="p-4.5 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-[#004AC6] uppercase tracking-wider flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-[#004AC6]" /> Shift &amp; Duty Operations
-                    </span>
-                    {viewLog.shiftStatus === 'active' || (isShiftActive && activeShift?.id === viewLog.shift_id) ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        Active Shift
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-[#505F76] border border-slate-200">
-                        <CheckCircle2 className="w-3 h-3 text-slate-500" />
-                        Shift Ended
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 text-xs pt-1">
-                    <div className="space-y-1">
-                      <span className="text-[#757680] font-medium block">Duty Shift:</span>
-                      <span className="font-bold text-[#1E293B] block truncate">
-                        {viewLog.shiftLabel || viewLog.operatorShift || 'Day Shift (Alpha)'}
-                      </span>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-[#757680] font-medium block">Shift Schedule:</span>
-                      <span className="font-bold text-[#1E293B] font-mono block">
-                        {viewLog.shiftStartTime && viewLog.shiftEndTime
-                          ? `${viewLog.shiftStartTime} – ${viewLog.shiftEndTime}`
-                          : '06:00 – 14:00'}
-                      </span>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-[#757680] font-medium block">Recorded By:</span>
-                      <span className="font-semibold text-[#1E293B] block truncate">
-                        {viewLog.operator}
-                      </span>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-[#757680] font-medium block">Designation:</span>
-                      <span className="font-medium text-[#505F76] block truncate">
-                        {viewLog.operatorRole || 'Monitoring Officer'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Footer Actions */}
-              <div className="p-6 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 flex items-center justify-between gap-3">
-                {canEditLog(viewLog) ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={isSubmitting}
-                      onClick={() => handleDeleteLog(viewLog.id)}
-                      className="px-4 py-2.5 rounded-full border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                    >
-                      <Trash2 className="w-4 h-4" /> Delete Log
-                    </button>
-
-                    <PrimaryButton
-                      size="md"
-                      pill
-                      onClick={() => handleOpenEditModal(viewLog)}
-                      leftIcon={<Edit2 className="w-4 h-4" />}
-                      className="flex-1 justify-center"
-                    >
-                      Edit Log
-                    </PrimaryButton>
-                  </>
-                ) : (
-                  <div className="w-full flex items-center justify-between">
-                    <span className="text-xs text-[#757680] flex items-center gap-1.5 italic">
-                      <Lock className="w-3.5 h-3.5 text-[#94A3B8]" />
-                      Shift is ended (Log entries are locked)
-                    </span>
-                    <SecondaryButton
-                      size="sm"
-                      pill
-                      onClick={() => setViewLog(null)}
-                    >
-                      Close
-                    </SecondaryButton>
-                  </div>
-                )}
-              </div>
-            </motion.aside>
-          </div>
+          <ViewLogModal
+            log={viewLog}
+            isShiftActive={isShiftActive}
+            activeShift={activeShift}
+            isSubmitting={isSubmitting}
+            canEdit={canEditLog(viewLog)}
+            onClose={() => setViewLog(null)}
+            onEdit={handleOpenEditModal}
+            onDelete={handleDeleteLog}
+          />
         )}
       </AnimatePresence>
 
-      {/* ========================================================================= */}
-      {/* 6.5 ADD CATEGORY (REPORT TYPE) MODAL */}
-      {/* ========================================================================= */}
       <AnimatePresence>
         {isAddCategoryModalOpen && (
-          <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => !isSubmitting && setIsAddCategoryModalOpen(false)}
-              className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm"
-            />
-
-            {/* Modal Card */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-[#E2E8F0] overflow-hidden z-10"
-            >
-              {/* Header */}
-              <div className="p-6 border-b border-[#E2E8F0] bg-[#F8FAFC] flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center border border-[#004AC6]/15">
-                    <Tag className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">
-                      Add Report Type
-                    </h2>
-                    <p className="text-xs text-[#757680]">
-                      Create a custom event classification
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsAddCategoryModalOpen(false)}
-                  disabled={isSubmitting}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/60 transition-colors cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Form */}
-              <form onSubmit={handleSaveCategory} className="p-6 space-y-4">
-                {/* Name Input */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                    Report Type Name
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={newCategoryName}
-                    onChange={(e) => setNewCategoryName(stripEmojis(e.target.value))}
-                    placeholder="e.g., Hazardous Chemical Spill"
-                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full py-2.5 px-4 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
-                  />
-                </div>
-
-                {/* Color Dot Swatches */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-[#505F76] uppercase tracking-wide">
-                    Indicator Color
-                  </label>
-                  <div className="flex items-center gap-3 pt-1">
-                    {[
-                      { color: '#004AC6', name: 'Primary Blue' },
-                      { color: '#BA1A1A', name: 'Critical Red' },
-                      { color: '#F59E0B', name: 'Warning Amber' },
-                      { color: '#10B981', name: 'Active Green' },
-                      { color: '#8B5CF6', name: 'Purple' },
-                      { color: '#505F76', name: 'Slate Gray' },
-                    ].map((c) => (
-                      <button
-                        key={c.color}
-                        type="button"
-                        onClick={() => setNewCategoryColor(c.color)}
-                        className={`w-7 h-7 rounded-full transition-transform cursor-pointer relative flex items-center justify-center ${
-                          newCategoryColor === c.color ? 'ring-2 ring-offset-2 ring-[#004AC6] scale-110' : 'hover:scale-105'
-                        }`}
-                        style={{ backgroundColor: c.color }}
-                        title={c.name}
-                      >
-                        {newCategoryColor === c.color && (
-                          <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-between gap-3">
-                  <SecondaryButton
-                    type="button"
-                    size="md"
-                    pill
-                    disabled={isSubmitting}
-                    onClick={() => setIsAddCategoryModalOpen(false)}
-                  >
-                    Cancel
-                  </SecondaryButton>
-                  <PrimaryButton
-                    type="submit"
-                    size="md"
-                    pill
-                    disabled={isSubmitting}
-                    leftIcon={isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  >
-                    {isSubmitting ? 'Saving...' : 'Save Category'}
-                  </PrimaryButton>
-                </div>
-              </form>
-            </motion.div>
-          </div>
+          <AddCategoryModal
+            isSubmitting={isSubmitting}
+            newCategoryName={newCategoryName}
+            newCategoryColor={newCategoryColor}
+            onClose={() => setIsAddCategoryModalOpen(false)}
+            onNameChange={setNewCategoryName}
+            onColorChange={setNewCategoryColor}
+            onSubmit={handleSaveCategory}
+          />
         )}
       </AnimatePresence>
 
-      {/* ========================================================================= */}
-      {/* 7. TOAST NOTIFICATION */}
-      {/* ========================================================================= */}
+      {/* 7. Toast Notification */}
       <AnimatePresence>
         {shiftToast && (
           <motion.div

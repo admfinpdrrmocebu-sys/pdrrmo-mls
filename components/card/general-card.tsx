@@ -1,10 +1,9 @@
 'use client';
 
 import React from 'react';
-import { motion, HTMLMotionProps } from 'motion/react';
 import { twMerge } from 'tailwind-merge';
 
-export interface GeneralCardProps extends Omit<HTMLMotionProps<'div'>, 'children'> {
+export interface GeneralCardProps extends React.HTMLAttributes<HTMLDivElement> {
   children: React.ReactNode;
   header?: React.ReactNode;
   footer?: React.ReactNode;
@@ -35,10 +34,7 @@ export function GeneralCard({
   const hasHeaderOrFooter = Boolean(header || title || footer);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
+    <div
       className={twMerge(
         'relative w-full rounded-2xl bg-white border border-[#E2E8F0] shadow-sm shadow-slate-200/50 overflow-hidden',
         !hasHeaderOrFooter && 'p-6',
@@ -89,7 +85,7 @@ export function GeneralCard({
           {footer}
         </div>
       )}
-    </motion.div>
+    </div>
   );
 }
 

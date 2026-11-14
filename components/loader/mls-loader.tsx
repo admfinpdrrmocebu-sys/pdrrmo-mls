@@ -1,7 +1,6 @@
 'use client';
 
 import React from 'react';
-import { motion } from 'motion/react';
 import { twMerge } from 'tailwind-merge';
 import { ShieldAlert, Activity, Radio, Lock } from 'lucide-react';
 
@@ -72,29 +71,17 @@ export function MLSLoader({
         </div>
 
         {/* Outer Rotating Radar Beam with Conic Gradient Sweep */}
-        <motion.div
-          className="absolute inset-0 rounded-full"
+        <div
+          className="absolute inset-0 rounded-full animate-[spin_2.4s_linear_infinite]"
           style={{
             background:
               'conic-gradient(from 0deg at 50% 50%, rgba(0, 74, 198, 0.4) 0deg, rgba(0, 74, 198, 0) 65deg, transparent 360deg)',
           }}
-          animate={{ rotate: 360 }}
-          transition={{
-            repeat: Infinity,
-            duration: 2.4,
-            ease: 'linear',
-          }}
         />
 
         {/* Middle Counter-Rotating Dashed Orbit */}
-        <motion.div
-          className="absolute inset-2 rounded-full border border-dashed border-[#004AC6]/35"
-          animate={{ rotate: -360 }}
-          transition={{
-            repeat: Infinity,
-            duration: 8,
-            ease: 'linear',
-          }}
+        <div
+          className="absolute inset-2 rounded-full border border-dashed border-[#004AC6]/35 animate-[spin_8s_linear_infinite_reverse]"
         />
 
         {/* Inner Concentric Pulse Ring */}
@@ -138,17 +125,7 @@ export function MLSLoader({
 
           {/* Sleek Horizontal Micro-Progress Indicator */}
           <div className="w-32 h-[2px] bg-slate-200 rounded-full mt-3 overflow-hidden relative">
-            <motion.div
-              className="absolute top-0 bottom-0 w-12 bg-gradient-to-r from-transparent via-[#004AC6] to-transparent rounded-full"
-              animate={{
-                x: [-48, 128],
-              }}
-              transition={{
-                repeat: Infinity,
-                duration: 1.4,
-                ease: 'easeInOut',
-              }}
-            />
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[#004AC6] to-transparent animate-shimmer" />
           </div>
         </div>
       )}

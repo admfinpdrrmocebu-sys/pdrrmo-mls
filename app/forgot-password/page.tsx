@@ -293,7 +293,7 @@ export default function ForgotPasswordPage() {
             </motion.div>
 
             <h1 className="text-lg sm:text-xl font-bold tracking-tight text-[#1E293B]">
-              Monitoring Logging System
+              PIDOCS
             </h1>
             <p className="text-xs text-[#505F76] font-medium mt-0.5">
               Account Password Recovery

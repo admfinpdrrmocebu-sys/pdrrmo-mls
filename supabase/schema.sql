@@ -649,6 +649,38 @@ CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
+-- Password recovery RPC fallback when SUPABASE_SERVICE_ROLE_KEY is not configured
+CREATE OR REPLACE FUNCTION public.admin_reset_user_password(
+    p_user_id UUID,
+    p_new_password TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth, extensions
+AS $$
+BEGIN
+    IF p_new_password IS NULL OR length(p_new_password) < 6 THEN
+        RAISE EXCEPTION 'Password must be at least 6 characters long.';
+    END IF;
+
+    UPDATE auth.users
+    SET
+        encrypted_password = crypt(p_new_password, gen_salt('bf')),
+        updated_at = now()
+    WHERE id = p_user_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Target user not found.';
+    END IF;
+
+    RETURN TRUE;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.admin_reset_user_password(UUID, TEXT) TO authenticated, anon, service_role;
+NOTIFY pgrst, 'reload schema';
+
 -- =============================================================================
 -- 6. STORAGE BUCKETS
 -- =============================================================================

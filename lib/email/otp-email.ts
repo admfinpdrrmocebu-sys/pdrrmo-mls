@@ -1,5 +1,5 @@
 /**
- * PDRRMO - Official OTP Verification Email Template Generator
+ * PDRRMO - IDOCS - Official OTP Verification Email Template Generator
  * Designed for high deliverability, cross-client email compatibility (Gmail, Outlook, Apple Mail),
  * and security-focused emergency management visual design.
  */
@@ -31,7 +31,7 @@ export function generateOtpEmailHtml(data: OtpEmailData): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>PDRRMO - Password Reset Verification Code</title>
+  <title>PDRRMO - IDOCS - Password Reset Verification Code</title>
   <!--[if mso]>
   <style type="text/css">
     body, table, td, p, a, li, blockquote {font-family: Arial, Helvetica, sans-serif !important;}
@@ -96,10 +96,13 @@ export function generateOtpEmailHtml(data: OtpEmailData): string {
                   <tr>
                     <td align="center">
                       <img src="${logoSrc}" alt="PDRRMO Official Seal" width="60" height="60" style="display: block; margin-bottom: 12px; object-contain: contain;">
-                      <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #0F172A; letter-spacing: -0.3px;">
-                        Provincial Disaster Risk Reduction &amp; Management Office
+                      <h1 style="margin: 0; font-size: 20px; font-weight: 800; color: #0F172A; letter-spacing: -0.3px;">
+                        PDRRMO - IDOCS
                       </h1>
-                      <p style="margin: 4px 0 0 0; font-size: 13px; font-weight: 600; color: #004AC6; text-transform: uppercase; letter-spacing: 0.8px;">
+                      <p style="margin: 3px 0 0 0; font-size: 12px; font-weight: 600; color: #475569;">
+                        Integrated Data &amp; Operations Control System
+                      </p>
+                      <p style="margin: 4px 0 0 0; font-size: 12px; font-weight: 600; color: #004AC6; text-transform: uppercase; letter-spacing: 0.8px;">
                         Identity &amp; Access Recovery Portal
                       </p>
                     </td>
@@ -120,7 +123,7 @@ export function generateOtpEmailHtml(data: OtpEmailData): string {
                         Hello <strong>${recipientName}</strong>,
                       </p>
                       <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 22px; color: #475569;">
-                        We received a request to reset the password for your account associated with 
+                        We received a request to reset the password for your PDRRMO - IDOCS account associated with 
                         <strong style="color: #0F172A;">${email}</strong>. Use the 4-digit verification code below to confirm your identity and proceed with the password change.
                       </p>
                     </td>
@@ -178,10 +181,10 @@ export function generateOtpEmailHtml(data: OtpEmailData): string {
             <tr>
               <td class="mobile-padding" style="padding: 24px 40px; background-color: #F8FAFC; border-top: 1px solid #E2E8F0; text-align: center;">
                 <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #475569;">
-                  Provincial Disaster Risk Reduction and Management Office
+                  PDRRMO - IDOCS · Integrated Data &amp; Operations Control System
                 </p>
                 <p style="margin: 0; font-size: 11px; line-height: 16px; color: #94A3B8;">
-                  This is an automated operational alert. Inquiries regarding this verification should be directed to the PDRRMO Systems &amp; Communications Desk.
+                  Provincial Disaster Risk Reduction and Management Office — Automated operational alert. Inquiries regarding this verification should be directed to the PDRRMO Systems &amp; Communications Desk.
                 </p>
               </td>
             </tr>
@@ -207,12 +210,13 @@ export function generateOtpEmailText(data: OtpEmailData): string {
   } = data;
 
   return `
-PDRRMO - PASSWORD RESET VERIFICATION CODE
+PDRRMO - IDOCS (Integrated Data & Operations Control System)
+PASSWORD RESET VERIFICATION CODE
 ==================================================
 
 Hello ${recipientName},
 
-We received a request to reset the password for your account associated with ${email}.
+We received a request to reset the password for your PDRRMO - IDOCS account associated with ${email}.
 
 Your 4-Digit Verification Code is:
 >>> ${otpCode} <<<
@@ -223,6 +227,7 @@ SECURITY WARNING:
 Never share this code with anyone. If you did not request this password reset, you may ignore this email.
 
 --
+PDRRMO - IDOCS · Integrated Data & Operations Control System
 Provincial Disaster Risk Reduction and Management Office
 Automated Identity & Security Notification
 `.trim();

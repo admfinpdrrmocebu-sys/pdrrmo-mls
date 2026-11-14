@@ -25,6 +25,7 @@ import {
   WifiOff,
   SlidersHorizontal,
   Scan,
+  MoreVertical,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { usePathname } from 'next/navigation';
@@ -148,6 +149,7 @@ function DroneVideoTile({
   const statsCleanupRef = useRef<(() => void) | null>(null);
   const abrEvaluatorRef = useRef<AdaptiveStreamEvaluator>(new AdaptiveStreamEvaluator());
   const qualityMenuRef = useRef<HTMLDivElement | null>(null);
+  const actionsMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [status, setStatus] = useState<WhepConnectionStatus>('connecting');
   const [statusMessage, setStatusMessage] = useState<string>('Connecting to MediaMTX WHEP...');
@@ -160,6 +162,7 @@ function DroneVideoTile({
   );
   const [adaptationNotice, setAdaptationNotice] = useState<string | null>(null);
   const [isQualityDropdownOpen, setIsQualityDropdownOpen] = useState(false);
+  const [isMobileActionsOpen, setIsMobileActionsOpen] = useState(false);
 
   // Player UI controls
   const [isMuted, setIsMuted] = useState(true);
@@ -201,17 +204,21 @@ function DroneVideoTile({
     }
   }, [isPageActive, isMuted]);
 
-  // Close quality dropdown on outside click
+  // Close quality & mobile action dropdowns on outside click
   useEffect(() => {
-    if (!isQualityDropdownOpen) return;
+    if (!isQualityDropdownOpen && !isMobileActionsOpen) return;
     const handleOutside = (e: MouseEvent) => {
-      if (qualityMenuRef.current && !qualityMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (isQualityDropdownOpen && qualityMenuRef.current && !qualityMenuRef.current.contains(target)) {
         setIsQualityDropdownOpen(false);
+      }
+      if (isMobileActionsOpen && actionsMenuRef.current && !actionsMenuRef.current.contains(target)) {
+        setIsMobileActionsOpen(false);
       }
     };
     document.addEventListener('mousedown', handleOutside);
     return () => document.removeEventListener('mousedown', handleOutside);
-  }, [isQualityDropdownOpen]);
+  }, [isQualityDropdownOpen, isMobileActionsOpen]);
 
   // Auto-clear adaptation notice after 5 seconds
   useEffect(() => {
@@ -480,6 +487,145 @@ function DroneVideoTile({
     }
   }, [telemetry.health, isDark]);
 
+  const idleIconBtnClass = isDark
+    ? 'hover:bg-slate-800 text-slate-400 hover:text-white'
+    : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900';
+
+  const tileActions: Array<{
+    id: 'stats' | 'audio' | 'fit' | 'reconnect' | 'focus' | 'edit' | 'delete';
+    label: string;
+    title: string;
+    icon: React.ReactNode;
+    desktopClass: string;
+    menuItemClass?: string;
+    badge?: string;
+    sectionBreakBefore?: boolean;
+  }> = [
+    {
+      id: 'stats',
+      label: showStatsHud ? 'Hide Telemetry HUD' : 'Telemetry HUD',
+      title: 'Toggle WebRTC getStats() Telemetry HUD',
+      icon: <Activity className="w-3.5 h-3.5 shrink-0" />,
+      desktopClass: showStatsHud
+        ? isDark
+          ? 'bg-blue-500/20 text-blue-300'
+          : 'bg-blue-50 text-[#004AC6]'
+        : idleIconBtnClass,
+      badge: showStatsHud ? 'On' : undefined,
+    },
+    {
+      id: 'audio',
+      label: isMuted ? 'Unmute Audio' : 'Mute Audio',
+      title: isMuted ? 'Unmute stream audio' : 'Mute stream audio',
+      icon: isMuted ? (
+        <VolumeX className="w-3.5 h-3.5 shrink-0" />
+      ) : (
+        <Volume2 className="w-3.5 h-3.5 shrink-0" />
+      ),
+      desktopClass: !isMuted
+        ? isDark
+          ? 'bg-emerald-500/20 text-emerald-300'
+          : 'bg-emerald-50 text-emerald-700'
+        : idleIconBtnClass,
+      badge: !isMuted ? 'Live' : undefined,
+    },
+    {
+      id: 'fit',
+      label: objectFit === 'contain' ? 'Fill Frame (Cover)' : 'Full Frame (Contain)',
+      title:
+        objectFit === 'contain'
+          ? 'Switch to Fill/Cover video fit'
+          : 'Switch to Contain (Full Frame) video fit',
+      icon: <Scan className="w-3.5 h-3.5 shrink-0" />,
+      desktopClass: idleIconBtnClass,
+      badge: objectFit === 'cover' ? 'Cover' : undefined,
+    },
+    {
+      id: 'reconnect',
+      label: retryCount >= MAX_AUTO_RETRIES ? 'Retry Connection' : 'Reconnect Stream',
+      title:
+        retryCount >= MAX_AUTO_RETRIES
+          ? 'Auto-reconnect stopped after 5 attempts. Click to restart reconnection'
+          : 'Reconnect WebRTC WHEP stream (resets 5 auto attempts)',
+      icon: <RefreshCw className="w-3.5 h-3.5 shrink-0" />,
+      desktopClass:
+        retryCount >= MAX_AUTO_RETRIES
+          ? 'bg-rose-500/20 text-rose-400 animate-pulse border border-rose-500/30'
+          : idleIconBtnClass,
+      menuItemClass:
+        retryCount >= MAX_AUTO_RETRIES
+          ? isDark
+            ? 'text-rose-300 hover:bg-rose-500/15'
+            : 'text-rose-600 hover:bg-rose-50'
+          : undefined,
+    },
+    {
+      id: 'focus',
+      label: isFocused ? 'Restore Multi-Stream' : 'Maximize Feed',
+      title: isFocused ? 'Restore Multi-Stream Grid' : 'Maximize this Drone Stream',
+      icon: isFocused ? (
+        <Minimize2 className="w-3.5 h-3.5 shrink-0" />
+      ) : (
+        <Maximize2 className="w-3.5 h-3.5 shrink-0" />
+      ),
+      desktopClass: isFocused ? 'bg-[#004AC6] text-white' : idleIconBtnClass,
+      badge: isFocused ? 'Focused' : undefined,
+    },
+    ...(canManage
+      ? [
+          {
+            id: 'edit' as const,
+            label: 'Edit Stream Link',
+            title: 'Edit WebRTC Link & Quality URLs',
+            icon: <Edit2 className="w-3.5 h-3.5 shrink-0" />,
+            desktopClass: idleIconBtnClass,
+            sectionBreakBefore: true,
+          },
+          {
+            id: 'delete' as const,
+            label: 'Remove Stream',
+            title: 'Remove Drone Stream',
+            icon: <Trash2 className="w-3.5 h-3.5 shrink-0" />,
+            desktopClass: isDark
+              ? 'hover:bg-rose-500/20 text-slate-400 hover:text-rose-400'
+              : 'hover:bg-rose-50 text-slate-500 hover:text-rose-600',
+            menuItemClass: isDark
+              ? 'text-rose-400 hover:bg-rose-500/15'
+              : 'text-rose-600 hover:bg-rose-50',
+          },
+        ]
+      : []),
+  ];
+
+  const handleTileAction = (actionId: (typeof tileActions)[number]['id']) => {
+    switch (actionId) {
+      case 'stats':
+        setShowStatsHud((prev) => !prev);
+        break;
+      case 'audio':
+        handleToggleMute();
+        break;
+      case 'fit':
+        setObjectFit((prev) => (prev === 'contain' ? 'cover' : 'contain'));
+        break;
+      case 'reconnect':
+        handleManualReconnect();
+        break;
+      case 'focus':
+        onToggleFocus(stream);
+        break;
+      case 'edit':
+        onEdit(stream);
+        break;
+      case 'delete':
+        onDelete(stream);
+        break;
+    }
+  };
+
+  const hasHighlightedMobileAction =
+    showStatsHud || !isMuted || isFocused || retryCount >= MAX_AUTO_RETRIES;
+
   return (
     <div
       draggable={!isFocused}
@@ -505,14 +651,14 @@ function DroneVideoTile({
       {/* MINIMALIST STREAM HEADER BAR                                      */}
       {/* ================================================================= */}
       <div
-        className={`h-9 px-2.5 flex items-center justify-between gap-2 border-b shrink-0 z-20 ${
+        className={`h-9 px-2 sm:px-2.5 flex items-center justify-between gap-1.5 sm:gap-2 border-b shrink-0 z-20 ${
           isDark
             ? 'bg-[#0F172A]/95 border-[#1E293B] text-[#F8FAFC]'
             : 'bg-[#F8FAFC] border-[#E2E8F0] text-[#0F172A]'
         }`}
       >
         {/* Left: Drag Handle + Status Badge + Stream Name */}
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 overflow-hidden">
           {!isFocused && (
             <div
               className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-200 shrink-0"
@@ -524,14 +670,14 @@ function DroneVideoTile({
 
           {/* Status Pill */}
           <span
-            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider border shrink-0 ${statusBadgeConfig.pillClass}`}
+            className={`inline-flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold tracking-wider border whitespace-nowrap shrink-0 ${statusBadgeConfig.pillClass}`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${statusBadgeConfig.dotClass}`} />
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusBadgeConfig.dotClass}`} />
             {statusBadgeConfig.label}
           </span>
 
           {/* Stream Name */}
-          <span className="text-xs font-bold truncate" title={stream.name}>
+          <span className="text-xs font-bold truncate min-w-0" title={stream.name}>
             {stream.name}
           </span>
 
@@ -569,15 +715,18 @@ function DroneVideoTile({
           )}
         </div>
 
-        {/* Right: Quality Override Selector + Minimal Controls */}
+        {/* Right: Quality Override Selector (Always Visible) + Responsive Action Controls */}
         <div className="flex items-center gap-1 shrink-0">
           {/* Quality Mode Override Dropdown */}
           <div ref={qualityMenuRef} className="relative">
             <button
               type="button"
-              onClick={() => setIsQualityDropdownOpen((o) => !o)}
+              onClick={() => {
+                setIsMobileActionsOpen(false);
+                setIsQualityDropdownOpen((o) => !o);
+              }}
               title="Stream Quality Mode (Auto ABR or Manual Override)"
-              className={`h-6 px-2 rounded-md text-[10px] font-bold tracking-wide flex items-center gap-1 border transition-colors cursor-pointer ${
+              className={`h-6 px-1.5 sm:px-2 rounded-md text-[10px] font-bold tracking-wide flex items-center gap-1 border whitespace-nowrap transition-colors cursor-pointer ${
                 qualityMode === 'auto'
                   ? isDark
                     ? 'bg-blue-500/15 text-blue-300 border-blue-500/30 hover:bg-blue-500/25'
@@ -587,9 +736,9 @@ function DroneVideoTile({
                   : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
               }`}
             >
-              <SlidersHorizontal className="w-2.5 h-2.5" />
+              <SlidersHorizontal className="w-2.5 h-2.5 shrink-0" />
               <span>{formatTierBadge(qualityMode, resolvedTarget.effectiveTier)}</span>
-              <ChevronDown className="w-2.5 h-2.5 opacity-75" />
+              <ChevronDown className="w-2.5 h-2.5 opacity-75 shrink-0" />
             </button>
 
             <AnimatePresence>
@@ -635,135 +784,111 @@ function DroneVideoTile({
             </AnimatePresence>
           </div>
 
-          {/* Toggle WebRTC getStats() HUD Overlay */}
-          <button
-            type="button"
-            onClick={() => setShowStatsHud((prev) => !prev)}
-            title="Toggle WebRTC getStats() Telemetry HUD"
-            className={`p-1 rounded-md transition-colors cursor-pointer ${
-              showStatsHud
-                ? isDark
-                  ? 'bg-blue-500/20 text-blue-300'
-                  : 'bg-blue-50 text-[#004AC6]'
-                : isDark
-                ? 'hover:bg-slate-800 text-slate-400 hover:text-white'
-                : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Audio Mute / Unmute */}
-          <button
-            type="button"
-            onClick={handleToggleMute}
-            title={isMuted ? 'Unmute stream audio' : 'Mute stream audio'}
-            className={`p-1 rounded-md transition-colors cursor-pointer ${
-              !isMuted
-                ? isDark
-                  ? 'bg-emerald-500/20 text-emerald-300'
-                  : 'bg-emerald-50 text-emerald-700'
-                : isDark
-                ? 'hover:bg-slate-800 text-slate-400 hover:text-white'
-                : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            {isMuted ? (
-              <VolumeX className="w-3.5 h-3.5" />
-            ) : (
-              <Volume2 className="w-3.5 h-3.5" />
-            )}
-          </button>
-
-          {/* Aspect Fit / Cover Toggle */}
-          <button
-            type="button"
-            onClick={() =>
-              setObjectFit((prev) => (prev === 'contain' ? 'cover' : 'contain'))
-            }
-            title={
-              objectFit === 'contain'
-                ? 'Switch to Fill/Cover video fit'
-                : 'Switch to Contain (Full Frame) video fit'
-            }
-            className={`p-1 rounded-md transition-colors cursor-pointer ${
-              isDark
-                ? 'hover:bg-slate-800 text-slate-400 hover:text-white'
-                : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <Scan className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Reconnect Stream */}
-          <button
-            type="button"
-            onClick={handleManualReconnect}
-            title={
-              retryCount >= MAX_AUTO_RETRIES
-                ? 'Auto-reconnect stopped after 5 attempts. Click to restart reconnection'
-                : 'Reconnect WebRTC WHEP stream (resets 5 auto attempts)'
-            }
-            className={`p-1 rounded-md transition-colors cursor-pointer ${
-              retryCount >= MAX_AUTO_RETRIES
-                ? 'bg-rose-500/20 text-rose-400 animate-pulse border border-rose-500/30'
-                : isDark
-                ? 'hover:bg-slate-800 text-slate-400 hover:text-white'
-                : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Focus / Maximize Stream */}
-          <button
-            type="button"
-            onClick={() => onToggleFocus(stream)}
-            title={isFocused ? 'Restore Multi-Stream Grid' : 'Maximize this Drone Stream'}
-            className={`p-1 rounded-md transition-colors cursor-pointer ${
-              isFocused
-                ? 'bg-[#004AC6] text-white'
-                : isDark
-                ? 'hover:bg-slate-800 text-slate-400 hover:text-white'
-                : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            {isFocused ? (
-              <Minimize2 className="w-3.5 h-3.5" />
-            ) : (
-              <Maximize2 className="w-3.5 h-3.5" />
-            )}
-          </button>
-
-          {/* Edit / Delete (Full Access only) */}
-          {canManage && (
-            <>
+          {/* Desktop / Tablet: Inline Icon Controls */}
+          <div className="hidden sm:flex items-center gap-1">
+            {tileActions.map((action) => (
               <button
+                key={action.id}
                 type="button"
-                onClick={() => onEdit(stream)}
-                title="Edit WebRTC Link & Quality URLs"
-                className={`p-1 rounded-md transition-colors cursor-pointer ${
-                  isDark
-                    ? 'hover:bg-slate-800 text-slate-400 hover:text-white'
-                    : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'
-                }`}
+                onClick={() => handleTileAction(action.id)}
+                title={action.title}
+                className={`p-1 rounded-md transition-colors cursor-pointer ${action.desktopClass}`}
               >
-                <Edit2 className="w-3.5 h-3.5" />
+                {action.icon}
               </button>
-              <button
-                type="button"
-                onClick={() => onDelete(stream)}
-                title="Remove Drone Stream"
-                className={`p-1 rounded-md transition-colors cursor-pointer ${
-                  isDark
-                    ? 'hover:bg-rose-500/20 text-slate-400 hover:text-rose-400'
-                    : 'hover:bg-rose-50 text-slate-500 hover:text-rose-600'
-                }`}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </>
-          )}
+            ))}
+          </div>
+
+          {/* Mobile: Remaining Icons Collapsed into Dropdown Toolbar */}
+          <div ref={actionsMenuRef} className="relative sm:hidden">
+            <button
+              type="button"
+              onClick={() => {
+                setIsQualityDropdownOpen(false);
+                setIsMobileActionsOpen((o) => !o);
+              }}
+              aria-label="Stream controls"
+              aria-expanded={isMobileActionsOpen}
+              title="Stream controls"
+              className={`relative h-6 w-6 rounded-md border flex items-center justify-center transition-colors cursor-pointer ${
+                isMobileActionsOpen
+                  ? isDark
+                    ? 'bg-slate-800 border-slate-600 text-white'
+                    : 'bg-slate-200 border-slate-300 text-slate-900'
+                  : isDark
+                  ? 'bg-slate-900/70 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <MoreVertical className="w-3.5 h-3.5" />
+              {hasHighlightedMobileAction && (
+                <span
+                  className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${
+                    retryCount >= MAX_AUTO_RETRIES
+                      ? 'bg-rose-500 animate-pulse'
+                      : 'bg-[#3B82F6]'
+                  }`}
+                />
+              )}
+            </button>
+
+            <AnimatePresence>
+              {isMobileActionsOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 4, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 4, scale: 0.97 }}
+                  transition={{ duration: 0.12 }}
+                  className={`absolute right-0 top-full mt-1.5 w-48 rounded-xl border shadow-xl p-1 z-50 ${
+                    isDark
+                      ? 'bg-[#0F172A] border-[#1E293B] text-white'
+                      : 'bg-white border-[#E2E8F0] text-[#0F172A]'
+                  }`}
+                >
+                  {tileActions.map((action) => (
+                    <React.Fragment key={action.id}>
+                      {action.sectionBreakBefore && (
+                        <div
+                          className={`my-1 border-t ${
+                            isDark ? 'border-slate-800' : 'border-slate-100'
+                          }`}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMobileActionsOpen(false);
+                          handleTileAction(action.id);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                          action.menuItemClass ||
+                          (isDark
+                            ? 'text-slate-200 hover:bg-slate-800/80'
+                            : 'text-slate-700 hover:bg-slate-100')
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 min-w-0">
+                          {action.icon}
+                          <span className="truncate">{action.label}</span>
+                        </span>
+                        {action.badge && (
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                              isDark
+                                ? 'bg-blue-500/20 text-blue-300'
+                                : 'bg-blue-50 text-[#004AC6]'
+                            }`}
+                          >
+                            {action.badge}
+                          </span>
+                        )}
+                      </button>
+                    </React.Fragment>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </div>
 
@@ -1020,6 +1145,18 @@ export default function DroneStreamPage() {
   const [viewport, setViewport] = useState({ width: 1440, height: 900 });
   const [gridPreset, setGridPreset] = useState<GridPreset>('auto');
   const [isGridMenuOpen, setIsGridMenuOpen] = useState(false);
+  const gridMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isGridMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (gridMenuRef.current && !gridMenuRef.current.contains(e.target as Node)) {
+        setIsGridMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [isGridMenuOpen]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [focusedStreamId, setFocusedStreamId] = useState<string | null>(null);
 
@@ -1536,15 +1673,15 @@ export default function DroneStreamPage() {
         {/* 1. COMPACT MINIMALIST TOP CONTROL BAR                             */}
         {/* ================================================================= */}
         <header
-          className={`h-12 px-3 sm:px-4 rounded-xl border flex items-center justify-between gap-2 shrink-0 z-30 transition-colors shadow-2xs ${
+          className={`min-h-12 py-2 sm:py-0 sm:h-12 px-2.5 sm:px-4 rounded-xl border flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 shrink-0 z-30 transition-colors shadow-2xs ${
             isDark
               ? 'bg-[#0B1120] border-[#1E293B] text-[#F8FAFC]'
               : 'bg-white border-[#E2E8F0] text-[#0F172A]'
           }`}
         >
           {/* Left: Brand Icon + Title + Live Telemetry Summary */}
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-[#004AC6] flex items-center justify-center text-white shadow-xs shrink-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-[#004AC6] flex items-center justify-center text-white shadow-xs shrink-0">
               <Drone className="w-4 h-4" />
             </div>
             <div className="flex items-center gap-2 min-w-0">
@@ -1554,7 +1691,7 @@ export default function DroneStreamPage() {
 
               {/* Active / Live Counter Badge */}
               <span
-                className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${
+                className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap shrink-0 ${
                   liveCount > 0
                     ? isDark
                       ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
@@ -1565,7 +1702,7 @@ export default function DroneStreamPage() {
                 }`}
               >
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                     liveCount > 0 ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'
                   }`}
                 />
@@ -1574,7 +1711,7 @@ export default function DroneStreamPage() {
 
               {/* Stack Indicator Pill */}
               <span
-                className={`hidden xl:inline-flex items-center gap-1.5 text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-full border ${
+                className={`hidden xl:inline-flex items-center gap-1.5 text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-full border whitespace-nowrap ${
                   isDark
                     ? 'bg-slate-900 text-slate-400 border-slate-800'
                     : 'bg-slate-50 text-slate-500 border-slate-200'
@@ -1587,38 +1724,38 @@ export default function DroneStreamPage() {
           </div>
 
           {/* Right: Auto-Layout Selector + Reconnect All + Fullscreen + Add Link */}
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex items-center justify-end gap-1.5 sm:gap-2 w-full sm:w-auto shrink-0 flex-wrap sm:flex-nowrap">
             {focusedStream && (
               <button
                 type="button"
                 onClick={() => setFocusedStreamId(null)}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors flex items-center gap-1.5 cursor-pointer"
+                className="h-8 px-2.5 rounded-lg text-xs font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Minimize2 className="w-3.5 h-3.5" />
+                <Minimize2 className="w-3.5 h-3.5 shrink-0" />
                 <span>Exit Focus</span>
               </button>
             )}
 
             {/* Grid Layout Preset Selector (Auto, 1×1, 2×1, 2×2, 3×2) */}
-            <div className="relative">
+            <div ref={gridMenuRef} className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setIsGridMenuOpen((o) => !o)}
-                className={`h-8 px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                className={`h-8 px-2 sm:px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
                   isDark
                     ? 'bg-[#0F172A] border-[#1E293B] text-slate-200 hover:bg-slate-800'
                     : 'bg-slate-50 border-[#CBD5E1] text-slate-700 hover:bg-slate-100'
                 }`}
                 title="Grid Layout Mode (Auto-adjusts 1×1 for 1 stream, 2×1 for 2 streams)"
               >
-                <LayoutGrid className="w-3.5 h-3.5 text-[#3B82F6]" />
+                <LayoutGrid className="w-3.5 h-3.5 text-[#3B82F6] shrink-0" />
                 <span className="hidden sm:inline">Layout:</span>
                 <span className="font-bold">
                   {gridPreset === 'auto'
                     ? `Auto (${autoGrid.cols}×${autoGrid.rows})`
                     : gridPreset.replace('x', '×')}
                 </span>
-                <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                <ChevronDown className="w-3.5 h-3.5 opacity-70 shrink-0" />
               </button>
 
               <AnimatePresence>
@@ -1628,7 +1765,7 @@ export default function DroneStreamPage() {
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 6, scale: 0.97 }}
                     transition={{ duration: 0.14 }}
-                    className={`absolute right-0 top-full mt-1.5 w-44 rounded-xl border shadow-xl p-1.5 z-50 ${
+                    className={`absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-44 rounded-xl border shadow-xl p-1.5 z-50 ${
                       isDark
                         ? 'bg-[#0F172A] border-[#1E293B] text-white'
                         : 'bg-white border-[#E2E8F0] text-[#0F172A]'
@@ -1665,13 +1802,13 @@ export default function DroneStreamPage() {
                 type="button"
                 onClick={() => setGlobalRefreshTick((t) => t + 1)}
                 title="Reconnect all WebRTC streams"
-                className={`h-8 px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                className={`h-8 px-2 sm:px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                   isDark
                     ? 'bg-[#0F172A] border-[#1E293B] text-slate-200 hover:bg-slate-800'
                     : 'bg-slate-50 border-[#CBD5E1] text-slate-700 hover:bg-slate-100'
                 }`}
               >
-                <RefreshCw className="w-3.5 h-3.5" />
+                <RefreshCw className="w-3.5 h-3.5 shrink-0" />
                 <span className="hidden md:inline">Reconnect</span>
               </button>
             )}
@@ -1681,16 +1818,16 @@ export default function DroneStreamPage() {
               type="button"
               onClick={toggleFullscreen}
               title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen View'}
-              className={`h-8 px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              className={`h-8 px-2 sm:px-2.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
                 isDark
                   ? 'bg-[#0F172A] border-[#1E293B] text-slate-200 hover:bg-slate-800'
                   : 'bg-slate-50 border-[#CBD5E1] text-slate-700 hover:bg-slate-100'
               }`}
             >
               {isFullscreen ? (
-                <Minimize2 className="w-3.5 h-3.5" />
+                <Minimize2 className="w-3.5 h-3.5 shrink-0" />
               ) : (
-                <Maximize2 className="w-3.5 h-3.5" />
+                <Maximize2 className="w-3.5 h-3.5 shrink-0" />
               )}
               <span className="hidden md:inline">
                 {isFullscreen ? 'Exit Full' : 'Fullscreen'}
@@ -1702,10 +1839,11 @@ export default function DroneStreamPage() {
               <button
                 type="button"
                 onClick={openAddModal}
-                className="h-8 px-3 rounded-lg bg-[#004AC6] hover:bg-[#003896] text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer active:scale-95"
+                className="h-8 px-2.5 sm:px-3 rounded-lg bg-[#004AC6] hover:bg-[#003896] text-white text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs transition-all cursor-pointer active:scale-95"
               >
-                <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>Add WebRTC Link</span>
+                <Plus className="w-3.5 h-3.5 stroke-[2.5] shrink-0" />
+                <span className="sm:hidden">Add Link</span>
+                <span className="hidden sm:inline">Add WebRTC Link</span>
               </button>
             )}
           </div>

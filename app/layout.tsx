@@ -1,9 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { Hanken_Grotesk, Inter } from "next/font/google";
-import { ScreenBackground } from "@/components/layout";
-import { AuthProvider } from "@/lib/auth";
-import { ThemeProvider } from "@/lib/theme";
-import { PersistentOperationsHost } from "@/components/nav-route";
+import { ScreenBackground } from "@/components/layout/screen-background";
+import { AuthProvider } from "@/lib/auth/auth-context";
+import { PushNotificationProvider } from "@/lib/push/push-context";
+import { ThemeProvider } from "@/lib/theme/theme-context";
+import { PersistentOperationsHost } from "@/components/nav-route/persistent-operations-host";
 import "./globals.css";
 
 /**
@@ -108,9 +109,11 @@ export default function RootLayout({
         <ThemeProvider>
           <ScreenBackground>
             <AuthProvider>
-              <PersistentOperationsHost>
-                {children}
-              </PersistentOperationsHost>
+              <PushNotificationProvider>
+                <PersistentOperationsHost>
+                  {children}
+                </PersistentOperationsHost>
+              </PushNotificationProvider>
             </AuthProvider>
           </ScreenBackground>
         </ThemeProvider>

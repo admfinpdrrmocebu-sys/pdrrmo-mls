@@ -1,66 +1,51 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import {
-  MapPin,
+  AlertTriangle,
   Anchor,
-  Plus,
-  Search,
-  Filter,
-  Check,
-  X,
-  Edit2,
-  Trash2,
-  Ship,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  AlertTriangle,
-  Loader2,
-  CheckCircle2,
+  Filter,
+  MapPin,
+  Plus,
+  Search,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
-import { PrimaryButton, SecondaryButton, ToggleButton } from '@/components/button';
+import { PrimaryButton } from '@/components/button';
 import { SummaryCard } from '@/components/card';
-import { CustomDropdown, CustomDropdownOption } from '@/components/input';
+import { CustomDropdown } from '@/components/input';
 import { Skeleton } from '@/components/skeleton';
 import { supabase } from '@/lib/supabase/client';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
+import {
+  getCachedAreasScreenData,
+  patchCachedAreasScreenData,
+  setCachedAreasScreenData,
+} from '@/lib/cache/screen-data-cache';
+import {
+  AreaItem,
+  RawDbAreaRow,
+  computeAreasSignature,
+  mapDbAreaRow,
+  portFilterOptions,
+} from './_components/types';
+import { AreaRow } from './_components/area-row';
 
-export interface AreaItem {
-  id: string;
-  code?: string;
-  name: string;
-  weatherMonitoring: boolean;
-  hasPort: boolean;
-  portName: string;
-  coordinates?: { lat: number; lng: number };
-  sortOrder?: number;
-  isActive?: boolean;
-}
+export type { AreaItem } from './_components/types';
 
-const portFilterOptions: CustomDropdownOption[] = [
-  { value: 'all', label: 'All Regions' },
-  {
-    value: 'with_port',
-    label: 'With Port/Pier',
-    dotColor: '#004AC6',
-    badge: 'Maritime',
-    badgeColor: 'bg-blue-50 text-[#004AC6]',
-  },
-  {
-    value: 'no_port',
-    label: 'No Port/Pier',
-    dotColor: '#94A3B8',
-    badge: 'Inland',
-    badgeColor: 'bg-slate-100 text-[#505F76]',
-  },
-];
+const AreaFormModal = dynamic(() => import('./_components/area-form-modal'), {
+  ssr: false,
+});
 
-// =============================================================================
-// SKELETON PLACEHOLDERS
-// =============================================================================
+const DeleteAreaModal = dynamic(() => import('./_components/delete-area-modal'), {
+  ssr: false,
+});
+
 function SummaryCardsSkeleton() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -110,47 +95,97 @@ function AreasTableSkeleton() {
   );
 }
 
-// =============================================================================
-// MAIN COMPONENT
-// =============================================================================
 export default function AreaSeedingPage() {
-  const { canWrite, isViewOnly } = useAuth();
+  const { canWrite } = useAuth();
   const canModifySettings = canWrite('Settings');
-  const isSettingsViewOnly = isViewOnly('Settings') || !canModifySettings;
 
-  const [areas, setAreas] = useState<AreaItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Synchronous SWR Cache Hydration
+  const [initialCache] = useState(() => getCachedAreasScreenData());
+
+  const [areas, setAreas] = useState<AreaItem[]>(() => initialCache?.areas ?? []);
+  const [isLoading, setIsLoading] = useState<boolean>(() => !initialCache);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [portFilter, setPortFilter] = useState('all');
-  const [currentPage, setCurrentPage] = useState(1);
+  const [searchQuery, setSearchQuery] = useState<string>(
+    () => initialCache?.searchQuery ?? ''
+  );
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>(
+    () => initialCache?.searchQuery ?? ''
+  );
+  const [portFilter, setPortFilter] = useState<string>(
+    () => initialCache?.portFilter ?? 'all'
+  );
+  const [currentPage, setCurrentPage] = useState<number>(
+    () => initialCache?.currentPage ?? 1
+  );
   const pageSize = 10;
 
-  // Modal Form State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingAreaId, setEditingAreaId] = useState<string | null>(null);
-  const [areaName, setAreaName] = useState('');
-  const [weatherMonitoring, setWeatherMonitoring] = useState(true);
-  const [portAvailability, setPortAvailability] = useState(false);
-  const [portName, setPortName] = useState('');
+  // Lazy Modal States
+  const [areaModalState, setAreaModalState] = useState<{
+    open: boolean;
+    editingArea: AreaItem | null;
+  }>({ open: false, editingArea: null });
+  const [deleteConfirmArea, setDeleteConfirmArea] = useState<AreaItem | null>(
+    null
+  );
 
-  // Delete Confirmation State
-  const [deleteConfirmArea, setDeleteConfirmArea] = useState<AreaItem | null>(null);
+  // Toast State
+  const [toastMessage, setToastMessage] = useState<{
+    text: string;
+    type: 'success' | 'error';
+  } | null>(null);
 
-  // Toast Notification State
-  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  // Refs for stable callbacks and signature diffing
+  const areasRef = useRef<AreaItem[]>(initialCache?.areas ?? []);
+  const searchQueryRef = useRef<string>(initialCache?.searchQuery ?? '');
+  const portFilterRef = useRef<string>(initialCache?.portFilter ?? 'all');
+  const currentPageRef = useRef<number>(initialCache?.currentPage ?? 1);
+  const areasSigRef = useRef<string>(initialCache?.signature ?? '');
+  const debounceFetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
-    setToastMessage({ text, type });
-    setTimeout(() => setToastMessage(null), 3500);
-  };
+  useEffect(() => {
+    areasRef.current = areas;
+  }, [areas]);
 
-  // ===========================================================================
-  // 1. DATA FETCHING (SUPABASE & REALTIME)
-  // ===========================================================================
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+    patchCachedAreasScreenData({ searchQuery });
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const showToast = useCallback(
+    (text: string, type: 'success' | 'error' = 'success') => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      setToastMessage({ text, type });
+      toastTimerRef.current = setTimeout(() => {
+        setToastMessage(null);
+      }, 3500);
+    },
+    []
+  );
+
+  const persistSnapshot = useCallback(
+    (nextAreas: AreaItem[], explicitSignature?: string) => {
+      const nextSig = explicitSignature ?? computeAreasSignature(nextAreas);
+      areasSigRef.current = nextSig;
+      setCachedAreasScreenData({
+        areas: nextAreas,
+        searchQuery: searchQueryRef.current,
+        portFilter: portFilterRef.current,
+        currentPage: currentPageRef.current,
+        signature: nextSig,
+        fetchedAt: Date.now(),
+      });
+    },
+    []
+  );
+
+  // 1. Background / Initial Fetch with signature diffing (never toggles isLoading = true)
   const fetchAreas = useCallback(async () => {
     try {
-      setIsLoading(true);
       const { data, error } = await supabase
         .from('areas')
         .select('*')
@@ -159,143 +194,201 @@ export default function AreaSeedingPage() {
 
       if (error) {
         console.warn('Could not fetch areas from database:', error.message);
-        setAreas([]);
-      } else if (data) {
-        const mappedAreas: AreaItem[] = data.map((item: any) => ({
-          id: item.id,
-          code: item.code,
-          name: item.name,
-          weatherMonitoring: item.weather_monitoring ?? true,
-          hasPort: item.has_port ?? false,
-          portName: item.port_name || 'None',
-          coordinates: item.coordinates,
-          sortOrder: item.sort_order ?? 0,
-          isActive: item.is_active ?? true,
-        }));
-        setAreas(mappedAreas);
+        if (areasRef.current.length === 0) {
+          setAreas([]);
+        }
+        return;
+      }
+
+      if (data) {
+        const mappedAreas = (data as RawDbAreaRow[]).map(mapDbAreaRow);
+        const nextSig = computeAreasSignature(mappedAreas);
+
+        if (nextSig !== areasSigRef.current) {
+          setAreas(mappedAreas);
+          persistSnapshot(mappedAreas, nextSig);
+        } else {
+          patchCachedAreasScreenData({ fetchedAt: Date.now() });
+        }
       }
     } catch (err) {
       console.error('Error fetching areas from database:', err);
-      setAreas([]);
+      if (areasRef.current.length === 0) {
+        setAreas([]);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [persistSnapshot]);
+
+  const scheduleBackgroundRefresh = useCallback(() => {
+    if (debounceFetchTimerRef.current) {
+      clearTimeout(debounceFetchTimerRef.current);
+    }
+    debounceFetchTimerRef.current = setTimeout(() => {
+      debounceFetchTimerRef.current = null;
+      void fetchAreas();
+    }, 350);
+  }, [fetchAreas]);
 
   useEffect(() => {
-    fetchAreas();
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) void fetchAreas();
+    });
 
-    // Supabase Realtime Subscription
+    const channelName = `areas-realtime-channel-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 7)}`;
+
     const channel = supabase
-      .channel('areas-realtime-channel')
+      .channel(channelName)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'areas' },
         () => {
-          fetchAreas();
+          scheduleBackgroundRefresh();
         }
       )
       .subscribe();
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        scheduleBackgroundRefresh();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
+      cancelled = true;
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      if (debounceFetchTimerRef.current) clearTimeout(debounceFetchTimerRef.current);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
-  }, [fetchAreas]);
+  }, [fetchAreas, scheduleBackgroundRefresh]);
 
-  // Reset pagination when search query or filter changes
-  useEffect(() => {
+  // Filter & Pagination handlers (no cascading setCurrentPage effect)
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchQuery(value);
+    currentPageRef.current = 1;
     setCurrentPage(1);
-  }, [searchQuery, portFilter]);
+    patchCachedAreasScreenData({ searchQuery: value, currentPage: 1 });
+  }, []);
 
-  // ===========================================================================
-  // 2. FILTERING & PAGINATION
-  // ===========================================================================
+  const handlePortFilterChange = useCallback((val: string) => {
+    portFilterRef.current = val;
+    currentPageRef.current = 1;
+    setPortFilter(val);
+    setCurrentPage(1);
+    patchCachedAreasScreenData({ portFilter: val, currentPage: 1 });
+  }, []);
+
+  const handlePageChange = useCallback((nextPage: number) => {
+    currentPageRef.current = nextPage;
+    setCurrentPage(nextPage);
+    patchCachedAreasScreenData({ currentPage: nextPage });
+  }, []);
+
+  // 2. Filtering & Pagination
   const filteredAreas = useMemo(() => {
+    const q = debouncedSearchQuery.trim().toLowerCase();
     return areas.filter((area) => {
       const matchesSearch =
-        area.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        area.portName.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        area.name.toLowerCase().includes(q) ||
+        area.portName.toLowerCase().includes(q);
       const matchesFilter =
         portFilter === 'all' ||
         (portFilter === 'with_port' && area.hasPort) ||
         (portFilter === 'no_port' && !area.hasPort);
       return matchesSearch && matchesFilter;
     });
-  }, [areas, searchQuery, portFilter]);
+  }, [areas, debouncedSearchQuery, portFilter]);
 
   const totalPages = Math.ceil(filteredAreas.length / pageSize) || 1;
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+
   const paginatedAreas = useMemo(() => {
-    const startIndex = (currentPage - 1) * pageSize;
+    const startIndex = (safeCurrentPage - 1) * pageSize;
     return filteredAreas.slice(startIndex, startIndex + pageSize);
-  }, [filteredAreas, currentPage, pageSize]);
+  }, [filteredAreas, safeCurrentPage, pageSize]);
 
-  // Statistics
   const totalAreas = areas.length;
-  const totalWithPort = areas.filter((a) => a.hasPort).length;
+  const totalWithPort = useMemo(
+    () => areas.filter((a) => a.hasPort).length,
+    [areas]
+  );
 
-  // ===========================================================================
-  // 3. HANDLERS: ADD / EDIT / DELETE
-  // ---------------------------------------------------------------------------
-  const handleOpenAddModal = () => {
+  // 3. Stable Modal & CRUD Handlers
+  const handleOpenAddModal = useCallback(() => {
     if (!canModifySettings) {
       showToast('Action restricted under View-Only clearance.', 'error');
       return;
     }
-    setEditingAreaId(null);
-    setAreaName('');
-    setWeatherMonitoring(true);
-    setPortAvailability(false);
-    setPortName('');
-    setIsModalOpen(true);
-  };
+    setAreaModalState({ open: true, editingArea: null });
+  }, [canModifySettings, showToast]);
 
-  const handleOpenEditModal = (area: AreaItem) => {
-    if (!canModifySettings) {
-      showToast('Action restricted under View-Only clearance.', 'error');
-      return;
-    }
-    setEditingAreaId(area.id);
-    setAreaName(area.name);
-    setWeatherMonitoring(area.weatherMonitoring);
-    setPortAvailability(area.hasPort);
-    setPortName(area.hasPort && area.portName !== 'None' ? area.portName : '');
-    setIsModalOpen(true);
-  };
+  const handleOpenEditModal = useCallback(
+    (area: AreaItem) => {
+      if (!canModifySettings) {
+        showToast('Action restricted under View-Only clearance.', 'error');
+        return;
+      }
+      setAreaModalState({ open: true, editingArea: area });
+    },
+    [canModifySettings, showToast]
+  );
 
-  const handleSaveArea = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canModifySettings) {
-      showToast('Action restricted under View-Only clearance.', 'error');
-      return;
-    }
-    if (!areaName.trim()) return;
+  const handleRequestDeleteArea = useCallback((area: AreaItem) => {
+    setDeleteConfirmArea(area);
+  }, []);
 
-    try {
-      setIsSubmitting(true);
-      const isEditing = !!editingAreaId;
-      const formattedPortName =
-        portAvailability && portName.trim() ? portName.trim() : 'None';
+  const handleSaveArea = useCallback(
+    async ({
+      editingAreaId,
+      areaName,
+      weatherMonitoring,
+      portAvailability,
+      portName,
+    }: {
+      editingAreaId: string | null;
+      areaName: string;
+      weatherMonitoring: boolean;
+      portAvailability: boolean;
+      portName: string;
+    }) => {
+      if (!canModifySettings) {
+        showToast('Action restricted under View-Only clearance.', 'error');
+        return;
+      }
+      if (!areaName.trim()) return;
 
-      if (isEditing) {
-        // Update existing area
-        const updatePayload = {
-          name: areaName.trim(),
-          weather_monitoring: weatherMonitoring,
-          has_port: portAvailability,
-          port_name: formattedPortName,
-        };
+      try {
+        setIsSubmitting(true);
+        const formattedPortName =
+          portAvailability && portName.trim() ? portName.trim() : 'None';
 
-        const { error } = await supabase
-          .from('areas')
-          .update(updatePayload)
-          .eq('id', editingAreaId);
+        let updatedAreasList: AreaItem[] = [];
 
-        if (error) {
-          console.warn('Database update error, updating locally:', error.message);
-        }
+        if (editingAreaId) {
+          const updatePayload = {
+            name: areaName.trim(),
+            weather_monitoring: weatherMonitoring,
+            has_port: portAvailability,
+            port_name: formattedPortName,
+          };
 
-        setAreas((prev) =>
-          prev.map((a) =>
+          const { error } = await supabase
+            .from('areas')
+            .update(updatePayload)
+            .eq('id', editingAreaId);
+
+          if (error) {
+            console.warn('Database update error, updating locally:', error.message);
+          }
+
+          updatedAreasList = areasRef.current.map((a) =>
             a.id === editingAreaId
               ? {
                   ...a,
@@ -305,64 +398,73 @@ export default function AreaSeedingPage() {
                   portName: formattedPortName,
                 }
               : a
-          )
-        );
+          );
+          setAreas(updatedAreasList);
+          showToast(`Area "${areaName.trim()}" updated successfully.`);
+        } else {
+          const generatedCode =
+            areaName
+              .toLowerCase()
+              .trim()
+              .replace(/[^a-z0-9]+/g, '-') || `area-${Date.now()}`;
 
-        showToast(`Area "${areaName.trim()}" updated successfully.`);
-      } else {
-        // Create new area
-        const generatedCode =
-          areaName
-            .toLowerCase()
-            .trim()
-            .replace(/[^a-z0-9]+/g, '-') || `area-${Date.now()}`;
+          const nextSortOrder =
+            areasRef.current.reduce(
+              (max, a) => Math.max(max, a.sortOrder ?? 0),
+              areasRef.current.length
+            ) + 1;
 
-        const insertPayload = {
-          code: generatedCode,
-          name: areaName.trim(),
-          weather_monitoring: weatherMonitoring,
-          has_port: portAvailability,
-          port_name: formattedPortName,
-          is_active: true,
-          sort_order: areas.length + 1,
-        };
+          const insertPayload = {
+            code: generatedCode,
+            name: areaName.trim(),
+            weather_monitoring: weatherMonitoring,
+            has_port: portAvailability,
+            port_name: formattedPortName,
+            is_active: true,
+            sort_order: nextSortOrder,
+          };
 
-        const { data, error } = await supabase
-          .from('areas')
-          .insert([insertPayload])
-          .select()
-          .maybeSingle();
+          const { data, error } = await supabase
+            .from('areas')
+            .insert([insertPayload])
+            .select()
+            .maybeSingle();
 
-        if (error) {
-          console.warn('Database insert error, adding locally:', error.message);
+          if (error) {
+            console.warn('Database insert error, adding locally:', error.message);
+          }
+
+          const newArea: AreaItem = data
+            ? mapDbAreaRow(data as RawDbAreaRow)
+            : {
+                id: `area-${Date.now()}`,
+                code: generatedCode,
+                name: areaName.trim(),
+                weatherMonitoring,
+                hasPort: portAvailability,
+                portName: formattedPortName,
+                isActive: true,
+                sortOrder: nextSortOrder,
+              };
+
+          updatedAreasList = [...areasRef.current, newArea];
+          setAreas(updatedAreasList);
+          showToast(`Area "${areaName.trim()}" created successfully.`);
         }
 
-        const newArea: AreaItem = {
-          id: data?.id || `area-${Date.now()}`,
-          code: data?.code || generatedCode,
-          name: areaName.trim(),
-          weatherMonitoring,
-          hasPort: portAvailability,
-          portName: formattedPortName,
-          isActive: true,
-          sortOrder: areas.length + 1,
-        };
-
-        setAreas((prev) => [...prev, newArea]);
-        showToast(`Area "${areaName.trim()}" created successfully.`);
+        persistSnapshot(updatedAreasList);
+        setAreaModalState({ open: false, editingArea: null });
+      } catch (err) {
+        console.error('Error saving area:', err);
+        showToast('Failed to save area configuration.', 'error');
+      } finally {
+        setIsSubmitting(false);
       }
+    },
+    [canModifySettings, showToast, persistSnapshot]
+  );
 
-      setIsModalOpen(false);
-      setEditingAreaId(null);
-    } catch (err) {
-      console.error('Error saving area:', err);
-      showToast('Failed to save area configuration.', 'error');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleConfirmDelete = async () => {
+  const handleConfirmDelete = useCallback(async () => {
     if (!canModifySettings) {
       showToast('Action restricted under View-Only clearance.', 'error');
       return;
@@ -378,7 +480,9 @@ export default function AreaSeedingPage() {
         console.warn('Database delete error, removing locally:', error.message);
       }
 
-      setAreas((prev) => prev.filter((item) => item.id !== id));
+      const updatedAreasList = areasRef.current.filter((item) => item.id !== id);
+      setAreas(updatedAreasList);
+      persistSnapshot(updatedAreasList);
       showToast(`Area "${name}" removed successfully.`);
     } catch (err) {
       console.error('Error deleting area:', err);
@@ -387,7 +491,7 @@ export default function AreaSeedingPage() {
       setIsSubmitting(false);
       setDeleteConfirmArea(null);
     }
-  };
+  }, [canModifySettings, deleteConfirmArea, showToast, persistSnapshot]);
 
   return (
     <AppLayoutShell
@@ -395,9 +499,7 @@ export default function AreaSeedingPage() {
       subtitle="Manage and monitor regional assignments and port availabilities."
     >
       <div className="space-y-8 max-w-7xl mx-auto pb-12">
-        {/* ========================================================================= */}
         {/* 1. PAGE HEADER */}
-        {/* ========================================================================= */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#1E293B]">
@@ -415,90 +517,65 @@ export default function AreaSeedingPage() {
           message="Regional area seeding definitions and monitoring status indicators are presented in read-only audit mode."
         />
 
-        {/* ========================================================================= */}
-        {/* 2. SUMMARY METRIC CARDS (BENTO STYLE) */}
-        {/* ========================================================================= */}
-        <AnimatePresence mode="wait">
-          {isLoading ? (
-            <motion.div
-              key="summary-skeleton"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              <SummaryCardsSkeleton />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="summary-content"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-              className="grid grid-cols-1 md:grid-cols-2 gap-6"
-            >
-              {/* Card 1: Total Areas */}
-              <SummaryCard
-                title="TOTAL AREAS"
-                value={totalAreas}
-                subtitle="monitored regions"
-                icon={<MapPin className="w-6 h-6 text-[#505F76]" />}
-                iconBg="bg-slate-100 text-[#505F76] border border-slate-200"
-                ambientColor="bg-[#505F76]/5"
-              />
+        {/* 2. SUMMARY METRIC CARDS */}
+        {isLoading ? (
+          <SummaryCardsSkeleton />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <SummaryCard
+              title="TOTAL AREAS"
+              value={totalAreas}
+              subtitle="monitored regions"
+              icon={<MapPin className="w-6 h-6 text-[#505F76]" />}
+              iconBg="bg-slate-100 text-[#505F76] border border-slate-200"
+              ambientColor="bg-[#505F76]/5"
+            />
 
-              {/* Card 2: Total Areas with Port/Pier */}
-              <SummaryCard
-                title="TOTAL AREAS WITH PORT/PIER"
-                value={totalWithPort}
-                subtitle="active maritime nodes"
-                icon={<Anchor className="w-6 h-6 text-[#004AC6]" />}
-                iconBg="bg-[#004AC6]/10 text-[#004AC6] border border-[#004AC6]/15"
-                ambientColor="bg-[#004AC6]/5"
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+            <SummaryCard
+              title="TOTAL AREAS WITH PORT/PIER"
+              value={totalWithPort}
+              subtitle="active maritime nodes"
+              icon={<Anchor className="w-6 h-6 text-[#004AC6]" />}
+              iconBg="bg-[#004AC6]/10 text-[#004AC6] border border-[#004AC6]/15"
+              ambientColor="bg-[#004AC6]/5"
+            />
+          </div>
+        )}
 
-        {/* ========================================================================= */}
         {/* 3. MONITORING AREAS DATA TABLE */}
-        {/* ========================================================================= */}
         <div className="bg-white border border-[#E2E8F0] rounded-[1.75rem] shadow-sm flex flex-col overflow-hidden">
-          {/* Toolbar */}
           <div className="p-5 sm:p-6 border-b border-[#E2E8F0] bg-white flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4">
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-bold text-[#1E293B]">Monitoring Areas</h2>
               <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#004AC6]/10 text-[#004AC6] border border-[#004AC6]/15">
-                {filteredAreas.length} {filteredAreas.length === 1 ? 'Area' : 'Areas'}
+                {filteredAreas.length}{' '}
+                {filteredAreas.length === 1 ? 'Area' : 'Areas'}
               </span>
             </div>
 
             <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
-              {/* Search Bar */}
               <div className="relative flex-1 sm:w-64">
                 <Search className="w-4 h-4 text-[#94A3B8] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => handleSearchChange(e.target.value)}
                   placeholder="Search areas..."
                   className="w-full pl-9 pr-4 py-2.5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-full text-xs sm:text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
                 />
               </div>
 
-              {/* Filter Port Custom Dropdown */}
               <div className="w-44 shrink-0">
                 <CustomDropdown
                   options={portFilterOptions}
                   value={portFilter}
-                  onChange={(val) => setPortFilter(val)}
+                  onChange={handlePortFilterChange}
                   leftIcon={<Filter className="w-3.5 h-3.5" />}
                   size="sm"
                   pill
                 />
               </div>
 
-              {/* Add Area Button */}
               {canModifySettings && (
                 <PrimaryButton
                   size="md"
@@ -513,7 +590,6 @@ export default function AreaSeedingPage() {
             </div>
           </div>
 
-          {/* Table Body / Skeleton */}
           <div className="overflow-x-auto min-h-[300px]">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -543,7 +619,6 @@ export default function AreaSeedingPage() {
                     </td>
                   </tr>
                 ) : areas.length === 0 ? (
-                  /* From Scratch Empty State */
                   <tr>
                     <td colSpan={5} className="py-16 px-6 text-center">
                       <div className="flex flex-col items-center justify-center gap-4 max-w-md mx-auto">
@@ -558,24 +633,27 @@ export default function AreaSeedingPage() {
                             Start from scratch by adding regional zones, meteorological tracking, and maritime ports to the database.
                           </p>
                         </div>
-                        <PrimaryButton
-                          size="sm"
-                          pill
-                          onClick={handleOpenAddModal}
-                          leftIcon={<Plus className="w-4 h-4" />}
-                        >
-                          Add First Area
-                        </PrimaryButton>
+                        {canModifySettings && (
+                          <PrimaryButton
+                            size="sm"
+                            pill
+                            onClick={handleOpenAddModal}
+                            leftIcon={<Plus className="w-4 h-4" />}
+                          >
+                            Add First Area
+                          </PrimaryButton>
+                        )}
                       </div>
                     </td>
                   </tr>
                 ) : filteredAreas.length === 0 ? (
-                  /* Search / Filter Empty State */
                   <tr>
                     <td colSpan={5} className="py-12 text-center text-[#757680]">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <MapPin className="w-8 h-8 text-[#94A3B8] opacity-50" />
-                        <p className="text-sm font-semibold text-[#505F76]">No matching areas found</p>
+                        <p className="text-sm font-semibold text-[#505F76]">
+                          No matching areas found
+                        </p>
                         <p className="text-xs text-[#94A3B8]">
                           Try adjusting your search criteria or filter options.
                         </p>
@@ -584,119 +662,42 @@ export default function AreaSeedingPage() {
                   </tr>
                 ) : (
                   paginatedAreas.map((area) => (
-                    <tr
+                    <AreaRow
                       key={area.id}
-                      className="hover:bg-slate-50/80 transition-colors group"
-                    >
-                      {/* Name of the Area */}
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-[#004AC6]/10 text-[#004AC6] flex items-center justify-center shrink-0 border border-[#004AC6]/15">
-                            <MapPin className="w-4 h-4" />
-                          </div>
-                          <span className="font-semibold text-[#1E293B]">{area.name}</span>
-                        </div>
-                      </td>
-
-                      {/* Weather Status */}
-                      <td className="py-4 px-6 text-center">
-                        <div
-                          className={`inline-flex items-center justify-center w-6 h-6 rounded-md border ${
-                            area.weatherMonitoring
-                              ? 'bg-[#004AC6]/10 border-[#004AC6]/20 text-[#004AC6]'
-                              : 'bg-slate-50 border-slate-200 text-slate-300'
-                          }`}
-                        >
-                          {area.weatherMonitoring ? (
-                            <Check className="w-4 h-4" strokeWidth={2.5} />
-                          ) : (
-                            <X className="w-4 h-4 text-slate-400" />
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Port/Pier Availability */}
-                      <td className="py-4 px-6 text-center">
-                        <div
-                          className={`inline-flex items-center justify-center w-6 h-6 rounded-md border ${
-                            area.hasPort
-                              ? 'bg-[#004AC6]/10 border-[#004AC6]/20 text-[#004AC6]'
-                              : 'bg-slate-50 border-slate-200 text-slate-300'
-                          }`}
-                        >
-                          {area.hasPort ? (
-                            <Check className="w-4 h-4" strokeWidth={2.5} />
-                          ) : (
-                            <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Port/Pier Name */}
-                      <td className="py-4 px-6">
-                        {area.hasPort && area.portName !== 'None' ? (
-                          <div className="flex items-center gap-2">
-                            <Ship className="w-3.5 h-3.5 text-[#004AC6] shrink-0" />
-                            <span className="text-[#505F76] font-medium">{area.portName}</span>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 italic">None</span>
-                        )}
-                      </td>
-
-                      {/* Actions */}
-                      <td className="py-4 px-6 text-right">
-                        {canModifySettings ? (
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditModal(area)}
-                              title="Edit Area"
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#004AC6] hover:bg-[#004AC6]/10 transition-colors cursor-pointer"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setDeleteConfirmArea(area)}
-                              title="Delete Area"
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 text-xs italic">View Only</span>
-                        )}
-                      </td>
-                    </tr>
+                      area={area}
+                      canModifySettings={canModifySettings}
+                      onEdit={handleOpenEditModal}
+                      onDelete={handleRequestDeleteArea}
+                    />
                   ))
                 )}
               </tbody>
             </table>
           </div>
 
-          {/* Table Footer / Pagination Controls */}
           <div className="px-6 py-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/50 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-[#757680]">
             <p>
               Showing{' '}
               <span className="font-bold text-[#1E293B]">
                 {filteredAreas.length === 0
                   ? 0
-                  : (currentPage - 1) * pageSize + 1}
-                -
-                {Math.min(currentPage * pageSize, filteredAreas.length)}
+                  : (safeCurrentPage - 1) * pageSize + 1}
+                -{Math.min(safeCurrentPage * pageSize, filteredAreas.length)}
               </span>{' '}
-              of <span className="font-bold text-[#1E293B]">{filteredAreas.length}</span> filtered areas ({totalAreas} total in database)
+              of{' '}
+              <span className="font-bold text-[#1E293B]">
+                {filteredAreas.length}
+              </span>{' '}
+              filtered areas ({totalAreas} total in database)
             </p>
 
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                disabled={currentPage <= 1 || isLoading}
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={safeCurrentPage <= 1 || isLoading}
+                onClick={() => handlePageChange(Math.max(1, safeCurrentPage - 1))}
                 className={`w-8 h-8 rounded-full border border-[#E2E8F0] flex items-center justify-center transition-all ${
-                  currentPage <= 1 || isLoading
+                  safeCurrentPage <= 1 || isLoading
                     ? 'bg-slate-50 text-slate-300 cursor-not-allowed'
                     : 'bg-white text-[#505F76] hover:text-[#004AC6] hover:border-[#004AC6] cursor-pointer'
                 }`}
@@ -704,14 +705,16 @@ export default function AreaSeedingPage() {
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <span className="px-3 py-1 rounded-full bg-[#004AC6] text-white font-semibold text-xs">
-                {currentPage} / {totalPages}
+                {safeCurrentPage} / {totalPages}
               </span>
               <button
                 type="button"
-                disabled={currentPage >= totalPages || isLoading}
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safeCurrentPage >= totalPages || isLoading}
+                onClick={() =>
+                  handlePageChange(Math.min(totalPages, safeCurrentPage + 1))
+                }
                 className={`w-8 h-8 rounded-full border border-[#E2E8F0] flex items-center justify-center transition-all ${
-                  currentPage >= totalPages || isLoading
+                  safeCurrentPage >= totalPages || isLoading
                     ? 'bg-slate-50 text-slate-300 cursor-not-allowed'
                     : 'bg-white text-[#505F76] hover:text-[#004AC6] hover:border-[#004AC6] cursor-pointer'
                 }`}
@@ -723,240 +726,32 @@ export default function AreaSeedingPage() {
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* 4. MODAL: ADD / EDIT MONITORING AREA */}
-      {/* ========================================================================= */}
+      {/* 4. LAZY MODAL: ADD / EDIT MONITORING AREA */}
       <AnimatePresence>
-        {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
-            {/* Backdrop Blur */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => !isSubmitting && setIsModalOpen(false)}
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-
-            {/* Modal Card */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              transition={{ duration: 0.2 }}
-              className="relative bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden z-10"
-            >
-              {/* Modal Header */}
-              <div className="px-6 py-4.5 border-b border-[#E2E8F0] bg-[#F8FAFC]/60 flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-[#1E293B]">
-                    {editingAreaId ? 'Edit Monitoring Area' : 'Add New Monitoring Area'}
-                  </h2>
-                  <p className="text-xs text-[#757680]">
-                    {editingAreaId
-                      ? 'Update geographic zone and maritime port configurations'
-                      : 'Register new geographic zone and port details'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={() => setIsModalOpen(false)}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-[#757680] hover:text-[#1E293B] hover:bg-slate-200/60 transition-colors cursor-pointer"
-                  aria-label="Close modal"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Modal Form */}
-              <form onSubmit={handleSaveArea} className="flex flex-col">
-                <div className="p-6 space-y-5">
-                  {/* Area Name Input */}
-                  <div className="flex flex-col gap-1.5">
-                    <label
-                      htmlFor="area-name"
-                      className="text-xs font-semibold text-[#505F76] uppercase tracking-wide"
-                    >
-                      Area Name <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="area-name"
-                      type="text"
-                      required
-                      value={areaName}
-                      onChange={(e) => setAreaName(e.target.value)}
-                      placeholder="e.g., Cebu City, Mandaue, Talisay"
-                      className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-full px-4 py-2.5 text-sm text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15 transition-all"
-                    />
-                  </div>
-
-                  {/* Weather Monitoring Toggle */}
-                  <div className="flex items-center justify-between py-1">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-semibold text-[#1E293B]">
-                        Weather Monitoring
-                      </span>
-                      <span className="text-xs text-[#757680]">
-                        Include in meteorological telemetry updates
-                      </span>
-                    </div>
-                    <ToggleButton
-                      checked={weatherMonitoring}
-                      onChange={(val) => setWeatherMonitoring(val)}
-                    />
-                  </div>
-
-                  <hr className="border-t border-[#E2E8F0]" />
-
-                  {/* Port/Pier Availability Toggle */}
-                  <div className="flex items-center justify-between py-1">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-semibold text-[#1E293B]">
-                        Port/Pier Availability
-                      </span>
-                      <span className="text-xs text-[#757680]">
-                        Enable maritime hub monitoring
-                      </span>
-                    </div>
-                    <ToggleButton
-                      checked={portAvailability}
-                      onChange={(val) => {
-                        setPortAvailability(val);
-                        if (!val) setPortName('');
-                      }}
-                    />
-                  </div>
-
-                  {/* Port/Pier Name Input */}
-                  <div className="flex flex-col gap-1.5">
-                    <label
-                      htmlFor="port-name"
-                      className="text-xs font-semibold text-[#505F76] uppercase tracking-wide"
-                    >
-                      Port/Pier Name {portAvailability && <span className="text-rose-500">*</span>}
-                    </label>
-                    <input
-                      id="port-name"
-                      type="text"
-                      disabled={!portAvailability}
-                      required={portAvailability}
-                      value={portName}
-                      onChange={(e) => setPortName(e.target.value)}
-                      placeholder={
-                        portAvailability
-                          ? 'e.g., Pier 1, Cebu International Port'
-                          : 'Disabled (No port available)'
-                      }
-                      className={`w-full border border-[#E2E8F0] rounded-full px-4 py-2.5 text-sm transition-all ${
-                        portAvailability
-                          ? 'bg-[#F8FAFC] text-[#1E293B] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#004AC6] focus:bg-white focus:ring-2 focus:ring-[#004AC6]/15'
-                          : 'bg-slate-100 text-slate-400 placeholder:text-slate-400 cursor-not-allowed opacity-60'
-                      }`}
-                    />
-                  </div>
-                </div>
-
-                {/* Modal Footer */}
-                <div className="px-6 py-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/60 flex items-center justify-between">
-                  <SecondaryButton
-                    type="button"
-                    size="md"
-                    pill
-                    disabled={isSubmitting}
-                    onClick={() => setIsModalOpen(false)}
-                  >
-                    Cancel
-                  </SecondaryButton>
-
-                  <PrimaryButton
-                    type="submit"
-                    size="md"
-                    pill
-                    disabled={isSubmitting}
-                    leftIcon={
-                      isSubmitting ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Plus className="w-4 h-4" />
-                      )
-                    }
-                  >
-                    {isSubmitting
-                      ? 'Saving...'
-                      : editingAreaId
-                      ? 'Save Changes'
-                      : 'Add Area'}
-                  </PrimaryButton>
-                </div>
-              </form>
-            </motion.div>
-          </div>
+        {areaModalState.open && (
+          <AreaFormModal
+            key={areaModalState.editingArea?.id || 'create-area'}
+            editingArea={areaModalState.editingArea}
+            isSubmitting={isSubmitting}
+            onClose={() => setAreaModalState({ open: false, editingArea: null })}
+            onSave={handleSaveArea}
+          />
         )}
       </AnimatePresence>
 
-      {/* ========================================================================= */}
-      {/* 5. MODAL: CONFIRM DELETE AREA */}
-      {/* ========================================================================= */}
+      {/* 5. LAZY MODAL: CONFIRM DELETE AREA */}
       <AnimatePresence>
         {deleteConfirmArea && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => !isSubmitting && setDeleteConfirmArea(null)}
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              transition={{ duration: 0.2 }}
-              className="relative bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl w-full max-w-sm flex flex-col overflow-hidden z-10 p-6 space-y-4"
-            >
-              <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
-                <AlertTriangle className="w-6 h-6" />
-              </div>
-
-              <div className="text-center space-y-1">
-                <h3 className="text-base font-bold text-[#1E293B]">Delete Monitoring Area</h3>
-                <p className="text-xs text-[#757680] leading-relaxed">
-                  Are you sure you want to remove{' '}
-                  <span className="font-bold text-[#1E293B]">"{deleteConfirmArea.name}"</span>?
-                  This action will delete the area from the database.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-3 pt-2">
-                <SecondaryButton
-                  type="button"
-                  size="md"
-                  pill
-                  disabled={isSubmitting}
-                  onClick={() => setDeleteConfirmArea(null)}
-                  className="flex-1"
-                >
-                  Cancel
-                </SecondaryButton>
-                <button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={handleConfirmDelete}
-                  className="flex-1 py-2.5 px-4 rounded-full bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-bold transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Delete'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
+          <DeleteAreaModal
+            area={deleteConfirmArea}
+            isSubmitting={isSubmitting}
+            onCancel={() => setDeleteConfirmArea(null)}
+            onConfirm={handleConfirmDelete}
+          />
         )}
       </AnimatePresence>
 
-      {/* ========================================================================= */}
       {/* 6. TOAST NOTIFICATION POPUP */}
-      {/* ========================================================================= */}
       <AnimatePresence>
         {toastMessage && (
           <motion.div
@@ -981,4 +776,3 @@ export default function AreaSeedingPage() {
     </AppLayoutShell>
   );
 }
-

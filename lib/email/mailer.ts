@@ -61,19 +61,19 @@ function getSmtpTransporter() {
 }
 
 /**
- * Dispatches an official PDRRMO MLS invitation email via SMTP.
+ * Dispatches an official PDRRMO - IDOCS invitation email via SMTP.
  * If SMTP credentials are not yet supplied, it simulates delivery for seamless testing.
  */
 export async function sendInvitationEmail(data: InvitationEmailData): Promise<SendEmailResult> {
   const from =
     process.env.SMTP_FROM ||
     (process.env.SMTP_USER
-      ? `"PDRRMO MLS Administration" <${process.env.SMTP_USER}>`
-      : '"PDRRMO MLS Administration" <no-reply@mls.pdrrmo.gov.ph>');
+      ? `"PDRRMO - IDOCS" <${process.env.SMTP_USER}>`
+      : '"PDRRMO - IDOCS" <no-reply@mls.pdrrmo.gov.ph>');
 
   const html = generateInvitationEmailHtml(data);
   const text = generateInvitationEmailText(data);
-  const subject = `[PDRRMO MLS] Official System Access Invitation - ${data.positionTitle}`;
+  const subject = `[PDRRMO - IDOCS] Official System Access Invitation - ${data.positionTitle}`;
 
   const transporter = getSmtpTransporter();
 
@@ -139,12 +139,12 @@ export async function sendPasswordResetOtpEmail(data: OtpEmailData): Promise<Sen
   const from =
     process.env.SMTP_FROM ||
     (process.env.SMTP_USER
-      ? `"PDRRMO Emergency Operations" <${process.env.SMTP_USER}>`
-      : '"PDRRMO Emergency Operations" <no-reply@mls.pdrrmo.gov.ph>');
+      ? `"PDRRMO - IDOCS" <${process.env.SMTP_USER}>`
+      : '"PDRRMO - IDOCS" <no-reply@mls.pdrrmo.gov.ph>');
 
   const html = generateOtpEmailHtml(data);
   const text = generateOtpEmailText(data);
-  const subject = `[PDRRMO] Password Reset Verification Code: ${data.otpCode}`;
+  const subject = `[PDRRMO - IDOCS] Password Reset Verification Code: ${data.otpCode}`;
 
   const transporter = getSmtpTransporter();
 

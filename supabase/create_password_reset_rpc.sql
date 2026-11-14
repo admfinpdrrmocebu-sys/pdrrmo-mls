@@ -14,7 +14,7 @@ CREATE OR REPLACE FUNCTION public.admin_reset_user_password(
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, auth
+SET search_path = public, auth, extensions
 AS $$
 BEGIN
     IF p_new_password IS NULL OR length(p_new_password) < 6 THEN
@@ -35,3 +35,6 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.admin_reset_user_password(UUID, TEXT) TO authenticated, anon, service_role;
+
+-- Reload PostgREST schema cache so the RPC is immediately discoverable
+NOTIFY pgrst, 'reload schema';

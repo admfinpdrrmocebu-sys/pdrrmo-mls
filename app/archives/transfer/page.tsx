@@ -45,7 +45,7 @@ import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
 import { generateRollCallPDF, generateDailyLogsPDF, sortLogsChronologically } from '@/lib/pdf-generator';
-import { formatBytes } from '@/app/archives/page';
+import { formatBytes } from '@/app/archives/_components/types';
 import {
   GOOGLE_CLIENT_ID,
   extractGoogleDriveFolderId,

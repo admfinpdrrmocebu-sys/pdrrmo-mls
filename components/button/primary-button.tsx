@@ -1,11 +1,9 @@
 ﻿'use client';
 
 import React from 'react';
-import { motion, HTMLMotionProps } from 'motion/react';
-import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-export interface PrimaryButtonProps extends Omit<HTMLMotionProps<'button'>, 'children'> {
+export interface PrimaryButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   children: React.ReactNode;
   size?: 'sm' | 'md' | 'lg';
   fullWidth?: boolean;
@@ -35,12 +33,11 @@ export function PrimaryButton({
   };
 
   return (
-    <motion.button
-      whileHover={disabled || isLoading ? undefined : { scale: 1.01, filter: 'brightness(1.05)' }}
-      whileTap={disabled || isLoading ? undefined : { scale: 0.98 }}
+    <button
       disabled={disabled || isLoading}
       className={twMerge(
         'group inline-flex items-center justify-center transition-all duration-200 select-none cursor-pointer',
+        'hover:scale-[1.01] hover:brightness-105 active:scale-[0.98]',
         'bg-[#004AC6] hover:bg-[#003EA8] active:bg-[#002F82] text-white',
         'shadow-sm shadow-[#004AC6]/25 hover:shadow-md hover:shadow-[#004AC6]/30',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#004AC6] focus-visible:ring-offset-2',
@@ -82,7 +79,7 @@ export function PrimaryButton({
           {rightIcon}
         </span>
       )}
-    </motion.button>
+    </button>
   );
 }
 
