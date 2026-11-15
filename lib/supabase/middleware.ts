@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
+const PERSISTENT_COOKIE_MAX_AGE = 60 * 60 * 24 * 400; // 400 days
+
 /**
  * Public authentication routes where unauthenticated users can access,
  * and authenticated users should be redirected away to /dashboard.
@@ -42,6 +44,19 @@ function isPublicRoute(pathname: string): boolean {
 }
 
 /**
+ * Detects transient network/fetch failures during server-side auth verification
+ * so temporary connectivity blips never kick a remembered terminal out to /login.
+ */
+function isTransientAuthError(error: { name?: string; message?: string; status?: number } | null): boolean {
+  if (!error) return false;
+  if (error.name === 'AuthRetryableFetchError' || error.status === 0 || (error.status && error.status >= 500)) {
+    return true;
+  }
+  const msg = error.message || '';
+  return /fetch|network|timeout|abort|econn|enotfound|socket/i.test(msg);
+}
+
+/**
  * Refreshes auth tokens and enforces server-side route protection.
  */
 export async function updateSession(request: NextRequest) {
@@ -66,7 +81,16 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse;
   }
 
+  const hasAuthCookie = request.cookies
+    .getAll()
+    .some((cookie) => cookie.name.includes('-auth-token') && Boolean(cookie.value));
+
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookieOptions: {
+      maxAge: PERSISTENT_COOKIE_MAX_AGE,
+      path: '/',
+      sameSite: 'lax',
+    },
     cookies: {
       getAll() {
         return request.cookies.getAll();
@@ -76,9 +100,15 @@ export async function updateSession(request: NextRequest) {
         supabaseResponse = NextResponse.next({
           request,
         });
-        cookiesToSet.forEach(({ name, value, options }) =>
-          supabaseResponse.cookies.set(name, value, options)
-        );
+        cookiesToSet.forEach(({ name, value, options }) => {
+          const isDeleting = !value || options?.maxAge === 0;
+          supabaseResponse.cookies.set(name, value, {
+            ...options,
+            path: options?.path ?? '/',
+            sameSite: options?.sameSite ?? 'lax',
+            ...(isDeleting ? {} : { maxAge: options?.maxAge ?? PERSISTENT_COOKIE_MAX_AGE }),
+          });
+        });
       },
     },
   });
@@ -86,7 +116,14 @@ export async function updateSession(request: NextRequest) {
   // Fetch current authenticated user
   const {
     data: { user },
+    error,
   } = await supabase.auth.getUser();
+
+  // If the terminal already has auth cookies and getUser() failed due to a transient
+  // network/fetch blip, keep the route open so client-side AuthContext stays active.
+  if (!user && hasAuthCookie && isTransientAuthError(error)) {
+    return supabaseResponse;
+  }
 
   // 1. Unauthenticated user trying to access protected routes or root /
   if (!user && !isAuthRoute(pathname)) {

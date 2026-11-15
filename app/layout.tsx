@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Hanken_Grotesk, Inter } from "next/font/google";
-import { ScreenBackground } from "@/components/layout/screen-background";
+import { ScreenBackground, NetworkStatusBanner } from "@/components/layout";
 import { AuthProvider } from "@/lib/auth/auth-context";
 import { PushNotificationProvider } from "@/lib/push/push-context";
 import { ThemeProvider } from "@/lib/theme/theme-context";
@@ -110,6 +110,7 @@ export default function RootLayout({
           <ScreenBackground>
             <AuthProvider>
               <PushNotificationProvider>
+                <NetworkStatusBanner />
                 <PersistentOperationsHost>
                   {children}
                 </PersistentOperationsHost>

@@ -1,58 +1,81 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, ArrowRight, AlertCircle } from 'lucide-react';
 import { PrimaryButton } from '@/components/button/primary-button';
 import { GeneralInput } from '@/components/input/general-input';
 import { CheckboxInput } from '@/components/input/checkbox-input';
-import { supabase } from '@/lib/supabase/client';
+import { useAuth } from '@/lib/auth';
+
+function resolveDestination(): string {
+  if (typeof window === 'undefined') return '/dashboard';
+  const params = new URLSearchParams(window.location.search);
+  const redirectedFrom = params.get('redirectedFrom');
+  return redirectedFrom && !redirectedFrom.startsWith('/login')
+    ? redirectedFrom
+    : '/dashboard';
+}
 
 /**
- * Interactive login form isolated as a lean Client Component so the surrounding
- * /login page shell, branding logo, and card layout pre-render cleanly in SSR HTML.
+ * Interactive login form wired directly to AuthContext so authenticated sessions
+ * are persisted on the device and never auto-signout unless Sign Out is pressed.
  */
 export function LoginForm() {
   const router = useRouter();
+  const {
+    signInWithPassword,
+    isAuthenticated,
+    isLoading: isAuthLoading,
+    rememberTerminal,
+    setRememberTerminal,
+  } = useAuth();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const navigateAfterAuth = useCallback(() => {
+    const destination = resolveDestination();
+    router.replace(destination);
+    router.refresh();
+  }, [router]);
+
+  // If the device already remembers an active authenticated session, redirect immediately
+  useEffect(() => {
+    if (!isAuthLoading && isAuthenticated && !isSubmitting) {
+      navigateAfterAuth();
+    }
+  }, [isAuthLoading, isAuthenticated, isSubmitting, navigateAfterAuth]);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
-    setIsLoading(true);
+    setIsSubmitting(true);
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: password,
-      });
+      const { error } = await signInWithPassword(
+        email.trim(),
+        password,
+        rememberTerminal
+      );
 
       if (error) {
-        setErrorMessage(error.message || 'Invalid login credentials. Please try again.');
-        setIsLoading(false);
+        setErrorMessage(error);
+        setIsSubmitting(false);
         return;
       }
 
-      if (data?.session) {
-        const params =
-          typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-        const redirectedFrom = params?.get('redirectedFrom');
-        const destination =
-          redirectedFrom && !redirectedFrom.startsWith('/login') ? redirectedFrom : '/dashboard';
-        router.push(destination);
-        router.refresh();
-      }
+      navigateAfterAuth();
     } catch (err: unknown) {
       const message =
-        err instanceof Error ? err.message : 'An unexpected error occurred during sign in.';
+        err instanceof Error
+          ? err.message
+          : 'An unexpected error occurred during sign in.';
       setErrorMessage(message);
-    } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -104,8 +127,8 @@ export function LoginForm() {
         <div className="flex items-center justify-between pt-0.5">
           <CheckboxInput
             label="Remember this terminal"
-            checked={rememberMe}
-            onChange={(e) => setRememberMe(e.target.checked)}
+            checked={rememberTerminal}
+            onChange={(e) => setRememberTerminal(e.target.checked)}
           />
         </div>
 
@@ -113,7 +136,7 @@ export function LoginForm() {
           type="submit"
           fullWidth
           size="lg"
-          isLoading={isLoading}
+          isLoading={isSubmitting}
           rightIcon={<ArrowRight className="w-4 h-4" />}
           className="mt-1.5"
         >

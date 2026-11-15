@@ -402,36 +402,40 @@ export function buildNetCallingStationList(rawEntries: RollCallStationItem[]): R
 
 /**
  * Generates the 2-Column Single-Page "FOR NET CALL - PDRRMO OPCEN" PDF matching For NET CALLING.pdf
- * Optimized for A4, SHORT (Letter), FOLIO (8.5x13), and LEGAL (8.5x14) paper sizes.
+ * Universal auto-fit geometry calibrated to fit cleanly across every paper size (Short/Letter, A4, Folio, Legal).
  */
 export async function generateNetCallingPDF(
   data: RollCallPdfData,
   options?: { paperSize?: PaperSize }
 ): Promise<{ blob: Blob; sizeBytes: number; hash: string }> {
-  const paperSize: PaperSize = options?.paperSize || data.paperSize || 'a4';
-  const dim = PAPER_DIMENSIONS[paperSize] || PAPER_DIMENSIONS.a4;
+  const explicitPaper = options?.paperSize || data.paperSize;
+  const dim = explicitPaper ? PAPER_DIMENSIONS[explicitPaper] : null;
+
+  // Universal printable envelope: 210mm width (A4-safe) x 279.4mm height (Short/Letter-safe)
+  // Guarantees zero horizontal clipping on A4 and zero vertical clipping on Short/Letter, Folio, and Legal.
+  const universalWidth = dim ? dim.width : 210.0;
+  const universalHeight = dim ? dim.height : 279.4;
 
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: [dim.width, dim.height],
+    format: [universalWidth, universalHeight],
     compress: true,
   });
 
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
 
-  // Adaptive vertical & typography metrics per paper size
-  const isShort = paperSize === 'short';
-  const isA4 = paperSize === 'a4';
-  const isFolio = paperSize === 'folio';
-  const isLegal = paperSize === 'legal';
+  // Adaptive vertical & typography metrics scaled proportionally to page height
+  const isCompactHeight = pageHeight <= 282;
+  const isMediumHeight = pageHeight > 282 && pageHeight <= 305;
+  const isTallHeight = pageHeight > 305 && pageHeight <= 340;
 
-  const marginX = isA4 ? 10 : 11;
-  const marginTop = isShort ? 5.5 : isA4 ? 6.5 : isFolio ? 8.5 : 10;
-  const logoSize = isShort ? 17.5 : isA4 ? 19 : isFolio ? 21 : 22;
-  const headerH = logoSize + (isShort ? 2.5 : isA4 ? 3 : 4);
-  const footerReserveH = isShort ? 19.5 : isA4 ? 22 : isFolio ? 27 : 31;
+  const marginX = pageWidth <= 211 ? 9.5 : 10.5;
+  const marginTop = isCompactHeight ? 5.5 : isMediumHeight ? 6.5 : isTallHeight ? 8.5 : 10;
+  const logoSize = isCompactHeight ? 17.5 : isMediumHeight ? 19 : isTallHeight ? 21 : 22;
+  const headerH = logoSize + (isCompactHeight ? 2.5 : isMediumHeight ? 3 : 4);
+  const footerReserveH = isCompactHeight ? 19.5 : isMediumHeight ? 22 : isTallHeight ? 27 : 31;
 
   // 1. HEADER: Capitol Seal + PDRRMO Seal (Left), Title (Center), Bagong Pilipinas (Right)
   const logoY = marginTop;
@@ -462,7 +466,7 @@ export async function generateNetCallingPDF(
   }
 
   // Center Title ("FOR NET CALL / PDRRMO OPCEN")
-  const titleFontSize = isShort ? 13.5 : isA4 ? 14.5 : 15.5;
+  const titleFontSize = isCompactHeight ? 13.5 : isMediumHeight ? 14.5 : 15.5;
   doc.setFont('times', 'bold');
   doc.setFontSize(titleFontSize);
   doc.setTextColor(15, 23, 42);
@@ -492,15 +496,15 @@ export async function generateNetCallingPDF(
   const rightStations = allStations.slice(26, 53); // 27 to 53 (LILOAN to TUDELA)
 
   // Column horizontal geometry
-  const centerGap = isA4 ? 10 : 12;
+  const centerGap = pageWidth <= 211 ? 9 : 11;
   const colTableWidth = (pageWidth - marginX * 2 - centerGap) / 2;
   const leftTableX = marginX;
   const rightTableX = marginX + colTableWidth + centerGap;
 
   // Sub-columns inside each table: # | LEAGUE OF DRRMO'S | ✔ | ✖
   const wNum = 7.5;
-  const wCheck = 10.5;
-  const wCross = 10.5;
+  const wCheck = 10.0;
+  const wCross = 10.0;
   const wStation = colTableWidth - wNum - wCheck - wCross;
 
   const bodyStartY = marginTop + headerH;
@@ -514,9 +518,9 @@ export async function generateNetCallingPDF(
       ? rawOfficer.toUpperCase()
       : '(STATE YOUR NAME)';
 
-  const introFontSize = isShort ? 7.8 : isA4 ? 8.2 : 8.8;
-  const introLineH = isShort ? 3.3 : isA4 ? 3.55 : isFolio ? 3.9 : 4.1;
-  const introBlockH = introLineH * 4 + (isShort ? 1.5 : 2.2);
+  const introFontSize = isCompactHeight ? 7.6 : isMediumHeight ? 8.1 : 8.6;
+  const introLineH = isCompactHeight ? 3.3 : isMediumHeight ? 3.55 : isTallHeight ? 3.9 : 4.1;
+  const introBlockH = introLineH * 4 + (isCompactHeight ? 1.5 : 2.2);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(introFontSize);
@@ -584,7 +588,7 @@ export async function generateNetCallingPDF(
   };
 
   // 4. LEFT TABLE HEADER (# | LEAGUE OF DRRMO'S | ✔ | ✖)
-  const tableHeaderH = isShort ? 4.4 : isA4 ? 4.8 : isFolio ? 5.2 : 5.5;
+  const tableHeaderH = isCompactHeight ? 4.4 : isMediumHeight ? 4.8 : isTallHeight ? 5.2 : 5.5;
   const leftTableStartY = bodyStartY + introBlockH;
 
   doc.setDrawColor(30, 41, 59);
@@ -599,7 +603,7 @@ export async function generateNetCallingPDF(
     leftTableStartY + tableHeaderH
   );
 
-  const cellFontSize = isShort ? 6.0 : isA4 ? 6.35 : isFolio ? 6.8 : 7.1;
+  const cellFontSize = isCompactHeight ? 6.0 : isMediumHeight ? 6.35 : isTallHeight ? 6.8 : 7.1;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(cellFontSize);
   doc.setTextColor(15, 23, 42);
@@ -624,7 +628,19 @@ export async function generateNetCallingPDF(
     0.55
   );
 
-  // Helper to compute line units for a station row (3 if has port, 2 if no port, except Cebu City = 1.4)
+  // Helper to fit single-line cell value within available width
+  const fitSingleLineText = (rawText: string, maxWidth: number): string => {
+    const clean = sanitizePdfText(rawText);
+    if (!clean || maxWidth <= 4) return '';
+    if (doc.getTextWidth(clean) <= maxWidth) return clean;
+    let truncated = clean;
+    while (truncated.length > 1 && doc.getTextWidth(`${truncated}...`) > maxWidth) {
+      truncated = truncated.slice(0, -1).trimEnd();
+    }
+    return `${truncated}...`;
+  };
+
+  // Helper to compute line units for a station row (3 if has port, 2 if no port, except Cebu City = 1.45)
   const getStationUnits = (stn: RollCallStationItem): number => {
     if (stn.hasPort && stn.portName) return 3.0;
     if (stn.name.toUpperCase() === 'CEBU CITY' && !stn.weatherStatus) return 1.45;
@@ -682,13 +698,14 @@ export async function generateNetCallingPDF(
 
       // Col 2: Station Name + Weather + Optional Port
       const textX = tableX + wNum + 1.5;
+      const maxStationTextW = wStation - 3.0;
       let textY = curY + lineStep * 0.98;
 
       // Line 1: Station Name (Bold Uppercase)
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(cellFontSize);
       doc.setTextColor(15, 23, 42);
-      doc.text(sanitizePdfText(stn.name.toUpperCase()), textX, textY);
+      doc.text(fitSingleLineText(stn.name.toUpperCase(), maxStationTextW), textX, textY);
 
       const isPresent = stn.attendance === 'Present';
       const isAbsent = stn.attendance === 'Absent';
@@ -706,7 +723,7 @@ export async function generateNetCallingPDF(
           const lblW = doc.getTextWidth('Weather: ');
           doc.setFont('helvetica', 'normal');
           doc.setTextColor(30, 41, 59);
-          doc.text(sanitizePdfText(stn.weatherStatus), textX + lblW, textY);
+          doc.text(fitSingleLineText(stn.weatherStatus, maxStationTextW - lblW), textX + lblW, textY);
         }
       }
 
@@ -728,7 +745,7 @@ export async function generateNetCallingPDF(
           const portLblW = doc.getTextWidth(`${sanitizePdfText(cleanPortLabel)} `);
           doc.setFont('helvetica', 'normal');
           doc.setTextColor(30, 41, 59);
-          doc.text(sanitizePdfText(stn.portStatus), textX + portLblW, textY);
+          doc.text(fitSingleLineText(stn.portStatus, maxStationTextW - portLblW), textX + portLblW, textY);
         }
       }
 
@@ -760,10 +777,10 @@ export async function generateNetCallingPDF(
   const rightEndY = drawStationColumn(rightStations, 27, rightTableX, bodyStartY, rightUnitH);
 
   // 5. FOOTER: Closing Script & Sign-off Block
-  const footerStartY = Math.max(leftEndY, rightEndY) + (isShort ? 3.2 : isA4 ? 4.0 : isFolio ? 5.5 : 6.5);
+  const footerStartY = Math.max(leftEndY, rightEndY) + (isCompactHeight ? 3.2 : isMediumHeight ? 4.0 : isTallHeight ? 5.5 : 6.5);
   const footerX = leftTableX + 12;
-  const footerFontSize = isShort ? 6.5 : isA4 ? 7.0 : 7.5;
-  const footerLineH = isShort ? 3.1 : isA4 ? 3.5 : 4.0;
+  const footerFontSize = isCompactHeight ? 6.5 : isMediumHeight ? 7.0 : 7.5;
+  const footerLineH = isCompactHeight ? 3.1 : isMediumHeight ? 3.5 : 4.0;
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(footerFontSize);
@@ -791,8 +808,8 @@ export async function generateNetCallingPDF(
   );
 
   // Sign-off row: ON DUTY PERSONNEL : _______________________   Time/Date : _______________________________
-  const signRowY = closeLine2Y + (isShort ? 5.2 : isA4 ? 6.2 : isFolio ? 8.0 : 9.0);
-  const signFontSize = isShort ? 7.5 : isA4 ? 8.0 : 8.5;
+  const signRowY = closeLine2Y + (isCompactHeight ? 5.2 : isMediumHeight ? 6.2 : isTallHeight ? 8.0 : 9.0);
+  const signFontSize = isCompactHeight ? 7.5 : isMediumHeight ? 8.0 : 8.5;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(signFontSize);
@@ -838,7 +855,7 @@ export async function generateNetCallingPDF(
     doc.setFontSize(5.2);
     doc.setTextColor(148, 163, 184);
     doc.text(
-      `Certified Net Call Sheet (${dim.shortLabel}) · SHA-256: ${data.fileHash}`,
+      `Certified Net Call Sheet (2-Column Auto-Fit) · SHA-256: ${data.fileHash}`,
       pageWidth / 2,
       pageHeight - 2.2,
       { align: 'center' }
@@ -847,7 +864,7 @@ export async function generateNetCallingPDF(
 
   doc.setDocumentProperties({
     title: data.filename,
-    subject: `PDRRMO OPCEN Net Call Sheet (${dim.shortLabel}) - ${data.sessionDate}`,
+    subject: `PDRRMO OPCEN Net Call Sheet (2-Column Auto-Fit) - ${data.sessionDate}`,
     author: data.conductedBy,
     creator: 'PDRRMO Monitoring & Logging System',
     keywords: JSON.stringify(data.snapshotPayload || {}),
@@ -862,13 +879,11 @@ export async function generateNetCallingPDF(
 }
 
 /**
- * Generates an official certified PDF for Roll Call following either:
- * - 'official_table' (Template-Example-FileFormat-MLS.docx)
- * - 'net_calling' (For NET CALLING.pdf 2-Column Single-Page Sheet)
- * Supports A4, SHORT, FOLIO, and LEGAL paper sizes.
+ * Generates an official certified PDF for Roll Call following the 2-Column Net Calling format
+ * with universal auto-fit across all paper sizes.
  */
 export async function generateRollCallPDF(data: RollCallPdfData): Promise<{ blob: Blob; sizeBytes: number; hash: string }> {
-  if (data.templateType === 'net_calling') {
+  if (data.templateType !== 'official_table') {
     return generateNetCallingPDF(data, { paperSize: data.paperSize });
   }
 
@@ -1240,12 +1255,15 @@ export function sortLogsChronologically<T extends { time?: string; log_time?: st
 
 /**
  * Generates an official certified PDF for 24-Hour Daily Operations Logs matching Template-Example-FileFormat-MLS.docx
+ * Optimized with universal multi-paper safe geometry (210 x 279.4 mm) and automatic multi-page row splitting
+ * so every page fits and prints cleanly across Short/Letter, A4, Folio, and Legal paper sizes.
  */
 export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ blob: Blob; sizeBytes: number; hash: string }> {
+  // Universal printable envelope: 210.0mm width (A4-safe) x 279.4mm height (Short/Letter-safe)
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
+    format: [210.0, 279.4],
     compress: true,
   });
 
@@ -1261,7 +1279,12 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
   const col2X = col1X + colTimeW;
   const col3X = col2X + colDescW;
 
-  let y = drawDocumentHeader(doc, 'Monitoring Logs System', 1);
+  const bottomMargin = 14;
+  const usableBottomY = pageHeight - bottomMargin;
+  const lineHeight = 4.0;
+
+  let currentPageNum = 1;
+  let y = drawDocumentHeader(doc, 'Monitoring Logs System', currentPageNum);
 
   // Date & Shift Info line
   doc.setFont('helvetica', 'bold');
@@ -1269,74 +1292,155 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
   doc.setTextColor(15, 23, 42);
   const shiftHeaderInfo = data.shifts?.[0]?.shiftLabel ? ` | Shift: ${data.shifts[0].shiftLabel}` : '';
   const shiftHoursInfo = data.shifts?.[0]?.startTime ? ` (${data.shifts[0].startTime} - ${data.shifts[0].endTime || ''})` : '';
-  doc.text(`Date: ${formatHeaderDate(data.dailyReportDate)}${shiftHeaderInfo}${shiftHoursInfo}`, 14, y);
-  y += 5;
+  const dateHeaderText = sanitizePdfText(
+    `Date: ${formatHeaderDate(data.dailyReportDate)}${shiftHeaderInfo}${shiftHoursInfo}`
+  );
+  const wrappedDateHeader = doc.splitTextToSize(dateHeaderText, tableWidth);
+  const dateHeaderLines = Array.isArray(wrappedDateHeader) ? wrappedDateHeader : [wrappedDateHeader];
+  dateHeaderLines.forEach((dLine: string) => {
+    doc.text(dLine, 14, y);
+    y += 4.5;
+  });
+  y += 0.5;
 
   y = drawTableHeader(doc, y);
+  const continuationStartY = 51; // y after header + table header on continuation pages
 
-  const checkPageBreak = (neededHeight: number) => {
-    if (y + neededHeight > pageHeight - 20) {
-      doc.addPage();
-      y = drawDocumentHeader(doc, 'Monitoring Logs System', 2);
-      y = drawTableHeader(doc, y);
-    }
+  const startNewPage = () => {
+    doc.addPage([210.0, 279.4], 'portrait');
+    currentPageNum += 1;
+    y = drawDocumentHeader(doc, 'Monitoring Logs System', currentPageNum);
+    y = drawTableHeader(doc, y);
   };
 
-  const drawRow = (timeStr: string, descLines: string[], reportType: string, customMinHeight = 0) => {
+  const buildWrappedLines = (descLines: string[]) => {
     const processedLines: { text: string; isBold: boolean; color: [number, number, number] }[] = [];
-
     descLines.forEach((rawLine, idx) => {
       const sanitized = sanitizePdfText(rawLine);
       if (!sanitized) return;
 
       const subLines = sanitized.split('\n');
       subLines.forEach((sub, subIdx) => {
-        doc.setFont('helvetica', idx === 0 && subIdx === 0 ? 'bold' : 'normal');
+        const isHeadingLine = idx === 0 && subIdx === 0;
+        doc.setFont('helvetica', isHeadingLine ? 'bold' : 'normal');
         doc.setFontSize(7.5);
         const wrapped = doc.splitTextToSize(sub, colDescW - 6);
         const lineArray = Array.isArray(wrapped) ? wrapped : [wrapped];
         lineArray.forEach((wLine: string) => {
           processedLines.push({
             text: wLine,
-            isBold: idx === 0 && subIdx === 0,
-            color: idx === 0 && subIdx === 0 ? [15, 23, 42] : [51, 65, 85],
+            isBold: isHeadingLine,
+            color: isHeadingLine ? [15, 23, 42] : [51, 65, 85],
           });
         });
       });
     });
+    return processedLines;
+  };
 
-    const lineHeight = 4.0;
-    const computedHeight = Math.max(1, processedLines.length) * lineHeight + 6;
-    const rowHeight = Math.max(customMinHeight, Math.max(12, computedHeight));
-    checkPageBreak(rowHeight);
-
-    doc.setDrawColor(148, 163, 184);
-    doc.setLineWidth(0.2);
-    doc.rect(col1X, y, tableWidth, rowHeight, 'S');
-    doc.line(col2X, y, col2X, y + rowHeight);
-    doc.line(col3X, y, col3X, y + rowHeight);
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(sanitizePdfText(timeStr || '1200H'), col1X + colTimeW / 2, y + 5.5, { align: 'center' });
-
-    let lineY = y + 5;
-    processedLines.forEach((lineObj) => {
-      doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
-      doc.setFontSize(7.5);
-      doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
-      doc.text(lineObj.text, col2X + 3, lineY);
-      lineY += lineHeight;
-    });
-
-    const cleanReportType = sanitizePdfText(reportType);
+  const drawReportTypeCell = (reportType: string, rowTopY: number) => {
+    const cleanReportType = sanitizePdfText(reportType) || 'Info';
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
+    doc.setFontSize(7.2);
     doc.setTextColor(71, 85, 105);
-    doc.text(cleanReportType || 'Info', col3X + colTypeW / 2, y + 5.5, { align: 'center' });
+    const wrappedType = doc.splitTextToSize(cleanReportType, colTypeW - 3);
+    const typeLines = Array.isArray(wrappedType) ? wrappedType : [wrappedType];
+    let ty = rowTopY + 5.2;
+    typeLines.slice(0, 3).forEach((tLine: string) => {
+      doc.text(tLine, col3X + colTypeW / 2, ty, { align: 'center' });
+      ty += 3.5;
+    });
+  };
 
-    y += rowHeight;
+  const drawRow = (timeStr: string, descLines: string[], reportType: string, customMinHeight = 0) => {
+    const processedLines = buildWrappedLines(descLines);
+    if (processedLines.length === 0) {
+      processedLines.push({ text: 'Operational Event', isBold: true, color: [15, 23, 42] });
+    }
+
+    const totalSingleRowHeight = Math.max(
+      customMinHeight,
+      Math.max(12, processedLines.length * lineHeight + 6)
+    );
+    const maxPageBodyH = usableBottomY - continuationStartY;
+
+    // If the entire row fits on one page, keep it together (moving to next page if needed)
+    if (totalSingleRowHeight <= maxPageBodyH) {
+      if (y + totalSingleRowHeight > usableBottomY) {
+        startNewPage();
+      }
+
+      doc.setDrawColor(148, 163, 184);
+      doc.setLineWidth(0.2);
+      doc.rect(col1X, y, tableWidth, totalSingleRowHeight, 'S');
+      doc.line(col2X, y, col2X, y + totalSingleRowHeight);
+      doc.line(col3X, y, col3X, y + totalSingleRowHeight);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(sanitizePdfText(timeStr || '1200H'), col1X + colTimeW / 2, y + 5.5, { align: 'center' });
+
+      let lineY = y + 5;
+      processedLines.forEach((lineObj) => {
+        doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+        doc.text(lineObj.text, col2X + 3, lineY);
+        lineY += lineHeight;
+      });
+
+      drawReportTypeCell(reportType, y);
+      y += totalSingleRowHeight;
+      return;
+    }
+
+    // Multi-page row splitting for very long descriptions
+    let cursor = 0;
+    let isContinuation = false;
+    while (cursor < processedLines.length) {
+      const remainingPageH = usableBottomY - y;
+      const maxLinesHere = Math.floor((remainingPageH - 6) / lineHeight);
+      if (maxLinesHere < 3) {
+        startNewPage();
+        continue;
+      }
+
+      const chunk = processedLines.slice(cursor, cursor + maxLinesHere);
+      cursor += chunk.length;
+      const chunkRowH = Math.max(12, chunk.length * lineHeight + 6);
+
+      doc.setDrawColor(148, 163, 184);
+      doc.setLineWidth(0.2);
+      doc.rect(col1X, y, tableWidth, chunkRowH, 'S');
+      doc.line(col2X, y, col2X, y + chunkRowH);
+      doc.line(col3X, y, col3X, y + chunkRowH);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(15, 23, 42);
+      const timeLabel = isContinuation
+        ? `${sanitizePdfText(timeStr || '1200H')} (Cont.)`
+        : sanitizePdfText(timeStr || '1200H');
+      doc.text(timeLabel, col1X + colTimeW / 2, y + 5.5, { align: 'center' });
+
+      let lineY = y + 5;
+      chunk.forEach((lineObj) => {
+        doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+        doc.text(lineObj.text, col2X + 3, lineY);
+        lineY += lineHeight;
+      });
+
+      drawReportTypeCell(reportType, y);
+      y += chunkRowH;
+      isContinuation = true;
+
+      if (cursor < processedLines.length) {
+        startNewPage();
+      }
+    }
   };
 
   // Dedicated drawer for start/end rows with blank signature line for physical in-person signing
@@ -1348,84 +1452,147 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
     officerRole: string,
     _signatureImgBase64?: string | null
   ) => {
-    const processedLines: { text: string; isBold: boolean; color: [number, number, number] }[] = [];
+    const processedLines = buildWrappedLines(descLines);
+    if (processedLines.length === 0) {
+      processedLines.push({ text: 'Duty Lifecycle Entry', isBold: true, color: [15, 23, 42] });
+    }
 
-    descLines.forEach((rawLine, idx) => {
-      const sanitized = sanitizePdfText(rawLine);
-      if (!sanitized) return;
+    const sigBlockReserveH = 22; // Space for physical signature line + officer name + officer role
+    const totalSingleRowH = Math.max(
+      34,
+      processedLines.length * lineHeight + 6 + sigBlockReserveH
+    );
+    const maxPageBodyH = usableBottomY - continuationStartY;
 
-      const subLines = sanitized.split('\n');
-      subLines.forEach((sub, subIdx) => {
-        doc.setFont('helvetica', idx === 0 && subIdx === 0 ? 'bold' : 'normal');
-        doc.setFontSize(7.5);
-        const wrapped = doc.splitTextToSize(sub, colDescW - 6);
-        const lineArray = Array.isArray(wrapped) ? wrapped : [wrapped];
-        lineArray.forEach((wLine: string) => {
-          processedLines.push({
-            text: wLine,
-            isBold: idx === 0 && subIdx === 0,
-            color: idx === 0 && subIdx === 0 ? [15, 23, 42] : [51, 65, 85],
-          });
-        });
-      });
-    });
+    const renderSignatureBlock = (startLineY: number) => {
+      const sigLineY = startLineY + 8.5;
+      doc.setDrawColor(51, 65, 85);
+      doc.setLineWidth(0.3);
+      doc.line(col2X + 3, sigLineY, col2X + 58, sigLineY);
 
-    const lineHeight = 4.0;
-    const textLinesHeight = Math.max(1, processedLines.length) * lineHeight + 4;
-    const sigSpaceHeight = 10;
-    const sigTextHeight = 10;
-    const rowHeight = Math.max(34, textLinesHeight + sigSpaceHeight + sigTextHeight + 4);
-
-    checkPageBreak(rowHeight);
-
-    doc.setDrawColor(148, 163, 184);
-    doc.setLineWidth(0.2);
-    doc.rect(col1X, y, tableWidth, rowHeight, 'S');
-    doc.line(col2X, y, col2X, y + rowHeight);
-    doc.line(col3X, y, col3X, y + rowHeight);
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(sanitizePdfText(timeStr || '1200H'), col1X + colTimeW / 2, y + 5.5, { align: 'center' });
-
-    let lineY = y + 5;
-    processedLines.forEach((lineObj) => {
-      doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+      doc.setFont('helvetica', 'bold');
       doc.setFontSize(7.5);
-      doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
-      doc.text(lineObj.text, col2X + 3, lineY);
-      lineY += lineHeight;
-    });
+      doc.setTextColor(15, 23, 42);
+      doc.text(sanitizePdfText(officerName || 'Lead Operations Officer'), col2X + 3, sigLineY + 3.6);
 
-    lineY += 9; // Space for physical in-person signing
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text(sanitizePdfText(officerRole || 'Lead Operations Officer'), col2X + 3, sigLineY + 6.8);
+    };
 
-    // Signature line
-    doc.setDrawColor(51, 65, 85);
-    doc.setLineWidth(0.3);
-    doc.line(col2X + 3, lineY, col2X + 55, lineY);
-    lineY += 3.6;
+    if (totalSingleRowH <= maxPageBodyH) {
+      if (y + totalSingleRowH > usableBottomY) {
+        startNewPage();
+      }
 
-    // Officer Name
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(sanitizePdfText(officerName || 'Lead Operations Officer'), col2X + 3, lineY);
-    lineY += 3.2;
+      doc.setDrawColor(148, 163, 184);
+      doc.setLineWidth(0.2);
+      doc.rect(col1X, y, tableWidth, totalSingleRowH, 'S');
+      doc.line(col2X, y, col2X, y + totalSingleRowH);
+      doc.line(col3X, y, col3X, y + totalSingleRowH);
 
-    // Officer Title
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.5);
-    doc.setTextColor(100, 116, 139);
-    doc.text(sanitizePdfText(officerRole || 'Lead Operations Officer'), col2X + 3, lineY);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text(sanitizePdfText(timeStr || '1200H'), col1X + colTimeW / 2, y + 5.5, { align: 'center' });
 
-    const cleanReportType = sanitizePdfText(reportType);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(cleanReportType || 'Info', col3X + colTypeW / 2, y + 5.5, { align: 'center' });
+      let lineY = y + 5;
+      processedLines.forEach((lineObj) => {
+        doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+        doc.text(lineObj.text, col2X + 3, lineY);
+        lineY += lineHeight;
+      });
 
-    y += rowHeight;
+      renderSignatureBlock(lineY);
+      drawReportTypeCell(reportType, y);
+      y += totalSingleRowH;
+      return;
+    }
+
+    // Multi-page splitting if a start/end briefing row is taller than one page
+    let cursor = 0;
+    let isContinuation = false;
+    while (cursor < processedLines.length) {
+      const remainingLinesCount = processedLines.length - cursor;
+      const remainingPageH = usableBottomY - y;
+      const canFitRestWithSig =
+        remainingLinesCount * lineHeight + 6 + sigBlockReserveH <= remainingPageH;
+
+      if (canFitRestWithSig) {
+        const chunk = processedLines.slice(cursor);
+        cursor = processedLines.length;
+        const chunkRowH = Math.max(30, chunk.length * lineHeight + 6 + sigBlockReserveH);
+
+        doc.setDrawColor(148, 163, 184);
+        doc.setLineWidth(0.2);
+        doc.rect(col1X, y, tableWidth, chunkRowH, 'S');
+        doc.line(col2X, y, col2X, y + chunkRowH);
+        doc.line(col3X, y, col3X, y + chunkRowH);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(15, 23, 42);
+        const timeLabel = isContinuation
+          ? `${sanitizePdfText(timeStr || '1200H')} (Cont.)`
+          : sanitizePdfText(timeStr || '1200H');
+        doc.text(timeLabel, col1X + colTimeW / 2, y + 5.5, { align: 'center' });
+
+        let lineY = y + 5;
+        chunk.forEach((lineObj) => {
+          doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+          doc.setFontSize(7.5);
+          doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+          doc.text(lineObj.text, col2X + 3, lineY);
+          lineY += lineHeight;
+        });
+
+        renderSignatureBlock(lineY);
+        drawReportTypeCell(reportType, y);
+        y += chunkRowH;
+      } else {
+        const maxLinesHere = Math.floor((remainingPageH - 6) / lineHeight);
+        if (maxLinesHere < 4) {
+          startNewPage();
+          continue;
+        }
+        // Leave at least 1 line for the final chunk that carries the signature block
+        const takeCount = Math.min(maxLinesHere, Math.max(1, remainingLinesCount - 1));
+        const chunk = processedLines.slice(cursor, cursor + takeCount);
+        cursor += chunk.length;
+        const chunkRowH = Math.max(12, chunk.length * lineHeight + 6);
+
+        doc.setDrawColor(148, 163, 184);
+        doc.setLineWidth(0.2);
+        doc.rect(col1X, y, tableWidth, chunkRowH, 'S');
+        doc.line(col2X, y, col2X, y + chunkRowH);
+        doc.line(col3X, y, col3X, y + chunkRowH);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(15, 23, 42);
+        const timeLabel = isContinuation
+          ? `${sanitizePdfText(timeStr || '1200H')} (Cont.)`
+          : sanitizePdfText(timeStr || '1200H');
+        doc.text(timeLabel, col1X + colTimeW / 2, y + 5.5, { align: 'center' });
+
+        let lineY = y + 5;
+        chunk.forEach((lineObj) => {
+          doc.setFont('helvetica', lineObj.isBold ? 'bold' : 'normal');
+          doc.setFontSize(7.5);
+          doc.setTextColor(lineObj.color[0], lineObj.color[1], lineObj.color[2]);
+          doc.text(lineObj.text, col2X + 3, lineY);
+          lineY += lineHeight;
+        });
+
+        drawReportTypeCell(reportType, y);
+        y += chunkRowH;
+        isContinuation = true;
+        startNewPage();
+      }
+    }
   };
 
   // Pre-resolve all signatures from profile, shifts, logs, and signaturesMap
@@ -1590,13 +1757,22 @@ export async function generateDailyLogsPDF(data: DailyLogsPdfData): Promise<{ bl
     );
   }
 
-  // Security Digest
-  y += 4;
-  checkPageBreak(10);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.5);
-  doc.setTextColor(148, 163, 184);
-  doc.text(`Official Tamper-Proof Audit Digest (SHA-256): ${data.fileHash}`, 14, y);
+  // Stamp Security Digest & Page Number inside the universal safe bottom margin on every page
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.2);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      `Official Tamper-Proof Audit Digest (SHA-256): ${data.fileHash}`,
+      14,
+      pageHeight - 6.5
+    );
+    doc.text(`Page ${p} of ${totalPages}`, pageWidth - 14, pageHeight - 6.5, {
+      align: 'right',
+    });
+  }
 
   doc.setDocumentProperties({
     title: data.filename,

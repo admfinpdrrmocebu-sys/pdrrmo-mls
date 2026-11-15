@@ -146,8 +146,8 @@ export function PushNotificationProvider({
         await unsubscribeFromPushNotifications();
         setIsPushActive(false);
         showPushToast(
-          'Phone Alerts Turned Off',
-          'You will no longer receive background phone alerts.',
+          'Notification Alert Turned Off',
+          'You will no longer receive background notification alerts.',
           'info'
         );
       } else {
@@ -157,7 +157,7 @@ export function PushNotificationProvider({
           setIsPushActive(true);
           syncedUserRef.current = currentUserId || '__anon__';
           showPushToast(
-            'Phone Alerts Turned On',
+            'Notification Alert Turned On',
             'You will now receive native alerts even when the app is closed.',
             'success'
           );

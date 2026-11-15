@@ -137,8 +137,8 @@ export interface CachedArchivesScreenData {
   searchQuery: string;
   selectedDateISO: string | null;
   currentPage: number;
-  rcTemplateType: RollCallTemplateType;
-  rcPaperSize: PaperSize;
+  rcTemplateType?: RollCallTemplateType;
+  rcPaperSize?: PaperSize;
   cachedAt: number;
 }
 

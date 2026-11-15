@@ -277,6 +277,7 @@ export function VerticalNav({
           {isPushSupported && (
             <PushAlertsToggleRow
               isExpanded={isHovered}
+              isCollapsible={true}
               pushStatus={pushStatus}
               isPushActive={isPushActive}
               isSubscribingPush={isSubscribingPush}
@@ -290,7 +291,7 @@ export function VerticalNav({
             onClick={toggleTheme}
             title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            className="w-full flex items-center h-12 px-3.5 rounded-xl text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B] transition-all duration-200 group cursor-pointer text-left"
+            className="w-full flex items-center h-12 px-3.5 rounded-xl bg-transparent text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B] transition-all duration-200 group cursor-pointer text-left"
           >
             <div className="flex items-center justify-center w-5 shrink-0">
               {isDark ? (
@@ -487,6 +488,7 @@ export function VerticalNav({
           {isPushSupported && (
             <PushAlertsToggleRow
               isExpanded={true}
+              isCollapsible={false}
               pushStatus={pushStatus}
               isPushActive={isPushActive}
               isSubscribingPush={isSubscribingPush}
@@ -499,7 +501,7 @@ export function VerticalNav({
             type="button"
             onClick={toggleTheme}
             aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            className="w-full flex items-center h-12 px-3.5 rounded-xl text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B] transition-all duration-200 group cursor-pointer text-left"
+            className="w-full flex items-center h-12 px-3.5 rounded-xl bg-transparent text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B] transition-all duration-200 group cursor-pointer text-left"
           >
             <div className="flex items-center justify-center w-5 shrink-0">
               {isDark ? (
@@ -530,6 +532,7 @@ export function VerticalNav({
 
 interface PushAlertsToggleRowProps {
   isExpanded: boolean;
+  isCollapsible?: boolean;
   pushStatus: NotificationPermission;
   isPushActive: boolean;
   isSubscribingPush: boolean;
@@ -538,6 +541,7 @@ interface PushAlertsToggleRowProps {
 
 function PushAlertsToggleRow({
   isExpanded,
+  isCollapsible = true,
   pushStatus,
   isPushActive,
   isSubscribingPush,
@@ -547,26 +551,26 @@ function PushAlertsToggleRow({
   const title = isDenied
     ? 'Notifications blocked in browser settings'
     : isPushActive
-    ? 'Phone alerts are ON. Click to turn OFF.'
-    : 'Phone alerts are OFF. Click to turn ON.';
+    ? 'Notification Alert is ON. Click to turn OFF.'
+    : 'Notification Alert is OFF. Click to turn ON.';
 
   return (
     <button
       type="button"
       role="switch"
       aria-checked={isPushActive}
-      aria-label={isPushActive ? 'Turn off phone alerts' : 'Turn on phone alerts'}
+      aria-label={isPushActive ? 'Turn off notification alert' : 'Turn on notification alert'}
       disabled={isSubscribingPush}
       onClick={onToggle}
       title={title}
       className={twMerge(
-        'w-full flex items-center h-12 px-3.5 rounded-xl transition-all duration-200 group text-left',
+        'w-full flex items-center h-12 px-3.5 rounded-xl bg-transparent transition-all duration-200 group text-left',
         isDenied
-          ? 'text-rose-600 hover:bg-rose-50/70 cursor-not-allowed'
+          ? 'text-rose-600 hover:bg-rose-50 cursor-not-allowed'
           : isSubscribingPush
-          ? 'text-[#505F76] bg-slate-50/70 cursor-wait'
+          ? 'text-[#505F76] hover:bg-[#F8FAFC] cursor-wait'
           : isPushActive
-          ? 'text-emerald-700 hover:bg-emerald-50/70 cursor-pointer'
+          ? 'text-emerald-700 hover:bg-emerald-50 cursor-pointer'
           : 'text-[#505F76] hover:bg-[#F8FAFC] hover:text-[#1E293B] cursor-pointer'
       )}
     >
@@ -584,15 +588,17 @@ function PushAlertsToggleRow({
 
       <div
         className={twMerge(
-          'flex items-center justify-between flex-1 overflow-hidden transition-all duration-300',
-          isExpanded
-            ? 'opacity-100 ml-3 max-w-[170px]'
-            : 'opacity-0 ml-0 max-w-0 pointer-events-none'
+          'flex items-center justify-between flex-1 transition-all duration-300',
+          isCollapsible
+            ? isExpanded
+              ? 'opacity-100 ml-3 max-w-[170px] overflow-hidden'
+              : 'opacity-0 ml-0 max-w-0 overflow-hidden pointer-events-none'
+            : 'ml-3'
         )}
       >
         <div className="flex flex-col min-w-0">
           <span className="text-sm font-medium whitespace-nowrap">
-            Phone alerts
+            Notification Alert
           </span>
           {isDenied && (
             <span className="text-[10px] font-semibold text-rose-500 leading-tight">

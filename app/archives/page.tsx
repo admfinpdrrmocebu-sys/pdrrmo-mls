@@ -29,7 +29,6 @@ import { Skeleton } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 import { ViewOnlyNotice } from '@/components/auth';
 import { supabase } from '@/lib/supabase/client';
-import type { PaperSize, RollCallTemplateType } from '@/lib/pdf-generator';
 import {
   getCachedArchivesScreenData,
   setCachedArchivesScreenData,
@@ -191,12 +190,6 @@ export default function ArchivesPage() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const printIframeRef = useRef<HTMLIFrameElement | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
-  const [rcTemplateType, setRcTemplateType] = useState<RollCallTemplateType>(
-    initialCache?.rcTemplateType ?? 'net_calling'
-  );
-  const [rcPaperSize, setRcPaperSize] = useState<PaperSize>(
-    initialCache?.rcPaperSize ?? 'a4'
-  );
 
   // Toast State
   const [toastNotification, setToastNotification] = useState<{
@@ -279,17 +272,8 @@ export default function ArchivesPage() {
       searchQuery,
       selectedDateISO,
       currentPage,
-      rcTemplateType,
-      rcPaperSize,
     });
-  }, [
-    activeTab,
-    searchQuery,
-    selectedDateISO,
-    currentPage,
-    rcTemplateType,
-    rcPaperSize,
-  ]);
+  }, [activeTab, searchQuery, selectedDateISO, currentPage]);
 
   // ===========================================================================
   // 1. METADATA-FIRST DATA FETCHING + ON-DEMAND SNAPSHOT HYDRATION
@@ -543,8 +527,6 @@ export default function ArchivesPage() {
           searchQuery: existingCache?.searchQuery ?? '',
           selectedDateISO: existingCache?.selectedDateISO ?? null,
           currentPage: existingCache?.currentPage ?? 1,
-          rcTemplateType: existingCache?.rcTemplateType ?? 'net_calling',
-          rcPaperSize: existingCache?.rcPaperSize ?? 'a4',
           cachedAt: Date.now(),
         });
       } catch (err) {
@@ -747,11 +729,7 @@ export default function ArchivesPage() {
   // ===========================================================================
 
   const buildRollCallPdfPayload = useCallback(
-    (
-      file: ArchivedFile,
-      templateOverride?: RollCallTemplateType,
-      paperOverride?: PaperSize
-    ) => {
+    (file: ArchivedFile) => {
       const dateStr = file.createdAt
         ? file.createdAt.split('·')[0].trim()
         : '09/27/2026';
@@ -819,19 +797,107 @@ export default function ArchivesPage() {
         entries: entriesToRender,
         fileHash: file.hash,
         snapshotPayload: file.rawSnapshotData || {},
-        templateType: templateOverride ?? rcTemplateType,
-        paperSize: paperOverride ?? rcPaperSize,
+        templateType: 'net_calling' as const,
       };
     },
-    [profileMap, rcTemplateType, rcPaperSize]
+    [profileMap]
+  );
+
+  const buildDailyLogsPdfPayload = useCallback(
+    (
+      hydratedFile: ArchivedFile,
+      sortLogsFn: typeof import('@/lib/pdf-generator').sortLogsChronologically
+    ) => {
+      const dateStr =
+        hydratedFile.dailyReportDate ||
+        (hydratedFile.createdAt
+          ? hydratedFile.createdAt.split('·')[0].trim()
+          : '09/27/2026');
+      const finalOfficerProfile =
+        profileMap.get(hydratedFile.leadOfficer?.toLowerCase().trim()) || null;
+
+      const enrichedShifts = (hydratedFile.shifts || []).map((s) => {
+        const sOfficer = profileMap.get(s.leadOfficer?.toLowerCase().trim());
+        return {
+          shiftLabel: s.shiftLabel,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          leadOfficer: s.leadOfficer,
+          leadOfficerRole:
+            s.leadOfficerRole ||
+            sOfficer?.position_title ||
+            'Lead Operations Officer',
+          handoverStatus: s.handoverStatus,
+          roster: s.roster || [],
+          standbyVehicles: s.standbyVehicles || [],
+          signatures: [],
+          signatureUrl: null,
+          logsCount: s.logsCount || 0,
+        };
+      });
+
+      const enrichedLogs = (hydratedFile.logEntries || []).map((l) => {
+        const opProfile =
+          (l.operator_id
+            ? profileMap.get(l.operator_id.toLowerCase())
+            : undefined) ||
+          (l.operator
+            ? profileMap.get(l.operator.toLowerCase().trim())
+            : undefined);
+        return {
+          id: l.id,
+          created_at: l.created_at,
+          time: l.time,
+          date: l.date,
+          status: l.status,
+          title: l.title,
+          reportType:
+            l.reportType ||
+            (l.status &&
+            !['Active', 'Critical', 'Warning', 'Info'].includes(l.status)
+              ? l.status
+              : 'Info'),
+          description: l.description,
+          operator: l.operator,
+          operator_id: l.operator_id || opProfile?.id,
+          operatorRole:
+            l.operatorRole ||
+            opProfile?.position_title ||
+            'Duty Operations Officer',
+          signatureUrl: null,
+        };
+      });
+
+      const sortedLogs = sortLogsFn(
+        enrichedLogs,
+        hydratedFile.shifts?.[0]?.startTime || '0800H'
+      );
+
+      return {
+        filename: hydratedFile.filename,
+        dailyReportDate: dateStr,
+        totalShiftsCount: hydratedFile.shifts?.length || 1,
+        finalOfficer: hydratedFile.leadOfficer || 'Lead Operations Officer',
+        finalOfficerRole:
+          hydratedFile.leadOfficerRole ||
+          finalOfficerProfile?.position_title ||
+          profilePositionTitle ||
+          'Lead Operations Officer',
+        finalHandoverStatus:
+          hydratedFile.handoverStatus || 'Situation Remain Normal',
+        signatureUrl: null,
+        signaturesMap: {},
+        shifts: enrichedShifts,
+        logs: sortedLogs,
+        fileHash: hydratedFile.hash,
+        snapshotPayload: hydratedFile.rawSnapshotData || {},
+      };
+    },
+    [profileMap, profilePositionTitle]
   );
 
   const handleSelectFileForPreview = useCallback(
-    async (
-      file: ArchivedFile,
-      templateOverride?: RollCallTemplateType,
-      paperOverride?: PaperSize
-    ) => {
+    async (file: ArchivedFile) => {
       setHasOpenedPreview(true);
       setSelectedFileForPreview(file);
       setIsPreviewLoading(true);
@@ -849,11 +915,7 @@ export default function ArchivesPage() {
 
         if (hydratedFile.category === 'roll-call') {
           const { generateRollCallPDF } = await import('@/lib/pdf-generator');
-          const payload = buildRollCallPdfPayload(
-            hydratedFile,
-            templateOverride,
-            paperOverride
-          );
+          const payload = buildRollCallPdfPayload(hydratedFile);
           const pdf = await generateRollCallPDF(payload);
           const objectUrl = URL.createObjectURL(pdf.blob);
           setPreviewPdfBlobUrl(objectUrl);
@@ -865,93 +927,9 @@ export default function ArchivesPage() {
           const { generateDailyLogsPDF, sortLogsChronologically } =
             await import('@/lib/pdf-generator');
 
-          const dateStr =
-            hydratedFile.dailyReportDate ||
-            (hydratedFile.createdAt
-              ? hydratedFile.createdAt.split('·')[0].trim()
-              : '09/27/2026');
-          const finalOfficerProfile =
-            profileMap.get(hydratedFile.leadOfficer?.toLowerCase().trim()) ||
-            null;
-
-          const enrichedShifts = (hydratedFile.shifts || []).map((s) => {
-            const sOfficer = profileMap.get(
-              s.leadOfficer?.toLowerCase().trim()
-            );
-            return {
-              shiftLabel: s.shiftLabel,
-              startTime: s.startTime,
-              endTime: s.endTime,
-              leadOfficer: s.leadOfficer,
-              leadOfficerRole:
-                s.leadOfficerRole ||
-                sOfficer?.position_title ||
-                'Lead Operations Officer',
-              handoverStatus: s.handoverStatus,
-              roster: s.roster || [],
-              standbyVehicles: s.standbyVehicles || [],
-              signatures: [],
-              signatureUrl: null,
-              logsCount: s.logsCount || 0,
-            };
-          });
-
-          const enrichedLogs = (hydratedFile.logEntries || []).map((l) => {
-            const opProfile =
-              (l.operator_id
-                ? profileMap.get(l.operator_id.toLowerCase())
-                : undefined) ||
-              (l.operator
-                ? profileMap.get(l.operator.toLowerCase().trim())
-                : undefined);
-            return {
-              id: l.id,
-              created_at: l.created_at,
-              time: l.time,
-              date: l.date,
-              status: l.status,
-              title: l.title,
-              reportType:
-                l.reportType ||
-                (l.status &&
-                !['Active', 'Critical', 'Warning', 'Info'].includes(l.status)
-                  ? l.status
-                  : 'Info'),
-              description: l.description,
-              operator: l.operator,
-              operator_id: l.operator_id || opProfile?.id,
-              operatorRole:
-                l.operatorRole ||
-                opProfile?.position_title ||
-                'Duty Operations Officer',
-              signatureUrl: null,
-            };
-          });
-
-          const sortedLogs = sortLogsChronologically(
-            enrichedLogs,
-            hydratedFile.shifts?.[0]?.startTime || '0800H'
+          const pdf = await generateDailyLogsPDF(
+            buildDailyLogsPdfPayload(hydratedFile, sortLogsChronologically)
           );
-
-          const pdf = await generateDailyLogsPDF({
-            filename: hydratedFile.filename,
-            dailyReportDate: dateStr,
-            totalShiftsCount: hydratedFile.shifts?.length || 1,
-            finalOfficer: hydratedFile.leadOfficer || 'Lead Operations Officer',
-            finalOfficerRole:
-              hydratedFile.leadOfficerRole ||
-              finalOfficerProfile?.position_title ||
-              profilePositionTitle ||
-              'Lead Operations Officer',
-            finalHandoverStatus:
-              hydratedFile.handoverStatus || 'Situation Remain Normal',
-            signatureUrl: null,
-            signaturesMap: {},
-            shifts: enrichedShifts,
-            logs: sortedLogs,
-            fileHash: hydratedFile.hash,
-            snapshotPayload: hydratedFile.rawSnapshotData || {},
-          });
           const objectUrl = URL.createObjectURL(pdf.blob);
           setPreviewPdfBlobUrl(objectUrl);
           setIsPreviewLoading(false);
@@ -984,27 +962,8 @@ export default function ArchivesPage() {
     [
       ensureArchiveSnapshot,
       buildRollCallPdfPayload,
-      profileMap,
-      profilePositionTitle,
+      buildDailyLogsPdfPayload,
     ]
-  );
-
-  const handleSwitchRollCallFormat = useCallback(
-    async (newTemplate: RollCallTemplateType, newPaper: PaperSize) => {
-      setRcTemplateType(newTemplate);
-      setRcPaperSize(newPaper);
-      if (
-        selectedFileForPreview &&
-        selectedFileForPreview.category === 'roll-call'
-      ) {
-        await handleSelectFileForPreview(
-          selectedFileForPreview,
-          newTemplate,
-          newPaper
-        );
-      }
-    },
-    [selectedFileForPreview, handleSelectFileForPreview]
   );
 
   const handleClosePreview = useCallback(() => {
@@ -1187,25 +1146,17 @@ export default function ArchivesPage() {
   const handleDownloadFile = useCallback(
     async (file: ArchivedFile) => {
       try {
-        if (file.category === 'roll-call') {
-          const hydratedFile = await ensureArchiveSnapshot(file);
-          const { generateRollCallPDF, PAPER_DIMENSIONS } = await import(
-            '@/lib/pdf-generator'
-          );
-          const payload = buildRollCallPdfPayload(
-            hydratedFile,
-            rcTemplateType,
-            rcPaperSize
-          );
+        const hydratedFile = await ensureArchiveSnapshot(file);
+
+        if (hydratedFile.category === 'roll-call') {
+          const { generateRollCallPDF } = await import('@/lib/pdf-generator');
+          const payload = buildRollCallPdfPayload(hydratedFile);
           const pdf = await generateRollCallPDF(payload);
           const url = window.URL.createObjectURL(pdf.blob);
           const downloadAnchor = document.createElement('a');
           downloadAnchor.href = url;
           const baseName = hydratedFile.filename.replace(/\.(pdf|json)$/i, '');
-          const tplTag =
-            rcTemplateType === 'net_calling' ? 'NETCALL' : 'OFFICIAL';
-          const sizeTag = rcPaperSize.toUpperCase();
-          downloadAnchor.download = `${baseName}-${tplTag}-${sizeTag}.pdf`;
+          downloadAnchor.download = `${baseName}.pdf`;
           document.body.appendChild(downloadAnchor);
           downloadAnchor.click();
           downloadAnchor.remove();
@@ -1214,29 +1165,52 @@ export default function ArchivesPage() {
           setToastNotification({
             type: 'success',
             message: 'Roll Call PDF Downloaded',
-            submessage: `Exported as ${
-              rcTemplateType === 'net_calling'
-                ? 'Net Calling Sheet'
-                : 'Official MLS Table'
-            } (${PAPER_DIMENSIONS[rcPaperSize].shortLabel}).`,
+            submessage:
+              'Exported as Official 2-Column Net Calling Sheet (Auto-Fit All Paper Sizes).',
           });
           setActiveMenuId(null);
           return;
         }
 
-        if (file.storagePath) {
+        if (hydratedFile.logEntries && hydratedFile.logEntries.length > 0) {
+          const { generateDailyLogsPDF, sortLogsChronologically } =
+            await import('@/lib/pdf-generator');
+          const pdf = await generateDailyLogsPDF(
+            buildDailyLogsPdfPayload(hydratedFile, sortLogsChronologically)
+          );
+          const url = window.URL.createObjectURL(pdf.blob);
+          const downloadAnchor = document.createElement('a');
+          downloadAnchor.href = url;
+          const baseName = hydratedFile.filename.replace(/\.(pdf|json)$/i, '');
+          downloadAnchor.download = `${baseName}.pdf`;
+          document.body.appendChild(downloadAnchor);
+          downloadAnchor.click();
+          downloadAnchor.remove();
+          window.URL.revokeObjectURL(url);
+
+          setToastNotification({
+            type: 'success',
+            message: 'Shift Log PDF Downloaded',
+            submessage: `${baseName}.pdf exported with universal paper optimization.`,
+          });
+          setActiveMenuId(null);
+          return;
+        }
+
+        if (hydratedFile.storagePath) {
           const { data: blobData, error: downloadErr } = await supabase.storage
             .from('archive-documents')
-            .download(file.storagePath);
+            .download(hydratedFile.storagePath);
 
           if (!downloadErr && blobData) {
             const url = window.URL.createObjectURL(blobData);
             const downloadAnchor = document.createElement('a');
             downloadAnchor.href = url;
             downloadAnchor.download =
-              file.filename.endsWith('.json') || file.filename.endsWith('.pdf')
-                ? file.filename
-                : `${file.filename}.json`;
+              hydratedFile.filename.endsWith('.json') ||
+              hydratedFile.filename.endsWith('.pdf')
+                ? hydratedFile.filename
+                : `${hydratedFile.filename}.json`;
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();
@@ -1245,14 +1219,13 @@ export default function ArchivesPage() {
             setToastNotification({
               type: 'success',
               message: 'Archive Document Downloaded',
-              submessage: `${file.filename} retrieved directly from secure archive storage.`,
+              submessage: `${hydratedFile.filename} retrieved directly from secure archive storage.`,
             });
             setActiveMenuId(null);
             return;
           }
         }
 
-        const hydratedFile = await ensureArchiveSnapshot(file);
         const exportObject = {
           filename: hydratedFile.filename,
           category: hydratedFile.category,
@@ -1292,8 +1265,7 @@ export default function ArchivesPage() {
     [
       ensureArchiveSnapshot,
       buildRollCallPdfPayload,
-      rcTemplateType,
-      rcPaperSize,
+      buildDailyLogsPdfPayload,
     ]
   );
 
@@ -1844,13 +1816,10 @@ export default function ArchivesPage() {
           previewPdfBlobUrl={previewPdfBlobUrl}
           isPreviewLoading={isPreviewLoading}
           previewError={previewError}
-          rcTemplateType={rcTemplateType}
-          rcPaperSize={rcPaperSize}
           profileMap={profileMap}
           currentUserProfile={profile}
           printIframeRef={printIframeRef}
           onChangeViewMode={setPreviewViewMode}
-          onSwitchRollCallFormat={handleSwitchRollCallFormat}
           onRetryPreview={handleSelectFileForPreview}
           onDownload={handleDownloadFile}
           onPrint={handlePrintDocument}
