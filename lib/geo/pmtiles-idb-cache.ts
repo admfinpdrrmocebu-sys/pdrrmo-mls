@@ -14,7 +14,7 @@ const IDB_VERSION = 1;
 const STORE_RANGES = 'ranges';
 const STORE_META = 'meta';
 const ARCHIVE_KEY = 'cebu-noah';
-const ARCHIVE_ENDPOINT = '/api/geo/cebu-noah';
+const ARCHIVE_ENDPOINT = '/geo/cebu_noah.pmtiles';
 const MAX_L1_ENTRIES = 320;
 const BATCH_PRECACHE_MAX_BYTES = 2 * 1024 * 1024; // 2 MB contiguous batch slice
 

@@ -26,7 +26,7 @@ const PUBLIC_ROUTES = [
   '/api/push/subscribe',
   '/api/auth/forgot-password',
   '/api/auth',
-  '/api/geo/cebu-noah',
+  '/geo/cebu_noah.pmtiles',
 ];
 
 /**

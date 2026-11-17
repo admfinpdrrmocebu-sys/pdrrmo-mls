@@ -2,7 +2,7 @@
  * =============================================================================
  * PDRRMO CEBU — DOST-NOAH Multi-Hazard Vector Layer Registry & State Persistence
  * =============================================================================
- * Matches the exact 9 vector layers & attribute schemas inside `lib/geo/cebu_noah.pmtiles`.
+ * Matches the exact 9 vector layers & attribute schemas inside `public/geo/cebu_noah.pmtiles`.
  */
 
 export type HazardLayerId =
