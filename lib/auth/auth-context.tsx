@@ -23,7 +23,10 @@ import {
   canWriteScreen,
 } from './rbac';
 import { Lock, UserX, AlertTriangle, LogOut } from 'lucide-react';
-import { clearOperationalScreensCache } from '@/lib/cache/screen-data-cache';
+import {
+  clearOperationalScreensCache,
+  hydrateOperationalCachesFromStorage,
+} from '@/lib/cache/screen-data-cache';
 
 const DEVICE_SESSION_STORAGE_KEY = 'pdrrmo_device_session_v1';
 const DEVICE_PROFILE_STORAGE_KEY = 'pdrrmo_device_profile_v1';
@@ -219,15 +222,28 @@ export interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // Keep initial SSR & first client hydration pass identical (`isLoading: true`, `user: null`)
-  // so Next.js SSR HTML never mismatches client localStorage; device session hydrates right
-  // after mount inside `initializeAuth()`.
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+export interface AuthProviderProps {
+  children: React.ReactNode;
+  initialUser?: User | null;
+  initialProfile?: UserProfile | null;
+  initialRoles?: RoleDefinition[];
+}
+
+export function AuthProvider({
+  children,
+  initialUser = null,
+  initialProfile = null,
+  initialRoles,
+}: AuthProviderProps) {
+  // Hydrate immediately from server-validated auth props when available (eliminates fullscreen loader on F5),
+  // while falling back cleanly to remembered localStorage device session when SSR props are absent.
+  const [user, setUser] = useState<User | null>(() => initialUser ?? null);
+  const [profile, setProfile] = useState<UserProfile | null>(() => initialProfile ?? null);
   const [session, setSession] = useState<Session | null>(null);
-  const [roles, setRoles] = useState<RoleDefinition[]>(defaultBuiltInRoles);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [roles, setRoles] = useState<RoleDefinition[]>(() =>
+    initialRoles && initialRoles.length > 0 ? initialRoles : defaultBuiltInRoles
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(() => !initialUser);
   const [rememberTerminal, setRememberTerminalState] = useState<boolean>(true);
 
   // Lockout Modal States
@@ -398,19 +414,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     async function initializeAuth() {
       try {
+        // Hydrate non-sensitive SWR screen caches from sessionStorage immediately on mount
+        hydrateOperationalCachesFromStorage();
+
         // Yield one microtask so the first client render matches SSR HTML cleanly,
         // then immediately restore remembered device auth without waiting for network.
         await Promise.resolve();
         if (!isMounted) return;
 
         setRememberTerminalState(readRememberTerminalPreference());
-        const cachedRoles = readStoredRoles();
-        if (cachedRoles.length > 0) {
-          setRoles(cachedRoles);
+        if (initialRoles && initialRoles.length > 0) {
+          try {
+            localStorage.setItem(CUSTOM_ROLES_STORAGE_KEY, JSON.stringify(initialRoles));
+          } catch {
+            // Ignore storage errors
+          }
+        } else {
+          const cachedRoles = readStoredRoles();
+          if (cachedRoles.length > 0) {
+            setRoles(cachedRoles);
+          }
+        }
+
+        if (initialProfile) {
+          writeStoredDeviceProfile(initialProfile);
         }
 
         const storedAtMount = !isExplicitSignOutRef.current ? readStoredDeviceSession() : null;
-        if (storedAtMount?.user) {
+        if (storedAtMount?.user && !initialUser) {
           setUser(storedAtMount.user);
           const storedProf = readStoredDeviceProfile();
           setProfile(
@@ -571,7 +602,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener('online', handleWakeOrOnline);
       document.removeEventListener('visibilitychange', handleWakeOrOnline);
     };
-  }, [attemptDeviceSessionRecovery, fetchProfile, fetchRoles]);
+  }, [attemptDeviceSessionRecovery, fetchProfile, fetchRoles, initialProfile, initialRoles, initialUser]);
 
   // 4. Real-time Multi-Tab Broadcast & Supabase Profile/Roles Realtime Listeners (Authenticated Only)
   useEffect(() => {

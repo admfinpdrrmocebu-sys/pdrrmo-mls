@@ -12,6 +12,7 @@ export interface ThemeContextType {
 }
 
 const STORAGE_KEY = 'pdrrmo-theme';
+export const THEME_COOKIE_NAME = 'pdrrmo-theme';
 
 const ThemeContext = createContext<ThemeContextType>({
   theme: 'light',
@@ -32,39 +33,77 @@ function applyThemeToDOM(mode: ThemeMode) {
   }
 }
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeMode>('light');
+function persistThemePreference(mode: ThemeMode) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY, mode);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+
+  try {
+    if (typeof document !== 'undefined') {
+      document.cookie = `${THEME_COOKIE_NAME}=${mode}; path=/; max-age=31536000; SameSite=Lax`;
+    }
+  } catch {
+    // Ignore cookie errors
+  }
+}
+
+function readThemeCookieClient(): ThemeMode | null {
+  if (typeof document === 'undefined') return null;
+  try {
+    const match = document.cookie
+      .split('; ')
+      .find((entry) => entry.startsWith(`${THEME_COOKIE_NAME}=`));
+    if (!match) return null;
+    const val = match.split('=')[1];
+    return val === 'dark' ? 'dark' : val === 'light' ? 'light' : null;
+  } catch {
+    return null;
+  }
+}
+
+export function ThemeProvider({
+  children,
+  initialTheme = 'light',
+}: {
+  children: React.ReactNode;
+  initialTheme?: ThemeMode;
+}) {
+  const [theme, setThemeState] = useState<ThemeMode>(initialTheme);
 
   useEffect(() => {
     try {
+      const cookieVal = readThemeCookieClient();
       const saved = localStorage.getItem(STORAGE_KEY) as ThemeMode | null;
-      const initial: ThemeMode = saved === 'dark' ? 'dark' : 'light';
-      setThemeState(initial);
-      applyThemeToDOM(initial);
+
+      // One-time migration for existing users who had dark mode in localStorage before SSR cookies
+      const resolved: ThemeMode =
+        cookieVal ?? (saved === 'dark' ? 'dark' : 'light');
+
+      setThemeState(resolved);
+      applyThemeToDOM(resolved);
+      if (cookieVal !== resolved || saved !== resolved) {
+        persistThemePreference(resolved);
+      }
     } catch {
-      // Fallback if localStorage is restricted
+      // Fallback if localStorage/cookies are restricted
     }
   }, []);
 
   const setTheme = useCallback((mode: ThemeMode) => {
     setThemeState(mode);
     applyThemeToDOM(mode);
-    try {
-      localStorage.setItem(STORAGE_KEY, mode);
-    } catch {
-      // Ignore storage errors
-    }
+    persistThemePreference(mode);
   }, []);
 
   const toggleTheme = useCallback(() => {
     setThemeState((prev) => {
       const next: ThemeMode = prev === 'dark' ? 'light' : 'dark';
       applyThemeToDOM(next);
-      try {
-        localStorage.setItem(STORAGE_KEY, next);
-      } catch {
-        // Ignore storage errors
-      }
+      persistThemePreference(next);
       return next;
     });
   }, []);

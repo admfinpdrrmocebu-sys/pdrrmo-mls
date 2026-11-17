@@ -2,6 +2,8 @@
 // PDRRMO MLS SERVICE WORKER (Background Push Notifications & Native Alerts)
 // =============================================================================
 
+const BASEMAP_CACHE_NAME = 'pdrrmo-basemap-tiles-v1';
+
 self.addEventListener('install', (event) => {
   // Activate worker immediately
   self.skipWaiting();
@@ -10,6 +12,41 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   // Claim active clients immediately
   event.waitUntil(self.clients.claim());
+});
+
+// Cache-first handler for MapLibre background tiles so basemap tiles persist across browser restarts
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  try {
+    const url = new URL(req.url);
+    const isBasemapTile =
+      url.hostname === 'server.arcgisonline.com' ||
+      url.hostname === 'tile.openstreetmap.org';
+
+    if (!isBasemapTile) return;
+
+    event.respondWith(
+      caches.open(BASEMAP_CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(req);
+        if (cached) return cached;
+
+        try {
+          const response = await fetch(req);
+          if (response && response.status === 200) {
+            cache.put(req, response.clone()).catch(() => {});
+          }
+          return response;
+        } catch (err) {
+          if (cached) return cached;
+          throw err;
+        }
+      })
+    );
+  } catch {
+    // Ignore invalid URLs
+  }
 });
 
 // 1. Push Event Listener: Receives background notifications even when app/browser is closed

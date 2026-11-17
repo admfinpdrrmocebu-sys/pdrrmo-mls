@@ -19,7 +19,8 @@ export type ScreenName =
   | 'Shifts'
   | 'Affiliated Apps'
   | 'Screen Projector'
-  | 'Drone Stream';
+  | 'Drone Stream'
+  | 'Hazard Map';
 
 export type PermissionLevel = 'Full Access' | 'View Only' | 'None';
 
@@ -51,6 +52,7 @@ export const ALL_SCREENS: ScreenName[] = [
   'Affiliated Apps',
   'Screen Projector',
   'Drone Stream',
+  'Hazard Map',
 ];
 
 /**
@@ -87,6 +89,9 @@ export const routeToScreenMap: Record<string, ScreenName> = {
   '/drone-stream': 'Drone Stream',
   'Drone Stream': 'Drone Stream',
   'drone stream': 'Drone Stream',
+  '/hazard-map': 'Hazard Map',
+  'Hazard Map': 'Hazard Map',
+  'hazard map': 'Hazard Map',
 };
 
 /**
@@ -113,6 +118,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Affiliated Apps', level: 'Full Access' },
       { screen: 'Screen Projector', level: 'Full Access' },
       { screen: 'Drone Stream', level: 'Full Access' },
+      { screen: 'Hazard Map', level: 'View Only' },
     ],
   },
   {
@@ -135,6 +141,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Affiliated Apps', level: 'View Only' },
       { screen: 'Screen Projector', level: 'View Only' },
       { screen: 'Drone Stream', level: 'Full Access' },
+      { screen: 'Hazard Map', level: 'View Only' },
     ],
   },
   {
@@ -157,6 +164,7 @@ export const defaultBuiltInRoles: RoleDefinition[] = [
       { screen: 'Affiliated Apps', level: 'View Only' },
       { screen: 'Screen Projector', level: 'View Only' },
       { screen: 'Drone Stream', level: 'View Only' },
+      { screen: 'Hazard Map', level: 'View Only' },
     ],
   },
 ];
@@ -257,6 +265,11 @@ export function getPermissionForScreen(
   const perm = role.permissions?.find(
     (p) => p.screen.toLowerCase() === screenName.toLowerCase()
   );
+
+  if (screenName === 'Hazard Map') {
+    if (perm?.level === 'None') return 'None';
+    return 'View Only';
+  }
 
   if (perm && perm.level) {
     return perm.level;

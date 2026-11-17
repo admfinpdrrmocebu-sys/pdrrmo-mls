@@ -19,6 +19,7 @@ import {
   LayoutGrid,
   Projector,
   Drone,
+  Map as MapIcon,
   Bell,
   BellRing,
   BellOff,
@@ -46,6 +47,7 @@ export const defaultNavItems: NavItemDef[] = [
   { label: 'Affiliated Apps', href: '/affiliated-apps', icon: LayoutGrid },
   { label: 'Screen Projector', href: '/screen-projector', icon: Projector },
   { label: 'Drone Stream', href: '/drone-stream', icon: Drone },
+  { label: 'Hazard Map', href: '/hazard-map', icon: MapIcon },
 ];
 
 export interface VerticalNavProps {

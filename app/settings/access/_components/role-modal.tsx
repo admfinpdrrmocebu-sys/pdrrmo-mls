@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   Loader2,
+  Map as MapIcon,
   Megaphone,
   Plus,
   Projector,
@@ -21,7 +22,15 @@ import { motion } from 'motion/react';
 import { PrimaryButton, SecondaryButton } from '@/components/button';
 import { RoleItem } from './types';
 
-const screenList = [
+type PermissionLevel = 'View Only' | 'Full Access' | 'None';
+
+interface ScreenPermissionConfig {
+  name: string;
+  icon: React.ComponentType<{ className?: string }>;
+  allowedLevels?: readonly PermissionLevel[];
+}
+
+const screenList: ScreenPermissionConfig[] = [
   { name: 'Dashboard', icon: LayoutDashboard },
   { name: 'Logs', icon: FileText },
   { name: 'Roll Call', icon: Radio },
@@ -33,9 +42,12 @@ const screenList = [
   { name: 'Affiliated Apps', icon: LayoutGrid },
   { name: 'Screen Projector', icon: Projector },
   { name: 'Drone Stream', icon: Drone },
+  {
+    name: 'Hazard Map',
+    icon: MapIcon,
+    allowedLevels: ['View Only', 'None'] as const,
+  },
 ];
-
-type PermissionLevel = 'View Only' | 'Full Access' | 'None';
 
 function buildInitialPermissions(
   editingRole: RoleItem | null
@@ -53,6 +65,7 @@ function buildInitialPermissions(
       'Affiliated Apps': 'View Only',
       'Screen Projector': 'View Only',
       'Drone Stream': 'View Only',
+      'Hazard Map': 'View Only',
     };
   }
 
@@ -72,11 +85,16 @@ function buildInitialPermissions(
     'Affiliated Apps': isRoleAdmin ? 'Full Access' : 'View Only',
     'Screen Projector': isRoleAdmin ? 'Full Access' : 'View Only',
     'Drone Stream': isRoleAdmin ? 'Full Access' : 'View Only',
+    'Hazard Map': 'View Only',
   };
 
   if (Array.isArray(editingRole.permissions)) {
     editingRole.permissions.forEach((p) => {
-      permMap[p.screen] = p.level;
+      if (p.screen === 'Hazard Map' && p.level === 'Full Access') {
+        permMap[p.screen] = 'View Only';
+      } else {
+        permMap[p.screen] = p.level;
+      }
     });
   }
   return permMap;
@@ -220,8 +238,10 @@ export function RoleModal({
                       </div>
 
                       <div className="flex items-center gap-4 text-xs">
-                        {(['View Only', 'Full Access', 'None'] as const).map(
-                          (level) => (
+                        {(
+                          screenItem.allowedLevels ??
+                          (['View Only', 'Full Access', 'None'] as const)
+                        ).map((level) => (
                             <label
                               key={level}
                               className="flex items-center gap-1.5 cursor-pointer text-[#505F76] hover:text-[#1E293B]"

@@ -1,10 +1,14 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import { Hanken_Grotesk, Inter } from "next/font/google";
+import type { User } from "@supabase/supabase-js";
 import { ScreenBackground, NetworkStatusBanner } from "@/components/layout";
-import { AuthProvider } from "@/lib/auth/auth-context";
+import { AuthProvider, type UserProfile } from "@/lib/auth/auth-context";
+import type { RoleDefinition, RolePermission } from "@/lib/auth/rbac";
 import { PushNotificationProvider } from "@/lib/push/push-context";
-import { ThemeProvider } from "@/lib/theme/theme-context";
+import { ThemeProvider, THEME_COOKIE_NAME, type ThemeMode } from "@/lib/theme/theme-context";
 import { PersistentOperationsHost } from "@/components/nav-route/persistent-operations-host";
+import { createClient } from "@/lib/supabase/server";
 import "./globals.css";
 
 /**
@@ -74,16 +78,121 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+interface ServerAuthPayload {
+  initialUser: User | null;
+  initialProfile: UserProfile | null;
+  initialRoles: RoleDefinition[] | undefined;
+}
+
+async function loadInitialServerAuth(
+  hasAuthCookie: boolean
+): Promise<ServerAuthPayload> {
+  if (!hasAuthCookie) {
+    return { initialUser: null, initialProfile: null, initialRoles: undefined };
+  }
+
+  try {
+    const supabase = await createClient();
+    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
+    const claims = claimsData?.claims as
+      | {
+          sub?: string;
+          email?: string;
+          aud?: string;
+          user_metadata?: Record<string, unknown>;
+          app_metadata?: Record<string, unknown>;
+        }
+      | undefined;
+
+    if (claimsError || !claims?.sub) {
+      return { initialUser: null, initialProfile: null, initialRoles: undefined };
+    }
+
+    const userId = claims.sub;
+    const initialUser: User = {
+      id: userId,
+      email: claims.email ?? "",
+      aud: claims.aud ?? "authenticated",
+      role: "authenticated",
+      app_metadata: claims.app_metadata ?? {},
+      user_metadata: claims.user_metadata ?? {},
+      created_at: "",
+    } as User;
+
+    const [{ data: profileData }, { data: rolesData }] = await Promise.all([
+      supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
+      supabase
+        .from("access_roles")
+        .select("id, code, name, badge, badge_type, description, permissions, is_system")
+        .order("created_at", { ascending: true }),
+    ]);
+
+    const meta = (claims.user_metadata ?? {}) as Record<string, unknown>;
+    const initialProfile: UserProfile | null = profileData
+      ? ({
+          ...profileData,
+          full_name:
+            profileData.full_name ||
+            (typeof meta.full_name === "string" ? meta.full_name : "") ||
+            claims.email?.split("@")[0] ||
+            "Monitoring Officer",
+          email: profileData.email || claims.email || "",
+          position_title:
+            profileData.position_title ||
+            (typeof meta.position === "string" ? meta.position : "Monitoring Officer"),
+          role: profileData.role || (typeof meta.role === "string" ? meta.role : "monitoring"),
+          division:
+            profileData.division ||
+            "Provincial Disaster Risk Reduction Management Office",
+          is_active: profileData.is_active ?? true,
+        } as UserProfile)
+      : null;
+
+    const initialRoles: RoleDefinition[] | undefined =
+      Array.isArray(rolesData) && rolesData.length > 0
+        ? rolesData.map((r) => ({
+            id: r.id,
+            code: r.code,
+            name: r.name,
+            badge: r.badge || "Operational",
+            badgeType: (r.badge_type as RoleDefinition["badgeType"]) || "operational",
+            description: r.description || "",
+            permissions: Array.isArray(r.permissions)
+              ? (r.permissions as RolePermission[])
+              : [],
+            isSystem: r.is_system ?? false,
+          }))
+        : undefined;
+
+    return { initialUser, initialProfile, initialRoles };
+  } catch {
+    return { initialUser: null, initialProfile: null, initialRoles: undefined };
+  }
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const cookieStore = await cookies();
+  const themeCookie = cookieStore.get(THEME_COOKIE_NAME)?.value;
+  const initialTheme: ThemeMode = themeCookie === "dark" ? "dark" : "light";
+  const hasAuthCookie = cookieStore
+    .getAll()
+    .some((c) => c.name.startsWith("sb-") && c.name.includes("auth-token"));
+
+  const { initialUser, initialProfile, initialRoles } =
+    await loadInitialServerAuth(hasAuthCookie);
+
   return (
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${hankenGrotesk.variable} ${inter.variable} h-full antialiased`}
+      data-theme={initialTheme}
+      className={`${hankenGrotesk.variable} ${inter.variable} h-full antialiased${
+        initialTheme === "dark" ? " dark" : ""
+      }`}
     >
       <head>
         <script
@@ -91,13 +200,13 @@ export default function RootLayout({
             __html: `
               (function() {
                 try {
-                  var theme = localStorage.getItem('pdrrmo-theme');
-                  if (theme === 'dark') {
-                    document.documentElement.classList.add('dark');
-                    document.documentElement.setAttribute('data-theme', 'dark');
-                  } else {
-                    document.documentElement.classList.remove('dark');
-                    document.documentElement.setAttribute('data-theme', 'light');
+                  var hasCookie = document.cookie.indexOf('${THEME_COOKIE_NAME}=') !== -1;
+                  if (!hasCookie) {
+                    var theme = localStorage.getItem('pdrrmo-theme');
+                    if (theme === 'dark') {
+                      document.documentElement.classList.add('dark');
+                      document.documentElement.setAttribute('data-theme', 'dark');
+                    }
                   }
                 } catch (e) {}
               })();
@@ -106,9 +215,13 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-full flex flex-col bg-[#F8FAFC] text-[#1E293B] font-sans selection:bg-[#004AC6]/15 selection:text-[#004AC6] transition-colors duration-200">
-        <ThemeProvider>
+        <ThemeProvider initialTheme={initialTheme}>
           <ScreenBackground>
-            <AuthProvider>
+            <AuthProvider
+              initialUser={initialUser}
+              initialProfile={initialProfile}
+              initialRoles={initialRoles}
+            >
               <PushNotificationProvider>
                 <NetworkStatusBanner />
                 <PersistentOperationsHost>

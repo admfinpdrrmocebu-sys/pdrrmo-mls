@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS public.affiliated_apps (
     storage_path TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT true,
+    is_pinned BOOLEAN NOT NULL DEFAULT false,
+    pinned_at TIMESTAMPTZ,
+    pinned_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     updated_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -27,6 +30,12 @@ CREATE TABLE IF NOT EXISTS public.affiliated_apps (
 
 CREATE INDEX IF NOT EXISTS idx_affiliated_apps_sort_order ON public.affiliated_apps(sort_order);
 CREATE INDEX IF NOT EXISTS idx_affiliated_apps_active ON public.affiliated_apps(is_active);
+CREATE INDEX IF NOT EXISTS idx_affiliated_apps_directory_order
+    ON public.affiliated_apps (is_pinned DESC, pinned_at DESC NULLS LAST, sort_order ASC, created_at DESC)
+    WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_affiliated_apps_pinned_active
+    ON public.affiliated_apps (pinned_at DESC NULLS LAST, sort_order ASC)
+    WHERE is_active = true AND is_pinned = true;
 
 -- Attach Updated-At Trigger
 DROP TRIGGER IF EXISTS trigger_affiliated_apps_updated_at ON public.affiliated_apps;
@@ -34,9 +43,60 @@ CREATE TRIGGER trigger_affiliated_apps_updated_at
     BEFORE UPDATE ON public.affiliated_apps
     FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
+-- Sync Pin Metadata & Auto-Unpin Trigger
+CREATE OR REPLACE FUNCTION public.sync_affiliated_app_pin_metadata()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.is_active = false THEN
+        NEW.is_pinned := false;
+    END IF;
+
+    IF NEW.is_pinned = true AND (OLD IS NULL OR OLD.is_pinned = false) THEN
+        NEW.pinned_at := COALESCE(NEW.pinned_at, now());
+        NEW.pinned_by := COALESCE(NEW.pinned_by, auth.uid());
+    ELSIF NEW.is_pinned = false THEN
+        NEW.pinned_at := NULL;
+        NEW.pinned_by := NULL;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_affiliated_apps_pin_sync ON public.affiliated_apps;
+CREATE TRIGGER trigger_affiliated_apps_pin_sync
+    BEFORE INSERT OR UPDATE OF is_pinned, is_active ON public.affiliated_apps
+    FOR EACH ROW EXECUTE FUNCTION public.sync_affiliated_app_pin_metadata();
+
 -- -----------------------------------------------------------------------------
 -- 2. ROW LEVEL SECURITY (RLS)
 -- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.can_write_affiliated_apps()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.profiles p
+        LEFT JOIN public.access_roles ar
+          ON lower(ar.code) = lower(p.role::text)
+          OR lower(ar.name) = lower(COALESCE(p.position_title, ''))
+        WHERE p.id = auth.uid()
+          AND (
+            p.role = 'admin'::public.user_role_type
+            OR EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(COALESCE(ar.permissions, '[]'::jsonb)) elem
+              WHERE lower(elem->>'screen') = 'affiliated apps'
+                AND elem->>'level' = 'Full Access'
+            )
+          )
+    );
+$$;
+
 ALTER TABLE public.affiliated_apps ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Allow authenticated read affiliated_apps" ON public.affiliated_apps;
@@ -44,8 +104,11 @@ CREATE POLICY "Allow authenticated read affiliated_apps"
     ON public.affiliated_apps FOR SELECT TO authenticated USING (true);
 
 DROP POLICY IF EXISTS "Allow authenticated manage affiliated_apps" ON public.affiliated_apps;
-CREATE POLICY "Allow authenticated manage affiliated_apps"
-    ON public.affiliated_apps FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access manage affiliated_apps" ON public.affiliated_apps;
+CREATE POLICY "Allow full access manage affiliated_apps"
+    ON public.affiliated_apps FOR ALL TO authenticated
+    USING (public.can_write_affiliated_apps())
+    WITH CHECK (public.can_write_affiliated_apps());
 
 -- -----------------------------------------------------------------------------
 -- 3. STORAGE BUCKET ('affiliated-apps') & POLICIES

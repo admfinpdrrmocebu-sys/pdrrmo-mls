@@ -105,9 +105,12 @@ body {
 
   /* 3. Card Header Strips, Toolbars & Recessed Surfaces */
   html.dark :not(body).bg-\[\#F8FAFC\],
+  html.dark .bg-\[\#F8FAFC\]\/95,
   html.dark .bg-\[\#F8FAFC\]\/90,
   html.dark .bg-\[\#F8FAFC\]\/85,
   html.dark .bg-\[\#F8FAFC\]\/80,
+  html.dark .bg-\[\#F8FAFC\]\/75,
+  html.dark .bg-\[\#F8FAFC\]\/70,
   html.dark .bg-\[\#F8FAFC\]\/60,
   html.dark .bg-\[\#F8FAFC\]\/50,
   html.dark .bg-\[\#F8FAFC\]\/40,
@@ -362,7 +365,10 @@ body {
   html.dark .bg-amber-500\/10,
   html.dark .bg-amber-500\/15,
   html.dark .bg-amber-500\/20,
-  html.dark .bg-\[\#FFFBEB\] {
+  html.dark .bg-\[\#FFFBEB\],
+  html.dark .hover\:bg-amber-50:hover,
+  html.dark .hover\:bg-amber-50\/70:hover,
+  html.dark .hover\:bg-amber-100:hover {
     background-color: rgba(245, 158, 11, 0.16) !important;
   }
 
@@ -373,17 +379,23 @@ body {
   html.dark .text-amber-900,
   html.dark .text-amber-950,
   html.dark .text-\[\#943700\],
-  html.dark .text-\[\#B45309\] {
+  html.dark .text-\[\#B45309\],
+  html.dark .hover\:text-amber-600:hover,
+  html.dark .hover\:text-amber-700:hover {
     color: #fbbf24 !important;
   }
 
   html.dark .border-amber-100,
   html.dark .border-amber-200,
+  html.dark .border-amber-200\/90,
   html.dark .border-amber-200\/80,
   html.dark .border-amber-200\/60,
   html.dark .border-amber-300,
-  html.dark .border-\[\#FDE68A\] {
-    border-color: rgba(245, 158, 11, 0.35) !important;
+  html.dark .border-amber-300\/90,
+  html.dark .border-amber-300\/80,
+  html.dark .border-\[\#FDE68A\],
+  html.dark .hover\:border-amber-400:hover {
+    border-color: rgba(251, 191, 36, 0.42) !important;
   }
 
   /* 12. Rose / Absent / Danger / Sign Out */
@@ -651,4 +663,119 @@ html.dark .group:hover .group-hover\:bg-\[\#004AC6\] {
 }
 html.dark .group:hover .group-hover\:text-white {
   color: #ffffff !important;
+}
+
+/* ============================================================================
+ * PINNED AFFILIATED APPS — LIGHT & DARK THEME SURFACES (NO GRAY WASH)
+ * ============================================================================ */
+html.dark .pinned-spotlight-panel,
+.dark .pinned-spotlight-panel {
+  background: linear-gradient(
+    135deg,
+    rgba(17, 28, 45, 0.98) 0%,
+    rgba(20, 34, 58, 0.96) 55%,
+    rgba(30, 41, 59, 0.92) 100%
+  ) !important;
+  border-color: rgba(251, 191, 36, 0.35) !important;
+  box-shadow: 0 8px 28px -8px rgba(2, 6, 23, 0.6) !important;
+}
+
+html.dark .pinned-app-card,
+.dark .pinned-app-card {
+  background-color: #132038 !important;
+  border-color: rgba(251, 191, 36, 0.45) !important;
+  box-shadow: 0 4px 20px -4px rgba(2, 6, 23, 0.7), 0 0 0 1px rgba(251, 191, 36, 0.16) !important;
+}
+html.dark .pinned-app-card:hover,
+.dark .pinned-app-card:hover {
+  border-color: rgba(251, 191, 36, 0.78) !important;
+}
+
+html.dark .pinned-app-card-bar,
+.dark .pinned-app-card-bar {
+  background-color: #0d1729 !important;
+  border-color: rgba(251, 191, 36, 0.22) !important;
+}
+
+html.dark .pinned-metric-card,
+.dark .pinned-metric-card {
+  background-color: #132038 !important;
+  border-color: rgba(251, 191, 36, 0.42) !important;
+}
+
+html.dark .pinned-badge,
+.dark .pinned-badge {
+  background-color: rgba(245, 158, 11, 0.2) !important;
+  border-color: rgba(251, 191, 36, 0.48) !important;
+  color: #fcd34d !important;
+}
+
+html.dark .pinned-icon-btn-active,
+.dark .pinned-icon-btn-active {
+  background-color: rgba(245, 158, 11, 0.22) !important;
+  border-color: rgba(251, 191, 36, 0.5) !important;
+  color: #fcd34d !important;
+}
+html.dark .pinned-icon-btn-active:hover,
+.dark .pinned-icon-btn-active:hover {
+  background-color: rgba(245, 158, 11, 0.34) !important;
+}
+
+html.dark .pinned-modal-box,
+.dark .pinned-modal-box {
+  background-color: #132038 !important;
+  border-color: rgba(251, 191, 36, 0.38) !important;
+}
+
+/* ============================================================================
+ * HAZARD MAP LAYER TOGGLE ROWS — DARK MODE CONTRAST
+ * ============================================================================ */
+html.dark .hazard-layer-row-active,
+.dark .hazard-layer-row-active {
+  background-color: #16243d !important;
+  border-color: rgba(59, 130, 246, 0.42) !important;
+}
+
+html.dark .hazard-layer-row-inactive,
+.dark .hazard-layer-row-inactive {
+  background-color: #0d1626 !important;
+  border-color: #1e293b !important;
+}
+
+html.dark .hazard-layer-row-inactive:hover,
+.dark .hazard-layer-row-inactive:hover {
+  background-color: #132038 !important;
+  border-color: #334155 !important;
+}
+
+html.dark .hazard-category-card,
+.dark .hazard-category-card {
+  background-color: #0b1322 !important;
+  border-color: #1e293b !important;
+}
+
+html.dark .hazard-category-header,
+.dark .hazard-category-header {
+  background-color: #111c32 !important;
+  border-color: #1e293b !important;
+}
+
+html.dark .hazard-severity-row-active,
+.dark .hazard-severity-row-active {
+  background-color: #1c2e4e !important;
+  border-color: rgba(59, 130, 246, 0.5) !important;
+}
+
+html.dark .hazard-severity-row-inactive,
+.dark .hazard-severity-row-inactive {
+  background-color: #09101d !important;
+  border-color: #1e293b !important;
+  opacity: 0.72;
+}
+
+html.dark .hazard-severity-row-inactive:hover,
+.dark .hazard-severity-row-inactive:hover {
+  background-color: #132038 !important;
+  border-color: #334155 !important;
+  opacity: 0.95;
 }

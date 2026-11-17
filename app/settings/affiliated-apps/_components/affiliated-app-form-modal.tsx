@@ -12,15 +12,18 @@ import {
   CheckCircle2,
   AlertCircle,
   Sparkles,
+  Pin,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { PrimaryButton, SecondaryButton } from '@/components/button';
 import { supabase } from '@/lib/supabase/client';
 import {
+  AffiliatedAppDbRow,
   AffiliatedAppRecord,
   STORAGE_BUCKET,
   getErrorMessage,
   isLikelySnapReadyUrl,
+  mapAffiliatedAppDbRow,
   normalizeDisplayHost,
   normalizeFullUrl,
 } from './types';
@@ -47,6 +50,7 @@ export default function AffiliatedAppFormModal({
     () => editingApp?.storagePath ?? null
   );
   const [isActive, setIsActive] = useState(() => editingApp?.isActive ?? true);
+  const [isPinned, setIsPinned] = useState(() => editingApp?.isPinned ?? false);
 
   const [isSnapping, setIsSnapping] = useState(false);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
@@ -177,6 +181,7 @@ export default function AffiliatedAppFormModal({
         .from(STORAGE_BUCKET)
         .upload(newPath, file, {
           contentType: file.type,
+          cacheControl: '31536000',
           upsert: true,
         });
 
@@ -247,6 +252,11 @@ export default function AffiliatedAppFormModal({
       let savedRecord: AffiliatedAppRecord | null = null;
       let toastMessage = '';
 
+      const effectiveActive = isPinned ? true : isActive;
+      const effectivePinned = effectiveActive ? isPinned : false;
+      const nowIso = new Date().toISOString();
+      const pinChanged = editingApp ? editingApp.isPinned !== effectivePinned : effectivePinned;
+
       if (editingApp) {
         const previousCommittedPath = editingApp.storagePath;
 
@@ -257,11 +267,20 @@ export default function AffiliatedAppFormModal({
             app_url: normalizedUrl,
             image_url: imageUrl,
             storage_path: storagePath,
-            is_active: isActive,
+            is_active: effectiveActive,
+            is_pinned: effectivePinned,
+            pinned_at: effectivePinned
+              ? editingApp.pinnedAt || nowIso
+              : null,
+            pinned_by: effectivePinned
+              ? editingApp.pinnedBy || actorId
+              : null,
             updated_by: actorId,
           })
           .eq('id', editingApp.id)
-          .select('id, name, app_url, image_url, storage_path, sort_order, is_active, created_at, updated_at')
+          .select(
+            'id, name, app_url, image_url, storage_path, sort_order, is_active, is_pinned, pinned_at, pinned_by, created_at, updated_at'
+          )
           .maybeSingle();
 
         if (error) throw error;
@@ -284,23 +303,18 @@ export default function AffiliatedAppFormModal({
               action: 'UPDATE_AFFILIATED_APP',
               entity_type: 'affiliated_apps',
               entity_id: editingApp.id,
-              details: { name: trimmedName, app_url: normalizedUrl },
+              details: {
+                name: trimmedName,
+                app_url: normalizedUrl,
+                is_pinned: effectivePinned,
+                pin_changed: pinChanged,
+              },
             })
             .then(() => {});
         }
 
         if (updatedRow) {
-          savedRecord = {
-            id: updatedRow.id,
-            name: updatedRow.name,
-            appUrl: updatedRow.app_url,
-            imageUrl: updatedRow.image_url,
-            storagePath: updatedRow.storage_path || null,
-            sortOrder: updatedRow.sort_order ?? editingApp.sortOrder,
-            isActive: updatedRow.is_active ?? isActive,
-            createdAt: updatedRow.created_at,
-            updatedAt: updatedRow.updated_at,
-          };
+          savedRecord = mapAffiliatedAppDbRow(updatedRow as AffiliatedAppDbRow);
         }
         toastMessage = `Updated "${trimmedName}" successfully.`;
       } else {
@@ -312,11 +326,16 @@ export default function AffiliatedAppFormModal({
             image_url: imageUrl,
             storage_path: storagePath,
             sort_order: nextSortOrder,
-            is_active: isActive,
+            is_active: effectiveActive,
+            is_pinned: effectivePinned,
+            pinned_at: effectivePinned ? nowIso : null,
+            pinned_by: effectivePinned ? actorId : null,
             created_by: actorId,
             updated_by: actorId,
           })
-          .select('id, name, app_url, image_url, storage_path, sort_order, is_active, created_at, updated_at')
+          .select(
+            'id, name, app_url, image_url, storage_path, sort_order, is_active, is_pinned, pinned_at, pinned_by, created_at, updated_at'
+          )
           .maybeSingle();
 
         if (error) throw error;
@@ -333,23 +352,17 @@ export default function AffiliatedAppFormModal({
               action: 'CREATE_AFFILIATED_APP',
               entity_type: 'affiliated_apps',
               entity_id: inserted?.id || null,
-              details: { name: trimmedName, app_url: normalizedUrl },
+              details: {
+                name: trimmedName,
+                app_url: normalizedUrl,
+                is_pinned: effectivePinned,
+              },
             })
             .then(() => {});
         }
 
         if (inserted) {
-          savedRecord = {
-            id: inserted.id,
-            name: inserted.name,
-            appUrl: inserted.app_url,
-            imageUrl: inserted.image_url,
-            storagePath: inserted.storage_path || null,
-            sortOrder: inserted.sort_order ?? nextSortOrder,
-            isActive: inserted.is_active ?? isActive,
-            createdAt: inserted.created_at,
-            updatedAt: inserted.updated_at,
-          };
+          savedRecord = mapAffiliatedAppDbRow(inserted as AffiliatedAppDbRow);
         }
         toastMessage = `Added "${trimmedName}" to Affiliated Apps.`;
       }
@@ -570,25 +583,64 @@ export default function AffiliatedAppFormModal({
             </div>
           </div>
 
-          {/* Visibility Toggle */}
-          <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]">
-            <div>
-              <p className="text-xs font-bold text-[#1E293B]">
-                Show in Affiliated Apps Navbar
-              </p>
-              <p className="text-[11px] text-[#505F76]">
-                Make this web app visible on the Affiliated Apps directory screen.
-              </p>
+          {/* Visibility & Pinning Toggles */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0]">
+              <div>
+                <p className="text-xs font-bold text-[#1E293B]">
+                  Show in Affiliated Apps Navbar
+                </p>
+                <p className="text-[11px] text-[#505F76]">
+                  Make this web app visible on the Affiliated Apps directory screen.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setIsActive((prev) => {
+                    const next = !prev;
+                    if (!next) setIsPinned(false);
+                    return next;
+                  })
+                }
+                className={`w-10 h-5.5 rounded-full p-0.5 transition-colors flex items-center cursor-pointer shrink-0 ${
+                  isActive ? 'bg-[#004AC6] justify-end' : 'bg-slate-300 justify-start'
+                }`}
+              >
+                <div className="w-4 h-4 rounded-full bg-white shadow-xs" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsActive((prev) => !prev)}
-              className={`w-10 h-5.5 rounded-full p-0.5 transition-colors flex items-center cursor-pointer shrink-0 ${
-                isActive ? 'bg-[#004AC6] justify-end' : 'bg-slate-300 justify-start'
-              }`}
-            >
-              <div className="w-4 h-4 rounded-full bg-white shadow-xs" />
-            </button>
+
+            <div className="pinned-modal-box flex items-center justify-between p-3.5 rounded-2xl bg-amber-50/60 border border-amber-200/80">
+              <div className="flex items-start gap-2.5 pr-3">
+                <div className="pinned-badge w-7 h-7 rounded-lg bg-amber-100 text-amber-700 border border-amber-200/70 flex items-center justify-center shrink-0 mt-0.5">
+                  <Pin className="w-3.5 h-3.5" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-[#1E293B]">
+                    Pin App for Everyone
+                  </p>
+                  <p className="text-[11px] text-[#505F76]">
+                    Highlight this link at the top of Affiliated Apps and in the navigation quick-launch strip for all users.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setIsPinned((prev) => {
+                    const next = !prev;
+                    if (next) setIsActive(true);
+                    return next;
+                  })
+                }
+                className={`w-10 h-5.5 rounded-full p-0.5 transition-colors flex items-center cursor-pointer shrink-0 ${
+                  isPinned ? 'bg-amber-500 justify-end' : 'bg-slate-300 justify-start'
+                }`}
+              >
+                <div className="w-4 h-4 rounded-full bg-white shadow-xs" />
+              </button>
+            </div>
           </div>
 
           {/* Error Notice */}

@@ -7,11 +7,13 @@ import { usePathname } from 'next/navigation';
 const DroneStreamPage = dynamic(() => import('@/app/drone-stream/page'), { ssr: false });
 const ScreenProjectorPage = dynamic(() => import('@/app/screen-projector/page'), { ssr: false });
 const AffiliatedAppsPage = dynamic(() => import('@/app/affiliated-apps/page'), { ssr: false });
+const HazardMapPage = dynamic(() => import('@/app/hazard-map/page'), { ssr: false });
 
 export const PERSISTENT_OPERATIONAL_ROUTES = [
   '/drone-stream',
   '/screen-projector',
   '/affiliated-apps',
+  '/hazard-map',
 ] as const;
 
 export type PersistentRoute = (typeof PERSISTENT_OPERATIONAL_ROUTES)[number];
@@ -132,6 +134,24 @@ export function PersistentOperationsHost({ children }: PersistentOperationsHostP
           aria-hidden={activePersistentRoute !== '/affiliated-apps'}
         >
           <AffiliatedAppsPage />
+        </div>
+      )}
+
+      {/* CEBU NOAH MULTI-HAZARD VECTOR MAP VIEW */}
+      {visitedRoutes['/hazard-map'] && (
+        <div
+          id="persistent-view-hazard-map"
+          style={{
+            display: activePersistentRoute === '/hazard-map' ? 'block' : 'none',
+          }}
+          className={
+            activePersistentRoute === '/hazard-map'
+              ? 'w-full h-full min-h-screen'
+              : 'hidden pointer-events-none'
+          }
+          aria-hidden={activePersistentRoute !== '/hazard-map'}
+        >
+          <HazardMapPage />
         </div>
       )}
 

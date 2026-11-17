@@ -109,6 +109,8 @@ export interface CachedAffiliatedApp {
   appUrl: string;
   imageUrl: string;
   sortOrder: number;
+  isPinned: boolean;
+  pinnedAt: string | null;
   updatedAt: string;
 }
 
@@ -209,6 +211,99 @@ let _shiftSettingsScreenCache: CachedShiftSettingsScreenData | null = null;
 let _affiliatedAppsSettingsCache: CachedAffiliatedAppsSettingsData | null = null;
 
 // =============================================================================
+// SESSION STORAGE SWR PERSISTENCE (Survives F5 Hard Refresh — Zero Cookie Bloat)
+// =============================================================================
+const SWR_PERSIST_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+const SWR_STORAGE_KEYS = {
+  droneStreams: 'pdrrmo_swr_drone_streams_v1',
+  projectorScreens: 'pdrrmo_swr_projector_screens_v1',
+  affiliatedApps: 'pdrrmo_swr_affiliated_apps_v1',
+  affiliatedAppsSettings: 'pdrrmo_swr_affiliated_apps_settings_v1',
+  areas: 'pdrrmo_swr_areas_v1',
+  logSettings: 'pdrrmo_swr_log_settings_v1',
+  access: 'pdrrmo_swr_access_v1',
+} as const;
+
+interface SwrEnvelope<T> {
+  savedAt: number;
+  data: T;
+}
+
+function readSwrStorage<T>(key: string): T | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SwrEnvelope<T>;
+    if (!parsed || typeof parsed.savedAt !== 'number' || parsed.data === undefined) {
+      return null;
+    }
+    if (Date.now() - parsed.savedAt > SWR_PERSIST_TTL_MS) {
+      window.sessionStorage.removeItem(key);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeSwrStorage<T>(key: string, data: T): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const envelope: SwrEnvelope<T> = {
+      savedAt: Date.now(),
+      data,
+    };
+    window.sessionStorage.setItem(key, JSON.stringify(envelope));
+  } catch {
+    // Ignore storage quota or private browsing errors
+  }
+}
+
+let _hasHydratedFromStorage = false;
+
+/**
+ * Hydrates non-sensitive operational/directory caches from sessionStorage once after mount
+ * (called inside AuthProvider after hydration so SSR & first client paint never mismatch).
+ */
+export function hydrateOperationalCachesFromStorage(): void {
+  if (typeof window === 'undefined' || _hasHydratedFromStorage) return;
+  _hasHydratedFromStorage = true;
+
+  if (!_droneStreamsCache) {
+    _droneStreamsCache = readSwrStorage<DroneStreamItem[]>(SWR_STORAGE_KEYS.droneStreams);
+  }
+  if (!_projectorScreensCache) {
+    _projectorScreensCache = readSwrStorage<CachedProjectorScreen[]>(
+      SWR_STORAGE_KEYS.projectorScreens
+    );
+  }
+  if (!_affiliatedAppsCache) {
+    _affiliatedAppsCache = readSwrStorage<CachedAffiliatedApp[]>(
+      SWR_STORAGE_KEYS.affiliatedApps
+    );
+  }
+  if (!_affiliatedAppsSettingsCache) {
+    _affiliatedAppsSettingsCache = readSwrStorage<CachedAffiliatedAppsSettingsData>(
+      SWR_STORAGE_KEYS.affiliatedAppsSettings
+    );
+  }
+  if (!_areasScreenCache) {
+    _areasScreenCache = readSwrStorage<CachedAreasScreenData>(SWR_STORAGE_KEYS.areas);
+  }
+  if (!_logSettingsScreenCache) {
+    _logSettingsScreenCache = readSwrStorage<CachedLogSettingsScreenData>(
+      SWR_STORAGE_KEYS.logSettings
+    );
+  }
+  if (!_accessScreenCache) {
+    _accessScreenCache = readSwrStorage<CachedAccessScreenData>(SWR_STORAGE_KEYS.access);
+  }
+}
+
+// =============================================================================
 // DRONE STREAMS CACHE
 // =============================================================================
 
@@ -218,11 +313,13 @@ export function getCachedDroneStreams(): DroneStreamItem[] | null {
 
 export function setCachedDroneStreams(items: DroneStreamItem[]): void {
   _droneStreamsCache = items;
+  writeSwrStorage(SWR_STORAGE_KEYS.droneStreams, items);
 }
 
 export function updateCachedDroneStream(item: DroneStreamItem): void {
   if (!_droneStreamsCache) {
     _droneStreamsCache = [item];
+    writeSwrStorage(SWR_STORAGE_KEYS.droneStreams, _droneStreamsCache);
     return;
   }
   const idx = _droneStreamsCache.findIndex((s) => s.id === item.id);
@@ -231,11 +328,13 @@ export function updateCachedDroneStream(item: DroneStreamItem): void {
   } else {
     _droneStreamsCache.push(item);
   }
+  writeSwrStorage(SWR_STORAGE_KEYS.droneStreams, _droneStreamsCache);
 }
 
 export function removeCachedDroneStream(id: string): void {
   if (!_droneStreamsCache) return;
   _droneStreamsCache = _droneStreamsCache.filter((s) => s.id !== id);
+  writeSwrStorage(SWR_STORAGE_KEYS.droneStreams, _droneStreamsCache);
 }
 
 // =============================================================================
@@ -248,11 +347,14 @@ export function getCachedProjectorScreens(): CachedProjectorScreen[] | null {
 
 export function setCachedProjectorScreens(items: CachedProjectorScreen[]): void {
   _projectorScreensCache = items;
+  writeSwrStorage(SWR_STORAGE_KEYS.projectorScreens, items);
 }
 
 // =============================================================================
 // AFFILIATED APPS CACHE
 // =============================================================================
+
+export const AFFILIATED_APPS_UPDATED_EVENT = 'pdrrmo:affiliated-apps-updated';
 
 export function getCachedAffiliatedApps(): CachedAffiliatedApp[] | null {
   return _affiliatedAppsCache;
@@ -260,6 +362,10 @@ export function getCachedAffiliatedApps(): CachedAffiliatedApp[] | null {
 
 export function setCachedAffiliatedApps(items: CachedAffiliatedApp[]): void {
   _affiliatedAppsCache = items;
+  writeSwrStorage(SWR_STORAGE_KEYS.affiliatedApps, items);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(AFFILIATED_APPS_UPDATED_EVENT));
+  }
 }
 
 // =============================================================================
@@ -413,6 +519,7 @@ export function getCachedAccessScreenData(): CachedAccessScreenData | null {
 
 export function setCachedAccessScreenData(data: CachedAccessScreenData): void {
   _accessScreenCache = data;
+  writeSwrStorage(SWR_STORAGE_KEYS.access, data);
 }
 
 export function patchCachedAccessScreenData(
@@ -420,6 +527,7 @@ export function patchCachedAccessScreenData(
 ): void {
   if (!_accessScreenCache) return;
   _accessScreenCache = { ..._accessScreenCache, ...patch };
+  writeSwrStorage(SWR_STORAGE_KEYS.access, _accessScreenCache);
 }
 
 // =============================================================================
@@ -432,6 +540,7 @@ export function getCachedAreasScreenData(): CachedAreasScreenData | null {
 
 export function setCachedAreasScreenData(data: CachedAreasScreenData): void {
   _areasScreenCache = data;
+  writeSwrStorage(SWR_STORAGE_KEYS.areas, data);
 }
 
 export function patchCachedAreasScreenData(
@@ -439,6 +548,7 @@ export function patchCachedAreasScreenData(
 ): void {
   if (!_areasScreenCache) return;
   _areasScreenCache = { ..._areasScreenCache, ...patch };
+  writeSwrStorage(SWR_STORAGE_KEYS.areas, _areasScreenCache);
 }
 
 // =============================================================================
@@ -453,6 +563,7 @@ export function setCachedLogSettingsScreenData(
   data: CachedLogSettingsScreenData
 ): void {
   _logSettingsScreenCache = data;
+  writeSwrStorage(SWR_STORAGE_KEYS.logSettings, data);
 }
 
 export function patchCachedLogSettingsScreenData(
@@ -460,6 +571,7 @@ export function patchCachedLogSettingsScreenData(
 ): void {
   if (!_logSettingsScreenCache) return;
   _logSettingsScreenCache = { ..._logSettingsScreenCache, ...patch };
+  writeSwrStorage(SWR_STORAGE_KEYS.logSettings, _logSettingsScreenCache);
 }
 
 // =============================================================================
@@ -495,6 +607,7 @@ export function setCachedAffiliatedAppsSettingsData(
   data: CachedAffiliatedAppsSettingsData
 ): void {
   _affiliatedAppsSettingsCache = data;
+  writeSwrStorage(SWR_STORAGE_KEYS.affiliatedAppsSettings, data);
 }
 
 export function patchCachedAffiliatedAppsSettingsData(
@@ -502,6 +615,7 @@ export function patchCachedAffiliatedAppsSettingsData(
 ): void {
   if (!_affiliatedAppsSettingsCache) return;
   _affiliatedAppsSettingsCache = { ..._affiliatedAppsSettingsCache, ...patch };
+  writeSwrStorage(SWR_STORAGE_KEYS.affiliatedAppsSettings, _affiliatedAppsSettingsCache);
 }
 
 // =============================================================================
@@ -523,4 +637,15 @@ export function clearOperationalScreensCache(): void {
   _logSettingsScreenCache = null;
   _shiftSettingsScreenCache = null;
   _affiliatedAppsSettingsCache = null;
+  _hasHydratedFromStorage = false;
+
+  if (typeof window !== 'undefined') {
+    try {
+      Object.values(SWR_STORAGE_KEYS).forEach((key) => {
+        window.sessionStorage.removeItem(key);
+      });
+    } catch {
+      // Ignore storage errors
+    }
+  }
 }

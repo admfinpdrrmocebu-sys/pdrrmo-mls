@@ -18,6 +18,7 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  Pin,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
@@ -29,6 +30,7 @@ import { ViewOnlyNotice } from '@/components/auth';
 import {
   CachedAffiliatedApp,
   getCachedAffiliatedAppsSettingsData,
+  hydrateOperationalCachesFromStorage,
   patchCachedAffiliatedAppsSettingsData,
   setCachedAffiliatedApps,
   setCachedAffiliatedAppsSettingsData,
@@ -39,6 +41,8 @@ import {
   ITEMS_PER_PAGE,
   computeAffiliatedAppsSignature,
   getErrorMessage,
+  mapAffiliatedAppDbRow,
+  sortAffiliatedApps,
 } from './_components/types';
 import { AffiliatedAppCard } from './_components/affiliated-app-card';
 
@@ -55,16 +59,16 @@ const DeleteAppModal = dynamic(
 );
 
 function toDirectoryCacheItems(apps: AffiliatedAppRecord[]): CachedAffiliatedApp[] {
-  return apps
-    .filter((a) => a.isActive)
-    .map((a) => ({
-      id: a.id,
-      name: a.name,
-      appUrl: a.appUrl,
-      imageUrl: a.imageUrl,
-      sortOrder: a.sortOrder,
-      updatedAt: a.updatedAt,
-    }));
+  return sortAffiliatedApps(apps.filter((a) => a.isActive)).map((a) => ({
+    id: a.id,
+    name: a.name,
+    appUrl: a.appUrl,
+    imageUrl: a.imageUrl,
+    sortOrder: a.sortOrder,
+    isPinned: a.isPinned,
+    pinnedAt: a.pinnedAt,
+    updatedAt: a.updatedAt,
+  }));
 }
 
 function AppsGridSkeleton() {
@@ -115,6 +119,7 @@ export default function SettingsAffiliatedAppsPage() {
   const [tableMissingNotice, setTableMissingNotice] = useState(
     () => initialCache?.tableMissingNotice ?? false
   );
+  const [pinSchemaMissingNotice, setPinSchemaMissingNotice] = useState(false);
 
   // Debounced Search (persisted across navigations)
   const [searchQuery, setSearchQuery] = useState(() => initialCache?.searchQuery ?? '');
@@ -184,24 +189,25 @@ export default function SettingsAffiliatedAppsPage() {
 
   const commitAppsAndCaches = useCallback(
     (nextApps: AffiliatedAppRecord[], nextTableMissingNotice = false) => {
-      const nextSig = computeAffiliatedAppsSignature(nextApps, nextTableMissingNotice);
+      const sortedApps = sortAffiliatedApps(nextApps);
+      const nextSig = computeAffiliatedAppsSignature(sortedApps, nextTableMissingNotice);
       const now = Date.now();
       signatureRef.current = nextSig;
       lastFetchedAtRef.current = now;
-      appsRef.current = nextApps;
+      appsRef.current = sortedApps;
 
       setTableMissingNotice(nextTableMissingNotice);
-      setApps(nextApps);
+      setApps(sortedApps);
 
       setCachedAffiliatedAppsSettingsData({
-        apps: nextApps,
+        apps: sortedApps,
         tableMissingNotice: nextTableMissingNotice,
         searchQuery: searchQueryRef.current,
         currentPage: currentPageRef.current,
         signature: nextSig,
         fetchedAt: now,
       });
-      setCachedAffiliatedApps(toDirectoryCacheItems(nextApps));
+      setCachedAffiliatedApps(toDirectoryCacheItems(sortedApps));
     },
     []
   );
@@ -216,13 +222,34 @@ export default function SettingsAffiliatedAppsPage() {
         if (!silent && !hasCached) setIsLoading(true);
         else setIsRefreshing(true);
 
-        const { data, error } = await supabase
+        let { data, error } = await supabase
           .from('affiliated_apps')
           .select(
-            'id, name, app_url, image_url, storage_path, sort_order, is_active, created_at, updated_at'
+            'id, name, app_url, image_url, storage_path, sort_order, is_active, is_pinned, pinned_at, pinned_by, created_at, updated_at'
           )
+          .order('is_pinned', { ascending: false })
+          .order('pinned_at', { ascending: false, nullsFirst: false })
           .order('sort_order', { ascending: true })
           .order('created_at', { ascending: false });
+
+        // Graceful fallback if pinned columns haven't been migrated yet
+        if (
+          error &&
+          (error.code === '42703' || /is_pinned|pinned_at|pinned_by/i.test(error.message || ''))
+        ) {
+          setPinSchemaMissingNotice(true);
+          const fallbackRes = await supabase
+            .from('affiliated_apps')
+            .select(
+              'id, name, app_url, image_url, storage_path, sort_order, is_active, created_at, updated_at'
+            )
+            .order('sort_order', { ascending: true })
+            .order('created_at', { ascending: false });
+          data = fallbackRes.data as typeof data;
+          error = fallbackRes.error;
+        } else if (!error) {
+          setPinSchemaMissingNotice(false);
+        }
 
         if (error) {
           if (
@@ -239,18 +266,8 @@ export default function SettingsAffiliatedAppsPage() {
           throw error;
         }
 
-        const mapped: AffiliatedAppRecord[] = ((data || []) as AffiliatedAppDbRow[]).map(
-          (row) => ({
-            id: row.id,
-            name: row.name,
-            appUrl: row.app_url,
-            imageUrl: row.image_url,
-            storagePath: row.storage_path || null,
-            sortOrder: row.sort_order ?? 0,
-            isActive: row.is_active ?? true,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-          })
+        const mapped = sortAffiliatedApps(
+          ((data || []) as AffiliatedAppDbRow[]).map(mapAffiliatedAppDbRow)
         );
 
         const nextSig = computeAffiliatedAppsSignature(mapped, false);
@@ -274,7 +291,13 @@ export default function SettingsAffiliatedAppsPage() {
 
   useEffect(() => {
     const initialTimer = setTimeout(() => {
-      void fetchAffiliatedApps(Boolean(getCachedAffiliatedAppsSettingsData()));
+      hydrateOperationalCachesFromStorage();
+      const cached = getCachedAffiliatedAppsSettingsData();
+      if (cached && !signatureRef.current) {
+        commitAppsAndCaches(cached.apps, cached.tableMissingNotice);
+        setIsLoading(false);
+      }
+      void fetchAffiliatedApps(Boolean(cached));
     }, 0);
 
     let realtimeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -334,7 +357,17 @@ export default function SettingsAffiliatedAppsPage() {
     return filteredApps.slice(start, start + ITEMS_PER_PAGE);
   }, [filteredApps, effectivePage]);
 
-  const activeCount = useMemo(() => apps.filter((a) => a.isActive).length, [apps]);
+  const { activeCount, pinnedCount } = useMemo(() => {
+    let active = 0;
+    let pinned = 0;
+    for (const a of apps) {
+      if (a.isActive) {
+        active += 1;
+        if (a.isPinned) pinned += 1;
+      }
+    }
+    return { activeCount: active, pinnedCount: pinned };
+  }, [apps]);
 
   const nextSortOrder = useMemo(
     () => (apps.length > 0 ? Math.max(...apps.map((a) => a.sortOrder || 0)) + 1 : 1),
@@ -368,17 +401,33 @@ export default function SettingsAffiliatedAppsPage() {
       if (!canModify) return;
       const prevApps = appsRef.current;
       const nextState = !app.isActive;
+      const shouldUnpin = !nextState && app.isPinned;
       const nextApps = prevApps.map((item) =>
-        item.id === app.id ? { ...item, isActive: nextState } : item
+        item.id === app.id
+          ? {
+              ...item,
+              isActive: nextState,
+              isPinned: shouldUnpin ? false : item.isPinned,
+              pinnedAt: shouldUnpin ? null : item.pinnedAt,
+              pinnedBy: shouldUnpin ? null : item.pinnedBy,
+            }
+          : item
       );
       commitAppsAndCaches(nextApps, false);
 
+      const updatePayload: Record<string, unknown> = {
+        is_active: nextState,
+        updated_by: actorId,
+      };
+      if (shouldUnpin && !pinSchemaMissingNotice) {
+        updatePayload.is_pinned = false;
+        updatePayload.pinned_at = null;
+        updatePayload.pinned_by = null;
+      }
+
       const { error } = await supabase
         .from('affiliated_apps')
-        .update({
-          is_active: nextState,
-          updated_by: actorId,
-        })
+        .update(updatePayload)
         .eq('id', app.id);
 
       if (error) {
@@ -390,10 +439,86 @@ export default function SettingsAffiliatedAppsPage() {
       showToast(
         nextState
           ? `"${app.name}" is now visible in Affiliated Apps.`
+          : shouldUnpin
+          ? `"${app.name}" hidden and unpinned from directory.`
           : `"${app.name}" hidden from directory.`
       );
     },
-    [canModify, actorId, commitAppsAndCaches, showToast]
+    [canModify, actorId, pinSchemaMissingNotice, commitAppsAndCaches, showToast]
+  );
+
+  const handleTogglePin = useCallback(
+    async (app: AffiliatedAppRecord) => {
+      if (!canModify) return;
+      if (pinSchemaMissingNotice) {
+        showToast(
+          'Run supabase/add_pinned_to_affiliated_apps.sql in Supabase first to enable pinning.',
+          'error'
+        );
+        return;
+      }
+
+      const prevApps = appsRef.current;
+      const nextPinned = !app.isPinned;
+      const nextActive = nextPinned ? true : app.isActive;
+      const wasHidden = !app.isActive && nextPinned;
+      const nowIso = new Date().toISOString();
+
+      const nextApps = prevApps.map((item) =>
+        item.id === app.id
+          ? {
+              ...item,
+              isPinned: nextPinned,
+              isActive: nextActive,
+              pinnedAt: nextPinned ? nowIso : null,
+              pinnedBy: nextPinned ? actorId : null,
+            }
+          : item
+      );
+      commitAppsAndCaches(nextApps, false);
+
+      const { error } = await supabase
+        .from('affiliated_apps')
+        .update({
+          is_pinned: nextPinned,
+          is_active: nextActive,
+          pinned_at: nextPinned ? nowIso : null,
+          pinned_by: nextPinned ? actorId : null,
+          updated_by: actorId,
+        })
+        .eq('id', app.id);
+
+      if (error) {
+        commitAppsAndCaches(prevApps, false);
+        showToast(
+          getErrorMessage(error, 'Failed to update pinned status.'),
+          'error'
+        );
+        return;
+      }
+
+      if (actorId) {
+        await supabase
+          .from('audit_logs')
+          .insert({
+            user_id: actorId,
+            action: nextPinned ? 'PIN_AFFILIATED_APP' : 'UNPIN_AFFILIATED_APP',
+            entity_type: 'affiliated_apps',
+            entity_id: app.id,
+            details: { name: app.name, app_url: app.appUrl, is_pinned: nextPinned },
+          })
+          .then(() => {});
+      }
+
+      showToast(
+        nextPinned
+          ? wasHidden
+            ? `"${app.name}" published and pinned for everyone.`
+            : `"${app.name}" pinned so everyone can see it first.`
+          : `Unpinned "${app.name}" from highlighted links.`
+      );
+    },
+    [canModify, pinSchemaMissingNotice, actorId, commitAppsAndCaches, showToast]
   );
 
   const handleResnapExistingCard = useCallback(
@@ -579,10 +704,22 @@ export default function SettingsAffiliatedAppsPage() {
           </div>
         )}
 
+        {!tableMissingNotice && pinSchemaMissingNotice && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 text-amber-900">
+            <Pin className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="text-xs sm:text-sm space-y-1">
+              <p className="font-bold">Pinning Column Migration Needed</p>
+              <p className="text-amber-800">
+                Run <code className="px-1.5 py-0.5 rounded bg-amber-100 font-mono text-xs">supabase/add_pinned_to_affiliated_apps.sql</code> in your Supabase SQL Editor to enable <code className="font-mono text-xs">is_pinned</code> and optimized directory indexes.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* ===================================================================== */}
         {/* 2. SUMMARY METRIC STRIP */}
         {/* ===================================================================== */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white rounded-2xl border border-[#E2E8F0] p-5 shadow-2xs flex items-center justify-between">
             <div>
               <p className="text-[11px] font-bold text-[#757680] uppercase tracking-wider">
@@ -609,13 +746,26 @@ export default function SettingsAffiliatedAppsPage() {
             </div>
           </div>
 
+          <div className="pinned-metric-card bg-white rounded-2xl border border-amber-200/80 p-5 shadow-2xs flex items-center justify-between">
+            <div>
+              <p className="text-[11px] font-bold text-[#757680] uppercase tracking-wider">
+                Pinned for Everyone
+              </p>
+              <p className="text-2xl font-black text-amber-600 mt-1">{pinnedCount}</p>
+              <p className="text-xs text-[#505F76] mt-0.5">Highlighted across directory</p>
+            </div>
+            <div className="pinned-badge w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200/80 flex items-center justify-center shrink-0">
+              <Pin className="w-5 h-5" />
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl border border-[#E2E8F0] p-5 shadow-2xs flex items-center justify-between">
             <div>
               <p className="text-[11px] font-bold text-[#757680] uppercase tracking-wider">
                 Auto-Snap Storage
               </p>
               <p className="text-lg font-extrabold text-[#1E293B] mt-1">1280 × 800 PNG</p>
-              <p className="text-xs text-[#505F76] mt-0.5">Saved to Supabase Storage</p>
+              <p className="text-xs text-[#505F76] mt-0.5">WebP/AVIF cached delivery</p>
             </div>
             <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-700 border border-sky-200/70 flex items-center justify-center shrink-0">
               <Camera className="w-5 h-5" />
@@ -742,6 +892,7 @@ export default function SettingsAffiliatedAppsPage() {
                   onImageError={handleImageError}
                   onCopyUrl={handleCopyUrl}
                   onToggleActive={handleToggleActive}
+                  onTogglePin={handleTogglePin}
                   onResnap={handleResnapExistingCard}
                   onEdit={handleOpenEditModal}
                   onDelete={handleRequestDelete}

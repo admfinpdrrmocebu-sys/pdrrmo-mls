@@ -78,6 +78,7 @@ export const defaultRoles: RoleItem[] = [
       { screen: 'Affiliated Apps', level: 'Full Access' },
       { screen: 'Screen Projector', level: 'Full Access' },
       { screen: 'Drone Stream', level: 'Full Access' },
+      { screen: 'Hazard Map', level: 'View Only' },
     ],
   },
   {
@@ -100,6 +101,7 @@ export const defaultRoles: RoleItem[] = [
       { screen: 'Affiliated Apps', level: 'View Only' },
       { screen: 'Screen Projector', level: 'View Only' },
       { screen: 'Drone Stream', level: 'Full Access' },
+      { screen: 'Hazard Map', level: 'View Only' },
     ],
   },
   {
@@ -122,6 +124,7 @@ export const defaultRoles: RoleItem[] = [
       { screen: 'Affiliated Apps', level: 'View Only' },
       { screen: 'Screen Projector', level: 'View Only' },
       { screen: 'Drone Stream', level: 'View Only' },
+      { screen: 'Hazard Map', level: 'View Only' },
     ],
   },
 ];
@@ -218,6 +221,20 @@ export const mapDbRoleRow = (r: RawDbAccessRoleRow): RoleItem => {
       screen: 'Affiliated Apps',
       level: isRoleAdmin ? 'Full Access' : 'View Only',
     });
+  }
+  const hazardIdx = rawPerms.findIndex(
+    (p) => (p.screen || '').toLowerCase() === 'hazard map'
+  );
+  if (hazardIdx === -1) {
+    rawPerms.push({
+      screen: 'Hazard Map',
+      level: 'View Only',
+    });
+  } else if (rawPerms[hazardIdx].level === 'Full Access') {
+    rawPerms[hazardIdx] = {
+      ...rawPerms[hazardIdx],
+      level: 'View Only',
+    };
   }
 
   const badgeType =

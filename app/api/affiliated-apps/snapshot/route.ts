@@ -290,6 +290,7 @@ export async function POST(request: NextRequest) {
       .from(BUCKET_NAME)
       .upload(storagePath, captured.buffer, {
         contentType: captured.contentType,
+        cacheControl: '31536000',
         upsert: true,
       });
 
@@ -309,6 +310,7 @@ export async function POST(request: NextRequest) {
         .from(BUCKET_NAME)
         .upload(storagePath, captured.buffer, {
           contentType: captured.contentType,
+          cacheControl: '31536000',
           upsert: true,
         });
       uploadError = retryRes.error;
