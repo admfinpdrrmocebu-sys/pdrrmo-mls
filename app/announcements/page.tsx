@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Trash2,
   X,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -64,8 +65,40 @@ const ANNOUNCEMENTS_SELECT = `
   )
 `;
 
+function extractErrorMessage(
+  err: unknown,
+  fallback = 'Could not save announcement. Please verify your permissions.'
+): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (err && typeof err === 'object') {
+    const rec = err as Record<string, unknown>;
+    const msg = typeof rec.message === 'string' ? rec.message : '';
+    const details = typeof rec.details === 'string' ? rec.details : '';
+    const hint = typeof rec.hint === 'string' ? rec.hint : '';
+    const code = typeof rec.code === 'string' ? rec.code : '';
+    const parts = [msg, details, hint].filter(Boolean);
+    if (parts.length > 0) {
+      return code ? `[${code}] ${parts.join(' — ')}` : parts.join(' — ');
+    }
+  }
+  return fallback;
+}
+
+function isMissingNameColumnError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const rec = err as Record<string, unknown>;
+  const code = typeof rec.code === 'string' ? rec.code : '';
+  const msg = typeof rec.message === 'string' ? rec.message : '';
+  return (
+    code === 'PGRST204' ||
+    code === '42703' ||
+    msg.includes('created_by_name') ||
+    msg.includes('updated_by_name')
+  );
+}
+
 export default function AnnouncementsPage() {
-  const { user, profile, isAdmin, canWrite } = useAuth();
+  const { user, profile, canWrite } = useAuth();
 
   const authUserId = user?.id ?? '';
   const profileId = profile?.id ?? '';
@@ -136,6 +169,9 @@ export default function AnnouncementsPage() {
     description: '',
   });
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isBulkDeleteConfirmOpen, setIsBulkDeleteConfirmOpen] = useState(false);
   const [acknowledgingIds, setAcknowledgingIds] = useState<Record<string, boolean>>({});
 
   // Toast notification
@@ -175,10 +211,10 @@ export default function AnnouncementsPage() {
   );
 
   // Check if current user has permission to edit or delete a specific announcement
+  // Aligns strictly with Supabase RLS (`auth.uid() = created_by`): non-creator Admins view read-only.
   const canUserModify = useCallback(
     (item: Announcement) => {
       if (!canModifyAnnouncements) return false;
-      if (isAdmin) return true;
       return (
         Boolean(currentUserId) &&
         (item.createdById === currentUserId ||
@@ -186,7 +222,7 @@ export default function AnnouncementsPage() {
           item.createdById === profileId)
       );
     },
-    [isAdmin, canModifyAnnouncements, currentUserId, authUserId, profileId]
+    [canModifyAnnouncements, currentUserId, authUserId, profileId]
   );
 
   // 1. Fetch Dynamic Announcements from Supabase (with signature diffing)
@@ -462,7 +498,7 @@ export default function AnnouncementsPage() {
       if (!canModifyAnnouncements || !canUserModify(item)) {
         showToast(
           'Permission Denied',
-          `Only the creator (${item.createdBy}) or Admin can edit this announcement.`,
+          `Only the creator (${item.createdBy}) can edit this announcement.`,
           'error'
         );
         return;
@@ -520,23 +556,34 @@ export default function AnnouncementsPage() {
       }
 
       setIsSubmitting(true);
+      const returnSelect =
+        '*, creator:created_by(id, full_name, email, role), updater:updated_by(id, full_name, email, role)';
       try {
         if (editingId) {
-          const { data, error } = await supabase
+          const baseUpdate = {
+            title: title.trim(),
+            description,
+            updated_by: currentUserId,
+            updated_at: new Date().toISOString(),
+          };
+          let res = await supabase
             .from('announcements')
-            .update({
-              title: title.trim(),
-              description,
-              updated_by: currentUserId,
-              updated_at: new Date().toISOString(),
-            })
+            .update({ ...baseUpdate, updated_by_name: currentUserName })
             .eq('id', editingId)
-            .select(
-              '*, creator:created_by(id, full_name, email, role), updater:updated_by(id, full_name, email, role)'
-            )
+            .select(returnSelect)
             .single();
 
-          if (error) throw error;
+          if (res.error && isMissingNameColumnError(res.error)) {
+            res = await supabase
+              .from('announcements')
+              .update(baseUpdate)
+              .eq('id', editingId)
+              .select(returnSelect)
+              .single();
+          }
+
+          if (res.error) throw res.error;
+          const data = res.data;
 
           if (data) {
             const existing = announcementsRef.current.find((a) => a.id === editingId);
@@ -567,19 +614,27 @@ export default function AnnouncementsPage() {
             'success'
           );
         } else {
-          const { data, error } = await supabase
+          const baseInsert = {
+            title: title.trim(),
+            description,
+            created_by: currentUserId,
+          };
+          let res = await supabase
             .from('announcements')
-            .insert({
-              title: title.trim(),
-              description,
-              created_by: currentUserId,
-            })
-            .select(
-              '*, creator:created_by(id, full_name, email, role), updater:updated_by(id, full_name, email, role)'
-            )
+            .insert({ ...baseInsert, created_by_name: currentUserName })
+            .select(returnSelect)
             .single();
 
-          if (error) throw error;
+          if (res.error && isMissingNameColumnError(res.error)) {
+            res = await supabase
+              .from('announcements')
+              .insert(baseInsert)
+              .select(returnSelect)
+              .single();
+          }
+
+          if (res.error) throw res.error;
+          const data = res.data;
 
           if (data) {
             const created = mapAnnouncementRow(
@@ -616,11 +671,8 @@ export default function AnnouncementsPage() {
 
         setEditorState((prev) => ({ ...prev, open: false }));
       } catch (err: unknown) {
-        const msg =
-          err instanceof Error
-            ? err.message
-            : 'Could not save announcement. Please verify your permissions.';
-        console.error('Failed to save announcement:', err);
+        const msg = extractErrorMessage(err);
+        console.error('Failed to save announcement:', msg, err);
         showToast('Save Failed', msg, 'error');
       } finally {
         setIsSubmitting(false);
@@ -635,38 +687,164 @@ export default function AnnouncementsPage() {
     ]
   );
 
-  const handleDelete = useCallback(
-    async (id: string) => {
-      const item = announcementsRef.current.find((a) => a.id === id);
-      if (!item) return;
+  const selectableAnnouncementIds = useMemo(
+    () => announcements.filter((item) => canUserModify(item)).map((item) => item.id),
+    [announcements, canUserModify]
+  );
 
-      if (!canUserModify(item)) {
+  const validSelectedIds = useMemo(() => {
+    const allowedSet = new Set(selectableAnnouncementIds);
+    return selectedIds.filter((id) => allowedSet.has(id));
+  }, [selectedIds, selectableAnnouncementIds]);
+
+  const selectedIdSet = useMemo(
+    () => new Set(validSelectedIds),
+    [validSelectedIds]
+  );
+
+  const deleteModalTargets = useMemo(() => {
+    if (deletingId) {
+      const target = announcements.find((a) => a.id === deletingId);
+      return target ? [{ id: target.id, title: target.title }] : [];
+    }
+    if (isBulkDeleteConfirmOpen && validSelectedIds.length > 0) {
+      return announcements
+        .filter((a) => selectedIdSet.has(a.id))
+        .map((a) => ({ id: a.id, title: a.title }));
+    }
+    return [];
+  }, [
+    deletingId,
+    isBulkDeleteConfirmOpen,
+    announcements,
+    validSelectedIds.length,
+    selectedIdSet,
+  ]);
+
+  const handleToggleSelectCard = useCallback((id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  }, []);
+
+  const handleExitSelectionMode = useCallback(() => {
+    setIsSelectionMode(false);
+    setSelectedIds([]);
+    setIsBulkDeleteConfirmOpen(false);
+  }, []);
+
+  const handleToggleSelectAll = useCallback(() => {
+    if (validSelectedIds.length >= selectableAnnouncementIds.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(selectableAnnouncementIds);
+    }
+  }, [validSelectedIds.length, selectableAnnouncementIds]);
+
+  const handleSelectiveDeletionClick = useCallback(() => {
+    if (!canModifyAnnouncements) return;
+
+    if (!isSelectionMode) {
+      if (selectableAnnouncementIds.length === 0) {
+        showToast(
+          'No Editable Bulletins',
+          'You can only selectively delete announcements that you created.',
+          'info'
+        );
+        return;
+      }
+      setSelectedIds([]);
+      setIsSelectionMode(true);
+      return;
+    }
+
+    if (validSelectedIds.length === 0) {
+      showToast(
+        'Select Announcements',
+        'Tap the upper-left circle on one or more announcements to mark them for deletion.',
+        'info'
+      );
+      return;
+    }
+
+    setIsBulkDeleteConfirmOpen(true);
+  }, [
+    canModifyAnnouncements,
+    isSelectionMode,
+    selectableAnnouncementIds.length,
+    validSelectedIds.length,
+    showToast,
+  ]);
+
+  const deleteAnnouncementsByIds = useCallback(
+    async (ids: string[]) => {
+      const allowedTargets = announcementsRef.current.filter(
+        (item) => ids.includes(item.id) && canUserModify(item)
+      );
+      if (allowedTargets.length === 0) {
         showToast(
           'Permission Denied',
-          `Only the creator (${item.createdBy}) or Admin can delete this announcement.`,
+          'Only the creator can delete these announcements.',
           'error'
         );
         setDeletingId(null);
+        setIsBulkDeleteConfirmOpen(false);
         return;
       }
 
+      const targetIds = allowedTargets.map((item) => item.id);
       setIsSubmitting(true);
       try {
-        const { error } = await supabase.from('announcements').delete().eq('id', id);
+        const { data: deletedRows, error } = await supabase
+          .from('announcements')
+          .delete()
+          .in('id', targetIds)
+          .select('id');
+
         if (error) throw error;
 
-        const nextList = announcementsRef.current.filter((a) => a.id !== id);
+        const deletedIdSet = new Set(
+          (deletedRows || []).map((row: { id: string }) => row.id)
+        );
+        if (deletedIdSet.size === 0) {
+          showToast(
+            'Delete Restricted',
+            'Database policy only allows the original creator to delete their bulletins.',
+            'error'
+          );
+          setDeletingId(null);
+          setIsBulkDeleteConfirmOpen(false);
+          return;
+        }
+
+        const nextList = announcementsRef.current.filter(
+          (a) => !deletedIdSet.has(a.id)
+        );
         setAnnouncements(nextList);
         persistAnnouncementsSnapshot(nextList);
-        setViewingAnnouncement((prev) => (prev?.id === id ? null : prev));
+        setViewingAnnouncement((prev) =>
+          prev && deletedIdSet.has(prev.id) ? null : prev
+        );
         setDeletingId(null);
-        showToast('Announcement Removed', 'The bulletin has been permanently deleted.', 'success');
+        setIsBulkDeleteConfirmOpen(false);
+        setIsSelectionMode(false);
+        setSelectedIds([]);
+
+        showToast(
+          deletedIdSet.size > 1
+            ? `${deletedIdSet.size} Announcements Removed`
+            : 'Announcement Removed',
+          deletedIdSet.size > 1
+            ? `${deletedIdSet.size} selected bulletins have been permanently deleted.`
+            : 'The bulletin has been permanently deleted.',
+          'success'
+        );
       } catch (err: unknown) {
-        const msg =
-          err instanceof Error
-            ? err.message
-            : 'Could not delete announcement. Please check permissions.';
-        console.error('Failed to delete announcement:', err);
+        const msg = extractErrorMessage(
+          err,
+          'Could not delete announcement. Please check permissions.'
+        );
+        console.error('Failed to delete announcement(s):', msg, err);
         showToast('Delete Failed', msg, 'error');
       } finally {
         setIsSubmitting(false);
@@ -674,6 +852,12 @@ export default function AnnouncementsPage() {
     },
     [canUserModify, showToast, persistAnnouncementsSnapshot]
   );
+
+  const handleConfirmDeleteModal = useCallback(async () => {
+    const ids = deleteModalTargets.map((t) => t.id);
+    if (ids.length === 0) return;
+    await deleteAnnouncementsByIds(ids);
+  }, [deleteModalTargets, deleteAnnouncementsByIds]);
 
   const viewingCreatorCheck = useMemo(() => {
     if (!viewingAnnouncement || !currentUserId) return false;
@@ -783,31 +967,87 @@ export default function AnnouncementsPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-full border border-[#E2E8F0] shadow-2xs shrink-0 self-start sm:self-auto">
-            <span
-              className={`text-xs font-mono font-extrabold ${
-                isFull
-                  ? 'text-rose-600'
-                  : isAlmost
-                  ? 'text-amber-600'
-                  : 'text-[#004AC6]'
-              }`}
-            >
-              {totalCount}/{MAX_ANNOUNCEMENTS}
-            </span>
-            <div className="w-24 sm:w-28 bg-slate-100 rounded-full h-2 overflow-hidden">
-              <div
-                className={`h-full transition-all duration-300 rounded-full ${
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start sm:self-auto">
+            {/* Multi Selective Deletion Button (RBAC Full Access, Beside Announcement Count) */}
+            {canModifyAnnouncements && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleSelectiveDeletionClick}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-full text-xs font-bold border transition-all cursor-pointer shadow-2xs ${
+                    isSelectionMode
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-600 shadow-rose-600/20'
+                      : 'bg-white hover:bg-rose-50 text-rose-600 border-[#E2E8F0] hover:border-rose-300'
+                  }`}
+                  title={
+                    isSelectionMode
+                      ? 'Click to confirm deletion of selected announcements'
+                      : 'Select multiple announcements you created to delete'
+                  }
+                >
+                  <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    {isSelectionMode
+                      ? validSelectedIds.length > 0
+                        ? `Delete Selection (${validSelectedIds.length})`
+                        : 'Delete Selection'
+                      : 'Selective Deletion'}
+                  </span>
+                </button>
+
+                {isSelectionMode && (
+                  <>
+                    {selectableAnnouncementIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleToggleSelectAll}
+                        className="px-3 py-2.5 rounded-full text-xs font-semibold bg-white border border-[#E2E8F0] text-[#505F76] hover:text-[#1E293B] hover:border-[#CBD5E1] transition-colors cursor-pointer shadow-2xs"
+                      >
+                        {validSelectedIds.length >= selectableAnnouncementIds.length
+                          ? 'Clear'
+                          : 'Select All'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleExitSelectionMode}
+                      title="Cancel selection"
+                      aria-label="Cancel selection"
+                      className="w-9 h-9 rounded-full flex items-center justify-center bg-white border border-[#E2E8F0] text-[#757680] hover:text-[#1E293B] hover:border-[#CBD5E1] transition-colors cursor-pointer shadow-2xs"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-full border border-[#E2E8F0] shadow-2xs shrink-0">
+              <span
+                className={`text-xs font-mono font-extrabold ${
                   isFull
-                    ? 'bg-rose-600'
+                    ? 'text-rose-600'
                     : isAlmost
-                    ? 'bg-amber-500'
-                    : 'bg-[#004AC6]'
+                    ? 'text-amber-600'
+                    : 'text-[#004AC6]'
                 }`}
-                style={{
-                  width: `${Math.min(100, (totalCount / MAX_ANNOUNCEMENTS) * 100)}%`,
-                }}
-              />
+              >
+                {totalCount}/{MAX_ANNOUNCEMENTS}
+              </span>
+              <div className="w-24 sm:w-28 bg-slate-100 rounded-full h-2 overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-300 rounded-full ${
+                    isFull
+                      ? 'bg-rose-600'
+                      : isAlmost
+                      ? 'bg-amber-500'
+                      : 'bg-[#004AC6]'
+                  }`}
+                  style={{
+                    width: `${Math.min(100, (totalCount / MAX_ANNOUNCEMENTS) * 100)}%`,
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -888,6 +1128,10 @@ export default function AnnouncementsPage() {
                   isCreator={isCreator}
                   hasAcknowledged={hasAcknowledged}
                   isAcknowledging={isAcknowledging}
+                  isSelectionMode={isSelectionMode}
+                  isSelectable={isOwner}
+                  isSelected={selectedIdSet.has(item.id)}
+                  onToggleSelect={handleToggleSelectCard}
                   onView={setViewingAnnouncement}
                   onEdit={handleOpenEdit}
                   onDeleteRequest={setDeletingId}
@@ -915,12 +1159,15 @@ export default function AnnouncementsPage() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {deletingId && (
+        {deleteModalTargets.length > 0 && (
           <DeleteAnnouncementModal
-            deletingId={deletingId}
+            targets={deleteModalTargets}
             isSubmitting={isSubmitting}
-            onCancel={() => setDeletingId(null)}
-            onConfirm={handleDelete}
+            onCancel={() => {
+              setDeletingId(null);
+              setIsBulkDeleteConfirmOpen(false);
+            }}
+            onConfirm={handleConfirmDeleteModal}
           />
         )}
       </AnimatePresence>

@@ -98,6 +98,10 @@ export interface AnnouncementCardProps {
   isCreator: boolean;
   hasAcknowledged: boolean;
   isAcknowledging: boolean;
+  isSelectionMode?: boolean;
+  isSelectable?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (id: string) => void;
   onView: (item: Announcement) => void;
   onEdit: (item: Announcement) => void;
   onDeleteRequest: (id: string) => void;
@@ -110,16 +114,59 @@ export const AnnouncementCard = React.memo(function AnnouncementCard({
   isCreator,
   hasAcknowledged,
   isAcknowledging,
+  isSelectionMode = false,
+  isSelectable = false,
+  isSelected = false,
+  onToggleSelect,
   onView,
   onEdit,
   onDeleteRequest,
   onAcknowledge,
 }: AnnouncementCardProps) {
+  const handleCardClick = () => {
+    if (isSelectionMode) {
+      if (isSelectable && onToggleSelect) {
+        onToggleSelect(item.id);
+      }
+      return;
+    }
+    onView(item);
+  };
+
   return (
     <GeneralCard
-      className="p-5 sm:p-6 border-[#E2E8F0] shadow-xs hover:border-[#CBD5E1] transition-all cursor-pointer group"
-      onClick={() => onView(item)}
+      className={`p-5 sm:p-6 shadow-xs transition-all cursor-pointer group ${
+        isSelectionMode ? 'overflow-visible' : ''
+      } ${
+        isSelectionMode && isSelected
+          ? 'border-rose-400 ring-2 ring-rose-500/30'
+          : isSelectionMode && !isSelectable
+          ? 'border-[#E2E8F0] opacity-65'
+          : 'border-[#E2E8F0] hover:border-[#CBD5E1]'
+      }`}
+      onClick={handleCardClick}
     >
+      {/* Floating Radio Circle Box on Upper-Left Corner during Selective Deletion */}
+      {isSelectionMode && isSelectable && (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={isSelected}
+          aria-label={`Select announcement: ${item.title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect?.(item.id);
+          }}
+          className={`absolute -top-2.5 -left-2.5 z-20 w-6 h-6 rounded-full border-2 flex items-center justify-center shadow-md transition-all cursor-pointer ${
+            isSelected
+              ? 'bg-rose-600 border-rose-600 text-white scale-110'
+              : 'bg-white border-slate-300 hover:border-rose-400 text-transparent'
+          }`}
+        >
+          <Check className="w-3.5 h-3.5 stroke-[3]" />
+        </button>
+      )}
+
       <div className="flex flex-col gap-3">
         {/* Header Row: Title & Action Controls */}
         <div className="flex items-start justify-between gap-4">
@@ -129,30 +176,32 @@ export const AnnouncementCard = React.memo(function AnnouncementCard({
             </h2>
           </div>
 
-          {/* Action Buttons (Only for creator or Admin) */}
+          {/* Action Buttons (Only for creator with Full Access) */}
           <div
             className="flex items-center gap-1.5 shrink-0"
             onClick={(e) => e.stopPropagation()}
           >
             {isOwner ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => onEdit(item)}
-                  title="Edit Announcement"
-                  className="p-2 text-[#505F76] hover:text-[#004AC6] hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                >
-                  <Edit2 className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDeleteRequest(item.id)}
-                  title="Delete Announcement"
-                  className="p-2 text-[#505F76] hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </>
+              !isSelectionMode && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onEdit(item)}
+                    title="Edit Announcement"
+                    className="p-2 text-[#505F76] hover:text-[#004AC6] hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteRequest(item.id)}
+                    title="Delete Announcement"
+                    className="p-2 text-[#505F76] hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </>
+              )
             ) : (
               <span
                 title="Read only: Created by another officer"
