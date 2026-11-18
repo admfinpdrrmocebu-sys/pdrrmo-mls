@@ -51,9 +51,11 @@ const AddCategoryModal = dynamic(() => import('./_components/add-category-modal'
   ssr: false,
 });
 
-const FALLBACK_POLL_MS = 30_000;
+const FALLBACK_POLL_MS = 120_000;
 const REALTIME_DEBOUNCE_MS = 400;
 const ITEMS_PER_PAGE = 10;
+const DEFAULT_LOGS_WINDOW_DAYS = 30;
+const DEFAULT_LOGS_LIMIT = 250;
 
 const PROFILE_COLUMNS =
   'id, full_name, position_title, role, avatar_url, default_shift';
@@ -796,6 +798,10 @@ export default function LogsPage() {
       shiftSnapshot: ActiveShiftRecord | null
     ): Promise<LogEntry[] | null> => {
       try {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - DEFAULT_LOGS_WINDOW_DAYS);
+        const cutoffDateStr = cutoff.toISOString().split('T')[0];
+
         const { data, error } = await supabase
           .from('shift_logs')
           .select(
@@ -815,7 +821,9 @@ export default function LogsPage() {
             shift:shifts(id, shift_label, shift_date, start_time, end_time, status, lead_officer_id)
           `
           )
-          .order('created_at', { ascending: false });
+          .gte('log_date', cutoffDateStr)
+          .order('created_at', { ascending: false })
+          .limit(DEFAULT_LOGS_LIMIT);
 
         if (error || !data) {
           if (error) console.warn('Could not fetch shift_logs:', error.message);
@@ -1510,7 +1518,7 @@ export default function LogsPage() {
           .replace(/^-|-$/g, '');
         archiveFilename = `PDRRMO-MLS-${dateFormatted.replace(/-/g, '')}-${shiftSlug}.pdf`;
 
-        const [dutyPersonnelRes, shiftLogsRes, profilesRes] = await Promise.all([
+        const [dutyPersonnelRes, shiftLogsRes] = await Promise.all([
           supabase
             .from('shift_duty_personnel')
             .select(
@@ -1527,28 +1535,25 @@ export default function LogsPage() {
             .eq('shift_id', activeShift.id),
           supabase
             .from('shift_logs')
-            .select('*')
+            .select(
+              'id, shift_id, title, report_type_id, report_type_name, log_date, log_time, status, description, operator_id, operator_name, created_at'
+            )
             .eq('shift_id', activeShift.id)
             .order('created_at', { ascending: true }),
-          supabase.from('profiles').select('id, full_name, position_title'),
         ]);
 
         const dutyPersonnel = (dutyPersonnelRes.data ||
           []) as ArchiveDutyPersonnelRow[];
         const rawShiftLogs = (shiftLogsRes.data || []) as ArchiveRawLogRow[];
-        const allProfiles = (profilesRes.data || []) as Array<{
-          id: string;
-          full_name: string | null;
-          position_title: string | null;
-        }>;
 
         const profMap = new Map<
           string,
           { full_name?: string | null; position_title?: string | null }
         >();
-        allProfiles.forEach((p) => {
-          if (p.id) profMap.set(p.id.toLowerCase(), p);
-          if (p.full_name) profMap.set(p.full_name.toLowerCase().trim(), p);
+        availableOfficers.forEach((o) => {
+          const entry = { full_name: o.name, position_title: o.role };
+          if (o.id) profMap.set(o.id.toLowerCase(), entry);
+          if (o.name) profMap.set(o.name.toLowerCase().trim(), entry);
         });
         if (profile) {
           if (profile.id) profMap.set(profile.id.toLowerCase(), profile);

@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { ShieldCheck, MapPin, Terminal, ArrowRight, CalendarDays, Compass, LayoutGrid } from 'lucide-react';
+import { ShieldCheck, MapPin, Terminal, ArrowRight, CalendarDays, Compass, LayoutGrid, Database } from 'lucide-react';
 import { motion } from 'motion/react';
 import { AppLayoutShell } from '@/components/nav-route';
 import { SecondaryButton } from '@/components/button';
@@ -72,6 +72,16 @@ export default function SettingsPage() {
       ambientBg: 'bg-sky-500/5',
       actionLabel: canManageAffiliatedApps ? 'Manage Apps' : 'View Directory',
       href: canManageAffiliatedApps ? '/settings/affiliated-apps' : '/affiliated-apps',
+    },
+    {
+      id: 'database-optimization',
+      title: 'Database Optimization & Retention',
+      description: 'Monitor 500 MB DB & 1 GB Storage free-tier quotas, configure per-module retention windows, and run scheduled or manual data cleanup.',
+      icon: Database,
+      iconBg: 'bg-amber-50 text-amber-700 border border-amber-200/80',
+      ambientBg: 'bg-amber-500/5',
+      actionLabel: 'Manage Retention',
+      href: '/settings/database',
     },
   ];
 

@@ -474,7 +474,9 @@ export default function AddShiftScheduleModal({
       const { data: upsertedData, error } = await supabase
         .from('duty_roster_assignments')
         .upsert(records, { onConflict: 'profile_id,duty_date' })
-        .select('*');
+        .select(
+          'id, profile_id, shift_schedule_id, duty_date, assignment_type, is_lead, notes, updated_at'
+        );
 
       if (error) {
         console.warn('Upsert error:', error.message);

@@ -223,7 +223,9 @@ export default function ShiftScheduleCalendarPage() {
         .order('full_name', { ascending: true }),
       supabase
         .from('shift_schedules')
-        .select('*')
+        .select(
+          'id, name, start_time, end_time, duration, color, target_role, sort_order, is_active'
+        )
         .order('sort_order', { ascending: true }),
     ]);
 
@@ -333,7 +335,9 @@ export default function ShiftScheduleCalendarPage() {
 
       const { data: assignData, error: assignError } = await supabase
         .from('duty_roster_assignments')
-        .select('*')
+        .select(
+          'id, profile_id, shift_schedule_id, duty_date, assignment_type, is_lead, notes, updated_at'
+        )
         .or(
           `and(duty_date.gte.${gridStartStr},duty_date.lte.${gridEndStr}),duty_date.eq.${todayStr}`
         );
@@ -513,9 +517,15 @@ export default function ShiftScheduleCalendarPage() {
       // BroadcastChannel unavailable
     }
 
+    let lastVisibleSyncAt = Date.now();
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && !cancelled) {
-        void fetchRosterData();
+      if (
+        document.visibilityState === 'visible' &&
+        !cancelled &&
+        Date.now() - lastVisibleSyncAt >= 15_000
+      ) {
+        lastVisibleSyncAt = Date.now();
+        void fetchRosterData({ assignmentsOnly: true });
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);

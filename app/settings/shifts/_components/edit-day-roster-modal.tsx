@@ -175,7 +175,9 @@ export default function EditDayRosterModal({
         const { data: insertedData, error: insertError } = await supabase
           .from('duty_roster_assignments')
           .insert(recordsToInsert)
-          .select('*');
+          .select(
+            'id, profile_id, shift_schedule_id, duty_date, assignment_type, is_lead, notes, updated_at'
+          );
 
         if (insertError) {
           throw new Error(insertError.message);

@@ -303,7 +303,11 @@ export default function ArchivesPage() {
               limit: 200,
               sortBy: { column: 'created_at', order: 'desc' },
             }),
-          supabase.from('archives').select(ARCHIVE_LIST_SELECT),
+          supabase
+            .from('archives')
+            .select(ARCHIVE_LIST_SELECT)
+            .order('generated_at', { ascending: false })
+            .limit(200),
           supabase
             .from('profiles')
             .select('id, full_name, position_title, signature_url'),

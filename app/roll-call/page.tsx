@@ -705,7 +705,9 @@ export default function RollCallPage() {
       if (!entriesData) {
         const { data: fallbackEntries } = await supabase
           .from('roll_call_entries')
-          .select('*')
+          .select(
+            'id, session_id, area_id, area_code, area_name, attendance, weather_status, port_status, time_responded, created_at'
+          )
           .eq('session_id', raw.id);
         entriesData = (fallbackEntries as RollCallEntryDbRow[]) ?? [];
       }
@@ -812,6 +814,10 @@ export default function RollCallPage() {
         setIsLoadingAnalytics(true);
       }
       try {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 60);
+        const cutoffDateStr = cutoff.toISOString().split('T')[0];
+
         const { data: sessionsData, error: sessionsError } = await supabase
           .from('roll_call_sessions')
           .select(
@@ -848,8 +854,10 @@ export default function RollCallPage() {
             )
           `
           )
+          .gte('session_date', cutoffDateStr)
           .order('session_date', { ascending: false })
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(90);
 
         if (sessionsError) {
           console.warn(
@@ -1081,12 +1089,12 @@ export default function RollCallPage() {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Low-overhead 30s visibility-gated fallback polling
+    // Low-overhead 120s visibility-gated fallback polling
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         void syncOperationsData({ refreshAreas: false });
       }
-    }, 30_000);
+    }, 120_000);
 
     return () => {
       if (opsDebounceRef.current) clearTimeout(opsDebounceRef.current);

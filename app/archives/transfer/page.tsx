@@ -224,7 +224,13 @@ export default function ArchivesTransferPage() {
         supabase.storage
           .from('archive-documents')
           .list('RC', { limit: 500, sortBy: { column: 'created_at', order: 'desc' } }),
-        supabase.from('archives').select('*'),
+        supabase
+          .from('archives')
+          .select(
+            'id, filename, category, shift_label, file_size_bytes, storage_path, file_hash, lead_officer_name, created_at, generated_at'
+          )
+          .order('generated_at', { ascending: false })
+          .limit(500),
         supabase
           .from('drive_directories')
           .select('id, title, url, description')

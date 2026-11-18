@@ -100,9 +100,9 @@ export const LogsTableSection = React.memo(function LogsTableSection({
   }, [reportTypeOptionsList]);
 
   return (
-    <div className="bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm overflow-hidden flex flex-col">
+    <div className="bg-white rounded-[1.75rem] border border-[#E2E8F0] shadow-sm overflow-visible flex flex-col">
       {/* Table Header Actions & Toolbar */}
-      <div className="p-5 sm:p-6 border-b border-[#E2E8F0] flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4 bg-white">
+      <div className="p-5 sm:p-6 border-b border-[#E2E8F0] flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4 bg-white rounded-t-[1.75rem]">
         {/* Search Input with Debounced Filtering */}
         <div className="relative flex-1 sm:w-80">
           <Search className="w-4 h-4 text-[#94A3B8] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -196,8 +196,8 @@ export const LogsTableSection = React.memo(function LogsTableSection({
 
                     {/* Tooltip explaining disabled status if not eligible to start */}
                     {!isShiftActive && !scheduleEligibility.isEligible && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30 min-w-[280px]">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-2 px-3 rounded-xl shadow-xl leading-relaxed text-center">
+                      <div className="absolute right-0 bottom-full mb-2.5 hidden group-hover:flex flex-col items-end pointer-events-none z-[60] min-w-[280px] max-w-[320px]">
+                        <div className="bg-[#0F172A] text-white border border-slate-700/80 text-[11px] font-semibold py-2.5 px-3.5 rounded-xl shadow-2xl leading-relaxed text-center">
                           <p className="font-bold text-amber-300 mb-0.5">
                             Shift Window Inactive
                           </p>
@@ -205,14 +205,14 @@ export const LogsTableSection = React.memo(function LogsTableSection({
                             {scheduleEligibility.reason}
                           </p>
                         </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
+                        <div className="w-2.5 h-2.5 bg-[#0F172A] border-r border-b border-slate-700/80 rotate-45 -mt-1.5 mr-10" />
                       </div>
                     )}
 
                     {/* Tooltip explaining disabled status if not eligible to end someone else's shift */}
                     {isShiftActive && !canEndCurrentShift && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30 min-w-[280px]">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-2 px-3 rounded-xl shadow-xl leading-relaxed text-center">
+                      <div className="absolute right-0 bottom-full mb-2.5 hidden group-hover:flex flex-col items-end pointer-events-none z-[60] min-w-[280px] max-w-[320px]">
+                        <div className="bg-[#0F172A] text-white border border-slate-700/80 text-[11px] font-semibold py-2.5 px-3.5 rounded-xl shadow-2xl leading-relaxed text-center">
                           <p className="font-bold text-amber-300 mb-0.5">
                             Shift Handover Restricted
                           </p>
@@ -221,7 +221,7 @@ export const LogsTableSection = React.memo(function LogsTableSection({
                             System Administrators can end this active shift.
                           </p>
                         </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
+                        <div className="w-2.5 h-2.5 bg-[#0F172A] border-r border-b border-slate-700/80 rotate-45 -mt-1.5 mr-10" />
                       </div>
                     )}
                   </div>
@@ -251,28 +251,28 @@ export const LogsTableSection = React.memo(function LogsTableSection({
 
                     {/* Tooltip when disabled: Shift not started */}
                     {!isShiftActive && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-1.5 px-3 rounded-xl whitespace-nowrap shadow-lg">
+                      <div className="absolute right-0 bottom-full mb-2.5 hidden group-hover:flex flex-col items-end pointer-events-none z-[60]">
+                        <div className="bg-[#0F172A] text-white border border-slate-700/80 text-[11px] font-semibold py-2 px-3 rounded-xl whitespace-nowrap shadow-2xl">
                           Please click &quot;Start Shift&quot; to enable adding logs
                         </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
+                        <div className="w-2.5 h-2.5 bg-[#0F172A] border-r border-b border-slate-700/80 rotate-45 -mt-1.5 mr-10" />
                       </div>
                     )}
 
                     {/* Tooltip when disabled: View Only permission */}
                     {isShiftActive && !canModifyLogs && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-1.5 px-3 rounded-xl whitespace-nowrap shadow-lg">
+                      <div className="absolute right-0 bottom-full mb-2.5 hidden group-hover:flex flex-col items-end pointer-events-none z-[60]">
+                        <div className="bg-[#0F172A] text-white border border-slate-700/80 text-[11px] font-semibold py-2 px-3 rounded-xl whitespace-nowrap shadow-2xl">
                           You have view-only access to Operational Logs
                         </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
+                        <div className="w-2.5 h-2.5 bg-[#0F172A] border-r border-b border-slate-700/80 rotate-45 -mt-1.5 mr-10" />
                       </div>
                     )}
 
                     {/* Tooltip when disabled: Not designated to active shift schedule */}
                     {isShiftActive && canModifyLogs && !canEndCurrentShift && (
-                      <div className="absolute right-0 bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none z-30 min-w-[280px]">
-                        <div className="bg-[#1E293B] text-white text-[11px] font-semibold py-2 px-3 rounded-xl shadow-xl leading-relaxed text-center">
+                      <div className="absolute right-0 bottom-full mb-2.5 hidden group-hover:flex flex-col items-end pointer-events-none z-[60] min-w-[280px] max-w-[320px]">
+                        <div className="bg-[#0F172A] text-white border border-slate-700/80 text-[11px] font-semibold py-2.5 px-3.5 rounded-xl shadow-2xl leading-relaxed text-center">
                           <p className="font-bold text-amber-300 mb-0.5">
                             Logging Restricted
                           </p>
@@ -281,7 +281,7 @@ export const LogsTableSection = React.memo(function LogsTableSection({
                             System Administrators can record incident logs.
                           </p>
                         </div>
-                        <div className="w-2 h-2 bg-[#1E293B] rotate-45 -mt-1" />
+                        <div className="w-2.5 h-2.5 bg-[#0F172A] border-r border-b border-slate-700/80 rotate-45 -mt-1.5 mr-10" />
                       </div>
                     )}
                   </div>
@@ -480,7 +480,7 @@ export const LogsTableSection = React.memo(function LogsTableSection({
       </div>
 
       {/* Pagination Footer */}
-      <div className="p-4 sm:p-5 border-t border-[#E2E8F0] bg-[#F8FAFC]/50 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-[#757680]">
+      <div className="p-4 sm:p-5 border-t border-[#E2E8F0] bg-[#F8FAFC]/50 rounded-b-[1.75rem] flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-[#757680]">
         <span className="font-medium">
           Showing{' '}
           <span className="font-bold text-[#1E293B]">

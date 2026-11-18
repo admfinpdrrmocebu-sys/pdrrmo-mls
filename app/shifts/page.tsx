@@ -1279,110 +1279,140 @@ export default function ShiftSchedulePage() {
   // ===========================================================================
   // DATA FETCHING (SUPABASE 100% DYNAMIC WITH SELECTIVE DIFF UPDATES)
   // ===========================================================================
-  const fetchShiftData = useCallback(async (isBackground = false) => {
-    try {
-      if (!isBackground && !shiftOperationsMemoryCache.hasLoadedOnce) {
-        setIsLoading(true);
-      } else {
-        setIsRefreshing(true);
-      }
-
-      const activeMonth = calendarMonthRef.current;
-      const monthKey = format(activeMonth, 'yyyy-MM');
-      const monthStartStr = format(startOfMonth(activeMonth), 'yyyy-MM-dd');
-      const monthEndStr = format(endOfMonth(activeMonth), 'yyyy-MM-dd');
-      const todayStr = format(new Date(), 'yyyy-MM-dd');
-
-      // 1. Fetch Profiles
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('profiles')
-        .select('id, full_name, email, position_title, role, default_shift, avatar_url, is_active')
-        .order('full_name', { ascending: true });
-
-      if (profilesError) {
-        console.warn('Profiles query notice:', profilesError.message);
-      }
-
-      if (profilesData && profilesData.length > 0) {
-        let deactList: string[] = [];
-        let delList: string[] = [];
-        try {
-          deactList = JSON.parse(localStorage.getItem('pdrrmo_deactivated_users') || '[]');
-          delList = JSON.parse(localStorage.getItem('pdrrmo_deleted_users') || '[]');
-        } catch (e) {}
-
-        const mappedProfiles: OfficerMember[] = profilesData
-          .filter((p) => {
-            const isDel = delList.includes(p.id) || (p.email && delList.includes(p.email));
-            const isDeact = deactList.includes(p.id) || (p.email && deactList.includes(p.email));
-            return !isDel && !isDeact && p.is_active !== false;
-          })
-          .map((p) => {
-            const finalName = p.full_name || 'Duty Officer';
-            const finalRole = p.position_title || p.role || 'Duty Responder';
-            const finalUserRole = (p.role || 'staff').toLowerCase();
-            const finalShift = p.default_shift || '';
-
-            return {
-              id: p.id,
-              name: finalName,
-              role: finalRole,
-              userRole: finalUserRole,
-              badgeNumber: `OPC-${p.id.slice(0, 4).toUpperCase()}`,
-              avatarInitials: getInitials(finalName || 'OP'),
-              avatarUrl: p.avatar_url,
-              station: 'DOC Command Center',
-              defaultShift: finalShift,
-              email: p.email || null,
-              division: (p as any).division || 'Provincial Disaster Risk Reduction Management Office',
-            };
-          });
-
-        if (!areJsonEqual(shiftOperationsMemoryCache.profiles, mappedProfiles)) {
-          shiftOperationsMemoryCache.profiles = mappedProfiles;
-          setProfiles(mappedProfiles);
+  const fetchShiftData = useCallback(
+    async (isBackground = false, includeStaticMeta = true) => {
+      try {
+        if (!isBackground && !shiftOperationsMemoryCache.hasLoadedOnce) {
+          setIsLoading(true);
+        } else {
+          setIsRefreshing(true);
         }
-      } else if (shiftOperationsMemoryCache.profiles.length > 0) {
-        shiftOperationsMemoryCache.profiles = [];
-        setProfiles([]);
-      }
 
-      // 2. Fetch Shift Schedules
-      const { data: schedData, error: schedError } = await supabase
-        .from('shift_schedules')
-        .select('*')
-        .order('sort_order', { ascending: true });
+        const shouldFetchStatic =
+          includeStaticMeta || !shiftOperationsMemoryCache.hasLoadedOnce;
 
-      if (schedError) {
-        console.warn('Shift schedules query notice:', schedError.message);
-      }
+        const activeMonth = calendarMonthRef.current;
+        const monthKey = format(activeMonth, 'yyyy-MM');
+        const monthStartStr = format(startOfMonth(activeMonth), 'yyyy-MM-dd');
+        const monthEndStr = format(endOfMonth(activeMonth), 'yyyy-MM-dd');
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
 
-      if (schedData && schedData.length > 0) {
-        const mappedSchedules: ShiftScheduleItem[] = schedData.map((s) => ({
-          id: s.id,
-          name: s.name,
-          time: `${s.start_time || '08:00'} – ${s.end_time || '16:00'}`,
-          duration: s.duration || '8 Hours',
-          color: s.color || '#004AC6',
-          startTime: s.start_time || '08:00',
-          endTime: s.end_time || '16:00',
-          targetRole: s.target_role,
-          sortOrder: s.sort_order ?? 0,
-        }));
-        if (!areJsonEqual(shiftOperationsMemoryCache.shiftSchedules, mappedSchedules)) {
-          shiftOperationsMemoryCache.shiftSchedules = mappedSchedules;
-          setShiftSchedules(mappedSchedules);
+        if (shouldFetchStatic) {
+          // 1. Fetch Profiles
+          const { data: profilesData, error: profilesError } = await supabase
+            .from('profiles')
+            .select(
+              'id, full_name, email, position_title, role, default_shift, avatar_url, is_active'
+            )
+            .order('full_name', { ascending: true });
+
+          if (profilesError) {
+            console.warn('Profiles query notice:', profilesError.message);
+          }
+
+          if (profilesData && profilesData.length > 0) {
+            let deactList: string[] = [];
+            let delList: string[] = [];
+            try {
+              deactList = JSON.parse(
+                localStorage.getItem('pdrrmo_deactivated_users') || '[]'
+              );
+              delList = JSON.parse(
+                localStorage.getItem('pdrrmo_deleted_users') || '[]'
+              );
+            } catch (e) {}
+
+            const mappedProfiles: OfficerMember[] = profilesData
+              .filter((p) => {
+                const isDel =
+                  delList.includes(p.id) || (p.email && delList.includes(p.email));
+                const isDeact =
+                  deactList.includes(p.id) ||
+                  (p.email && deactList.includes(p.email));
+                return !isDel && !isDeact && p.is_active !== false;
+              })
+              .map((p) => {
+                const finalName = p.full_name || 'Duty Officer';
+                const finalRole = p.position_title || p.role || 'Duty Responder';
+                const finalUserRole = (p.role || 'staff').toLowerCase();
+                const finalShift = p.default_shift || '';
+
+                return {
+                  id: p.id,
+                  name: finalName,
+                  role: finalRole,
+                  userRole: finalUserRole,
+                  badgeNumber: `OPC-${p.id.slice(0, 4).toUpperCase()}`,
+                  avatarInitials: getInitials(finalName || 'OP'),
+                  avatarUrl: p.avatar_url,
+                  station: 'DOC Command Center',
+                  defaultShift: finalShift,
+                  email: p.email || null,
+                  division:
+                    (p as any).division ||
+                    'Provincial Disaster Risk Reduction Management Office',
+                };
+              });
+
+            if (
+              !areJsonEqual(shiftOperationsMemoryCache.profiles, mappedProfiles)
+            ) {
+              shiftOperationsMemoryCache.profiles = mappedProfiles;
+              setProfiles(mappedProfiles);
+            }
+          } else if (shiftOperationsMemoryCache.profiles.length > 0) {
+            shiftOperationsMemoryCache.profiles = [];
+            setProfiles([]);
+          }
+
+          // 2. Fetch Shift Schedules
+          const { data: schedData, error: schedError } = await supabase
+            .from('shift_schedules')
+            .select(
+              'id, name, start_time, end_time, duration, color, target_role, sort_order, is_active'
+            )
+            .order('sort_order', { ascending: true });
+
+          if (schedError) {
+            console.warn('Shift schedules query notice:', schedError.message);
+          }
+
+          if (schedData && schedData.length > 0) {
+            const mappedSchedules: ShiftScheduleItem[] = schedData.map((s) => ({
+              id: s.id,
+              name: s.name,
+              time: `${s.start_time || '08:00'} – ${s.end_time || '16:00'}`,
+              duration: s.duration || '8 Hours',
+              color: s.color || '#004AC6',
+              startTime: s.start_time || '08:00',
+              endTime: s.end_time || '16:00',
+              targetRole: s.target_role,
+              sortOrder: s.sort_order ?? 0,
+            }));
+            if (
+              !areJsonEqual(
+                shiftOperationsMemoryCache.shiftSchedules,
+                mappedSchedules
+              )
+            ) {
+              shiftOperationsMemoryCache.shiftSchedules = mappedSchedules;
+              setShiftSchedules(mappedSchedules);
+            }
+          } else if (shiftOperationsMemoryCache.shiftSchedules.length > 0) {
+            shiftOperationsMemoryCache.shiftSchedules = [];
+            setShiftSchedules([]);
+          }
         }
-      } else if (shiftOperationsMemoryCache.shiftSchedules.length > 0) {
-        shiftOperationsMemoryCache.shiftSchedules = [];
-        setShiftSchedules([]);
-      }
 
-      // 3. Fetch Month Duty Roster Assignments (Covering viewed calendar month + current date)
-      const { data: assignData, error: assignError } = await supabase
-        .from('duty_roster_assignments')
-        .select('*')
-        .or(`and(duty_date.gte.${monthStartStr},duty_date.lte.${monthEndStr}),duty_date.eq.${todayStr}`);
+        // 3. Fetch Month Duty Roster Assignments (Covering viewed calendar month + current date)
+        const { data: assignData, error: assignError } = await supabase
+          .from('duty_roster_assignments')
+          .select(
+            'id, profile_id, shift_schedule_id, duty_date, assignment_type, is_lead, notes, updated_at'
+          )
+          .or(
+            `and(duty_date.gte.${monthStartStr},duty_date.lte.${monthEndStr}),duty_date.eq.${todayStr}`
+          );
 
       if (assignError) {
         console.warn('Duty roster query notice:', assignError.message);
@@ -1403,7 +1433,9 @@ export default function ShiftSchedulePage() {
       // 4. Fetch Active Operational Shift from public.shifts (status = 'active')
       const { data: activeShiftData, error: shiftError } = await supabase
         .from('shifts')
-        .select('*')
+        .select(
+          'id, shift_label, shift_date, start_time, end_time, status, lead_officer_id, start_monitoring_details, end_shift_handover_status, incident_report_details, started_at, ended_at'
+        )
         .eq('status', 'active')
         .order('started_at', { ascending: false })
         .limit(1)
@@ -1423,7 +1455,7 @@ export default function ShiftSchedulePage() {
         // Fetch linked duty personnel for active shift
         const { data: personnelData, error: personnelError } = await supabase
           .from('shift_duty_personnel')
-          .select('*')
+          .select('id, shift_id, profile_id, role_in_shift, is_lead, present_at_end')
           .eq('shift_id', activeShiftData.id);
 
         if (personnelError) {
@@ -1474,43 +1506,65 @@ export default function ShiftSchedulePage() {
         }
       }
 
-      // 5. Fetch GeoFence Security Configuration
-      try {
-        const { data: geoData, error: geoError } = await supabase
-          .from('geofence_settings')
-          .select('*')
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle();
+      // 5. Fetch GeoFence Security Configuration (only when static metadata requested)
+      if (shouldFetchStatic) {
+        try {
+          const { data: geoData, error: geoError } = await supabase
+            .from('geofence_settings')
+            .select(
+              'id, name, description, latitude, longitude, radius_meters, is_active, updated_at'
+            )
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
 
-        if (!geoError && geoData) {
-          const loadedGeo: GeofenceConfig = {
-            id: geoData.id,
-            name: geoData.name || DEFAULT_GEOFENCE_CONFIG.name,
-            description: geoData.description || DEFAULT_GEOFENCE_CONFIG.description,
-            latitude: Number(geoData.latitude ?? DEFAULT_GEOFENCE_CONFIG.latitude),
-            longitude: Number(geoData.longitude ?? DEFAULT_GEOFENCE_CONFIG.longitude),
-            radiusMeters: Number(geoData.radius_meters ?? DEFAULT_GEOFENCE_CONFIG.radiusMeters),
-            isActive: Boolean(geoData.is_active ?? true),
-            updatedAt: geoData.updated_at,
-          };
-          if (!areJsonEqual(shiftOperationsMemoryCache.geofenceConfig, loadedGeo)) {
-            shiftOperationsMemoryCache.geofenceConfig = loadedGeo;
-            setGeofenceConfig(loadedGeo);
+          if (!geoError && geoData) {
+            const loadedGeo: GeofenceConfig = {
+              id: geoData.id,
+              name: geoData.name || DEFAULT_GEOFENCE_CONFIG.name,
+              description:
+                geoData.description || DEFAULT_GEOFENCE_CONFIG.description,
+              latitude: Number(
+                geoData.latitude ?? DEFAULT_GEOFENCE_CONFIG.latitude
+              ),
+              longitude: Number(
+                geoData.longitude ?? DEFAULT_GEOFENCE_CONFIG.longitude
+              ),
+              radiusMeters: Number(
+                geoData.radius_meters ?? DEFAULT_GEOFENCE_CONFIG.radiusMeters
+              ),
+              isActive: Boolean(geoData.is_active ?? true),
+              updatedAt: geoData.updated_at,
+            };
+            if (
+              !areJsonEqual(
+                shiftOperationsMemoryCache.geofenceConfig,
+                loadedGeo
+              )
+            ) {
+              shiftOperationsMemoryCache.geofenceConfig = loadedGeo;
+              setGeofenceConfig(loadedGeo);
+            }
+            saveGeofenceCache(loadedGeo);
+          } else {
+            const cached = loadGeofenceCache();
+            if (
+              cached &&
+              !areJsonEqual(shiftOperationsMemoryCache.geofenceConfig, cached)
+            ) {
+              shiftOperationsMemoryCache.geofenceConfig = cached;
+              setGeofenceConfig(cached);
+            }
           }
-          saveGeofenceCache(loadedGeo);
-        } else {
+        } catch {
           const cached = loadGeofenceCache();
-          if (cached && !areJsonEqual(shiftOperationsMemoryCache.geofenceConfig, cached)) {
+          if (
+            cached &&
+            !areJsonEqual(shiftOperationsMemoryCache.geofenceConfig, cached)
+          ) {
             shiftOperationsMemoryCache.geofenceConfig = cached;
             setGeofenceConfig(cached);
           }
-        }
-      } catch {
-        const cached = loadGeofenceCache();
-        if (cached && !areJsonEqual(shiftOperationsMemoryCache.geofenceConfig, cached)) {
-          shiftOperationsMemoryCache.geofenceConfig = cached;
-          setGeofenceConfig(cached);
         }
       }
 
@@ -1518,7 +1572,9 @@ export default function ShiftSchedulePage() {
       try {
         const { data: attData, error: attError } = await supabase
           .from('duty_attendance_records')
-          .select('*')
+          .select(
+            'id, profile_id, duty_date, shift_schedule_id, geofence_id, check_in_time, check_out_time, status, notes, created_at, updated_at'
+          )
           .or(`duty_date.eq.${todayStr},status.eq.checked_in`)
           .order('duty_date', { ascending: false });
 
@@ -1593,7 +1649,9 @@ export default function ShiftSchedulePage() {
     try {
       const { data: assignData, error: assignError } = await supabase
         .from('duty_roster_assignments')
-        .select('*')
+        .select(
+          'id, profile_id, shift_schedule_id, duty_date, assignment_type, is_lead, notes, updated_at'
+        )
         .gte('duty_date', monthStartStr)
         .lte('duty_date', monthEndStr);
 
@@ -1718,57 +1776,72 @@ export default function ShiftSchedulePage() {
     };
   }, [refreshGpsLocation]);
 
-  // Realtime subscription for shifts, shift_duty_personnel, duty_roster_assignments, shift_schedules, profiles, geofence_settings, duty_attendance_records
+  // Debounced Realtime subscription for shifts, shift_duty_personnel, duty_roster_assignments, shift_schedules, profiles, geofence_settings, duty_attendance_records
   useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingStaticMeta = false;
+
+    const scheduleShiftSync = (includeStaticMeta = false) => {
+      if (document.hidden) return;
+      if (includeStaticMeta) pendingStaticMeta = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const fetchStatic = pendingStaticMeta;
+        pendingStaticMeta = false;
+        debounceTimer = null;
+        void fetchShiftData(true, fetchStatic);
+      }, 400);
+    };
+
     const channel = supabase
       .channel('shift_operations_changes')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shifts' },
         () => {
-          fetchShiftData(true);
+          scheduleShiftSync(false);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shift_duty_personnel' },
         () => {
-          fetchShiftData(true);
+          scheduleShiftSync(false);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'duty_roster_assignments' },
         () => {
-          fetchShiftData(true);
+          scheduleShiftSync(false);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'shift_schedules' },
         () => {
-          fetchShiftData(true);
+          scheduleShiftSync(true);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles' },
         () => {
-          fetchShiftData(true);
+          scheduleShiftSync(true);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'geofence_settings' },
         () => {
-          fetchShiftData(true);
+          scheduleShiftSync(true);
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'duty_attendance_records' },
         () => {
-          fetchShiftData(true);
+          scheduleShiftSync(false);
         }
       )
       .subscribe();
@@ -1776,7 +1849,7 @@ export default function ShiftSchedulePage() {
     // Cross-tab broadcast & localStorage sync
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'pdrrmo_shift_sync') {
-        fetchShiftData(true);
+        scheduleShiftSync(false);
       }
     };
     window.addEventListener('storage', handleStorageChange);
@@ -1786,12 +1859,13 @@ export default function ShiftSchedulePage() {
       bc = new BroadcastChannel('pdrrmo_shift_sync');
       bc.onmessage = (event) => {
         if (event.data?.type === 'shift_state_updated') {
-          fetchShiftData(true);
+          scheduleShiftSync(false);
         }
       };
     } catch (e) {}
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
       window.removeEventListener('storage', handleStorageChange);
       if (bc) bc.close();
@@ -2707,18 +2781,37 @@ export default function ShiftSchedulePage() {
         }
       }
 
-      // 3. Update duty_roster_assignments notes for today
-      for (const officer of liveShiftOfficers) {
-        const isAbsent = targetAbsentIds.includes(officer.id);
-        await supabase
-          .from('duty_roster_assignments')
-          .update({
-            notes: isAbsent ? 'Reported Absent / On Leave' : null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('profile_id', officer.id)
-          .eq('duty_date', todayKey);
-      }
+      // 3. Batch update duty_roster_assignments notes for today (at most 2 queries instead of N)
+      const absentIdsOnShift = liveShiftOfficers
+        .filter((o) => targetAbsentIds.includes(o.id))
+        .map((o) => o.id);
+      const presentIdsOnShift = liveShiftOfficers
+        .filter((o) => !targetAbsentIds.includes(o.id))
+        .map((o) => o.id);
+      const nowIsoStr = new Date().toISOString();
+
+      await Promise.all([
+        absentIdsOnShift.length > 0
+          ? supabase
+              .from('duty_roster_assignments')
+              .update({
+                notes: 'Reported Absent / On Leave',
+                updated_at: nowIsoStr,
+              })
+              .eq('duty_date', todayKey)
+              .in('profile_id', absentIdsOnShift)
+          : Promise.resolve(),
+        presentIdsOnShift.length > 0
+          ? supabase
+              .from('duty_roster_assignments')
+              .update({
+                notes: null,
+                updated_at: nowIsoStr,
+              })
+              .eq('duty_date', todayKey)
+              .in('profile_id', presentIdsOnShift)
+          : Promise.resolve(),
+      ]);
 
       // Apply to local state
       setAbsentOfficerIds(targetAbsentIds);
@@ -2735,7 +2828,7 @@ export default function ShiftSchedulePage() {
         localStorage.setItem('pdrrmo_shift_sync', Date.now().toString());
       }
 
-      fetchShiftData(true);
+      fetchShiftData(true, false);
     } catch (err: any) {
       console.error('Error saving attendance to database:', err);
       showToast(`Error saving attendance: ${err.message || 'Database error'}`);
