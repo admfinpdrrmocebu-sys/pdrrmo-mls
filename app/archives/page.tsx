@@ -20,6 +20,9 @@ import {
   HardDrive,
   RefreshCw,
   FolderUp,
+  CloudUpload,
+  Download,
+  Eye,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -53,6 +56,10 @@ import {
   type ShiftPersonnelInfo,
   type ShiftSummaryEntry,
 } from './_components/types';
+import type {
+  B2VaultFileItem,
+  B2VaultStatusResponse,
+} from '@/app/archives/transfer/_components/types';
 
 export { formatBytes, formatFileDate, getShiftStartTime, getShiftEndTime };
 export type {
@@ -135,12 +142,17 @@ export default function ArchivesPage() {
 
   const [initialCache] = useState(() => getCachedArchivesScreenData());
 
+  const [activeSource, setActiveSource] = useState<'supabase' | 'backblaze'>('supabase');
   const [activeTab, setActiveTab] = useState<'log' | 'roll-call'>(
     initialCache?.activeTab ?? 'log'
   );
   const [archivesList, setArchivesList] = useState<ArchivedFile[]>(
     initialCache?.archivesList ?? []
   );
+  const [b2Status, setB2Status] = useState<B2VaultStatusResponse | null>(null);
+  const [isLoadingB2, setIsLoadingB2] = useState(false);
+  const inFlightB2Ref = useRef<Promise<B2VaultStatusResponse | null> | null>(null);
+  const lastB2SigRef = useRef<string>('');
   const [profilesList, setProfilesList] = useState<ArchiveProfileRow[]>(
     initialCache?.profilesList ?? []
   );
@@ -636,14 +648,48 @@ export default function ArchivesPage() {
   // 2. DEBOUNCED REALTIME, CROSS-TAB SYNC & VISIBILITY RESYNC
   // ===========================================================================
 
+  const fetchB2Status = useCallback(async (showSpinner = false) => {
+    if (inFlightB2Ref.current) return inFlightB2Ref.current;
+
+    const promise = (async () => {
+      if (showSpinner) setIsLoadingB2(true);
+      try {
+        const res = await fetch(`/api/archives/transfer?action=status&t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+        });
+        if (!res.ok) return null;
+        const data = (await res.json()) as B2VaultStatusResponse;
+        const head = data.files?.[0];
+        const sig = `${data.connected ? 1 : 0}|${data.bucketName}|${data.totalFiles}|${data.totalBytes}|${head ? `${head.fileId}:${head.uploadTimestamp}` : ''}`;
+        if (sig !== lastB2SigRef.current) {
+          lastB2SigRef.current = sig;
+          setB2Status(data);
+        }
+        return data;
+      } catch (err) {
+        console.warn('Backblaze B2 vault fetch notice:', err);
+        return null;
+      } finally {
+        setIsLoadingB2(false);
+        inFlightB2Ref.current = null;
+      }
+    })();
+
+    inFlightB2Ref.current = promise;
+    return promise;
+  }, []);
+
   useEffect(() => {
     void fetchArchives({ isBackground: archivesListRef.current.length > 0 });
+    void fetchB2Status(false);
 
     const scheduleBackgroundSync = (delayMs = 350) => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
         void fetchArchives({ isBackground: true });
+        void fetchB2Status(false);
       }, delayMs);
     };
 
@@ -704,7 +750,7 @@ export default function ArchivesPage() {
       window.removeEventListener('storage', handleStorage);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [fetchArchives]);
+  }, [fetchArchives, fetchB2Status]);
 
   // Auto-dismiss toast
   useEffect(() => {
@@ -717,9 +763,11 @@ export default function ArchivesPage() {
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       setActiveMenuId(null);
+      const targetEl = e.target as Element | null;
       if (
         datePickerRef.current &&
-        !datePickerRef.current.contains(e.target as Node)
+        !datePickerRef.current.contains(e.target as Node) &&
+        !targetEl?.closest('[data-date-filter-popover="true"]')
       ) {
         setIsDatePickerOpen(false);
       }
@@ -1109,16 +1157,91 @@ export default function ArchivesPage() {
     });
   }, [rollCallFiles, debouncedSearchQuery, selectedDateISO]);
 
-  const currentDataset =
+  const archiveByFilenameMap = useMemo(() => {
+    const map = new Map<string, ArchivedFile>();
+    for (const f of archivesList) {
+      if (f.filename) map.set(f.filename.trim().toLowerCase(), f);
+    }
+    return map;
+  }, [archivesList]);
+
+  const b2Files = useMemo(() => b2Status?.files ?? [], [b2Status]);
+  const b2LogFiles = useMemo(
+    () => b2Files.filter((bf) => !bf.fileName.toLowerCase().startsWith('rc/')),
+    [b2Files]
+  );
+  const b2RollCallFiles = useMemo(
+    () => b2Files.filter((bf) => bf.fileName.toLowerCase().startsWith('rc/')),
+    [b2Files]
+  );
+
+  const filterB2List = useCallback(
+    (items: B2VaultFileItem[]) => {
+      const q = debouncedSearchQuery.toLowerCase().trim();
+      return items.filter((bf) => {
+        const baseName = (bf.fileName.split('/').pop() || bf.fileName).toLowerCase();
+        const linked = archiveByFilenameMap.get(baseName);
+        const matchesSearch =
+          !q ||
+          bf.fileName.toLowerCase().includes(q) ||
+          bf.contentSha1.toLowerCase().includes(q) ||
+          Boolean(linked?.leadOfficer.toLowerCase().includes(q)) ||
+          Boolean(linked?.shift.toLowerCase().includes(q));
+        const b2DateISO = bf.uploadTimestamp
+          ? toDateISO(new Date(bf.uploadTimestamp))
+          : null;
+        const matchesDate = !selectedDateISO || b2DateISO === selectedDateISO;
+        return matchesSearch && matchesDate;
+      });
+    },
+    [debouncedSearchQuery, selectedDateISO, archiveByFilenameMap]
+  );
+
+  const filteredB2LogFiles = useMemo(
+    () => filterB2List(b2LogFiles),
+    [filterB2List, b2LogFiles]
+  );
+  const filteredB2RollCallFiles = useMemo(
+    () => filterB2List(b2RollCallFiles),
+    [filterB2List, b2RollCallFiles]
+  );
+
+  const currentSupabaseDataset =
     activeTab === 'log' ? filteredLogFiles : filteredRollCallFiles;
-  const totalCount = currentDataset.length;
+  const currentB2Dataset =
+    activeTab === 'log' ? filteredB2LogFiles : filteredB2RollCallFiles;
+
+  const totalCount =
+    activeSource === 'supabase'
+      ? currentSupabaseDataset.length
+      : currentB2Dataset.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
   const effectivePage = Math.min(currentPage, totalPages);
 
   const paginatedFiles = useMemo(() => {
+    if (activeSource !== 'supabase') return [];
     const start = (effectivePage - 1) * itemsPerPage;
-    return currentDataset.slice(start, start + itemsPerPage);
-  }, [currentDataset, effectivePage, itemsPerPage]);
+    return currentSupabaseDataset.slice(start, start + itemsPerPage);
+  }, [activeSource, currentSupabaseDataset, effectivePage, itemsPerPage]);
+
+  const paginatedB2Files = useMemo(() => {
+    if (activeSource !== 'backblaze') return [];
+    const start = (effectivePage - 1) * itemsPerPage;
+    return currentB2Dataset.slice(start, start + itemsPerPage);
+  }, [activeSource, currentB2Dataset, effectivePage, itemsPerPage]);
+
+  // Source switch handler
+  const handleSourceChange = useCallback(
+    (source: 'supabase' | 'backblaze') => {
+      setActiveSource(source);
+      setCurrentPage(1);
+      setActiveMenuId(null);
+      if (source === 'backblaze') {
+        void fetchB2Status(!b2Status);
+      }
+    },
+    [fetchB2Status, b2Status]
+  );
 
   // Tab switch handler
   const handleTabChange = useCallback((tab: 'log' | 'roll-call') => {
@@ -1334,12 +1457,13 @@ export default function ArchivesPage() {
               pill
               leftIcon={
                 <RefreshCw
-                  className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`}
+                  className={`w-4 h-4 ${isLoading || isLoadingB2 ? 'animate-spin' : ''}`}
                 />
               }
-              onClick={() =>
-                fetchArchives({ isBackground: archivesListRef.current.length > 0 })
-              }
+              onClick={() => {
+                void fetchArchives({ isBackground: archivesListRef.current.length > 0 });
+                void fetchB2Status(activeSource === 'backblaze');
+              }}
               className="w-full sm:w-auto justify-center"
             >
               Refresh
@@ -1444,15 +1568,9 @@ export default function ArchivesPage() {
                 <HardDrive className="w-5 h-5" />
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
-                    Overall Archive Storage Capacity
-                  </h3>
-                  <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-blue-50 text-[#004AC6] border border-blue-200/80 font-mono">
-                    {archivesList.length} Archived{' '}
-                    {archivesList.length === 1 ? 'File' : 'Files'}
-                  </span>
-                </div>
+                <h3 className="text-sm sm:text-base font-bold text-[#1E293B]">
+                  Overall Archive Storage Capacity
+                </h3>
                 <p className="text-xs text-[#757680] mt-0.5">
                   Total storage consumed across all certified shift logs and roll
                   call session documents
@@ -1460,18 +1578,7 @@ export default function ArchivesPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3 self-start sm:self-auto">
-              <Link href="/archives/transfer">
-                <button
-                  type="button"
-                  className="px-3 py-1.5 rounded-full text-xs font-bold bg-blue-50 text-[#004AC6] border border-blue-200 hover:bg-blue-100 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                >
-                  <FolderUp className="w-3.5 h-3.5" />
-                  <span>Transfer Hub</span>
-                </button>
-              </Link>
-
-              <div className="text-left sm:text-right">
+            <div className="self-start sm:self-auto text-left sm:text-right">
                 <div className="flex items-baseline gap-1.5 sm:justify-end">
                   {isLoading ? (
                     <Skeleton className="h-6 w-28 rounded-md" />
@@ -1493,7 +1600,6 @@ export default function ArchivesPage() {
                 )}
               </div>
             </div>
-          </div>
 
           {isLoading ? (
             <Skeleton className="w-full h-2.5 rounded-full" />
@@ -1547,8 +1653,57 @@ export default function ArchivesPage() {
           )}
         </div>
 
-        {/* 3. ARCHIVES TABLE SECTION WITH TABS & FILTERS */}
-        <div className="bg-white rounded-3xl border border-[#E2E8F0] shadow-xs overflow-hidden flex flex-col">
+        {/* 3. ARCHIVES TABLE SECTION WITH STORAGE SOURCE TOGGLE, TABS & FILTERS */}
+        <div className="bg-white rounded-3xl border border-[#E2E8F0] shadow-xs overflow-visible flex flex-col">
+          {/* Storage Repository Toggle Bar (Right Corner Above Table) */}
+          <div className="px-5 pt-4 pb-3.5 sm:px-6 border-b border-[#E2E8F0] rounded-t-3xl flex items-center justify-end bg-[#F8FAFC]/70">
+            <div className="inline-flex bg-[#F1F5F9] p-1 rounded-full border border-[#E2E8F0]/80">
+              <button
+                type="button"
+                onClick={() => handleSourceChange('supabase')}
+                className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeSource === 'supabase'
+                    ? 'bg-white text-[#004AC6] shadow-xs'
+                    : 'text-[#505F76] hover:text-[#1E293B]'
+                }`}
+              >
+                <HardDrive className="w-3.5 h-3.5" />
+                <span>Supabase Files</span>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                    activeSource === 'supabase'
+                      ? 'bg-[#004AC6]/10 text-[#004AC6]'
+                      : 'bg-slate-200 text-[#505F76]'
+                  }`}
+                >
+                  {archivesList.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSourceChange('backblaze')}
+                className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeSource === 'backblaze'
+                    ? 'bg-white text-emerald-700 shadow-xs'
+                    : 'text-[#505F76] hover:text-[#1E293B]'
+                }`}
+              >
+                <CloudUpload className="w-3.5 h-3.5" />
+                <span>Backblaze B2 Files</span>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                    activeSource === 'backblaze'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-slate-200 text-[#505F76]'
+                  }`}
+                >
+                  {b2Files.length}
+                </span>
+              </button>
+            </div>
+          </div>
+
           <div className="p-5 sm:p-6 border-b border-[#E2E8F0] flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4 bg-white">
             {/* Segmented Tabs */}
             <div className="flex bg-[#F1F5F9] p-1.5 rounded-full self-start border border-[#E2E8F0]/70">
@@ -1570,7 +1725,7 @@ export default function ArchivesPage() {
                       : 'bg-slate-200 text-[#505F76]'
                   }`}
                 >
-                  {logFiles.length}
+                  {activeSource === 'supabase' ? logFiles.length : b2LogFiles.length}
                 </span>
               </button>
 
@@ -1592,7 +1747,7 @@ export default function ArchivesPage() {
                       : 'bg-slate-200 text-[#505F76]'
                   }`}
                 >
-                  {rollCallFiles.length}
+                  {activeSource === 'supabase' ? rollCallFiles.length : b2RollCallFiles.length}
                 </span>
               </button>
             </div>
@@ -1685,6 +1840,7 @@ export default function ArchivesPage() {
                     {isDatePickerOpen && (
                       <DateFilterPopover
                         selectedDate={selectedDate}
+                        anchorRef={datePickerRef}
                         onSelectDate={(date) => {
                           setSelectedDate(date);
                           setCurrentPage(1);
@@ -1704,14 +1860,20 @@ export default function ArchivesPage() {
               <thead>
                 <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[11px] font-bold text-[#505F76] uppercase tracking-wider">
                   <th className="py-4 px-6">Name of File</th>
-                  <th className="py-4 px-6">Lead Duty Officer · Shift</th>
-                  <th className="py-4 px-6">Generated At</th>
+                  <th className="py-4 px-6">
+                    {activeSource === 'supabase'
+                      ? 'Lead Duty Officer · Shift'
+                      : 'Cloud Vault · Integrity'}
+                  </th>
+                  <th className="py-4 px-6">
+                    {activeSource === 'supabase' ? 'Generated At' : 'Uploaded At'}
+                  </th>
                   <th className="py-4 px-6">File Size</th>
                   <th className="py-4 px-6 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E2E8F0] text-sm">
-                {isLoading ? (
+                {(activeSource === 'supabase' ? isLoading : isLoadingB2) ? (
                   Array.from({ length: 4 }).map((_, idx) => (
                     <tr key={idx} className="animate-pulse">
                       <td className="py-4 px-6">
@@ -1740,41 +1902,163 @@ export default function ArchivesPage() {
                       </td>
                     </tr>
                   ))
-                ) : paginatedFiles.length === 0 ? (
+                ) : activeSource === 'supabase' ? (
+                  paginatedFiles.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-14 text-center text-[#757680]">
+                        <ArchiveIcon className="w-12 h-12 mx-auto text-slate-300 mb-3" />
+                        <p className="font-bold text-base text-[#1E293B]">
+                          No Archived Records Found
+                        </p>
+                        <p className="text-xs text-[#757680] mt-1 max-w-sm mx-auto">
+                          {searchQuery || selectedDate !== null
+                            ? 'No files matched your search or date filter. Try adjusting your query or resetting the date picker.'
+                            : activeTab === 'log'
+                            ? 'Shift handover records will automatically appear here when an officer logs the end of shift.'
+                            : 'Roll call session reports will automatically appear here once an operator finalizes a roll call.'}
+                        </p>
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedFiles.map((file) => (
+                      <ArchiveRow
+                        key={file.id}
+                        file={file}
+                        isMenuOpen={activeMenuId === file.id}
+                        onPreview={handleSelectFileForPreview}
+                        onDownload={handleDownloadFile}
+                        onCopyHash={handleCopyHash}
+                        onToggleMenu={handleToggleMenu}
+                      />
+                    ))
+                  )
+                ) : paginatedB2Files.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="py-14 text-center text-[#757680]">
-                      <ArchiveIcon className="w-12 h-12 mx-auto text-slate-300 mb-3" />
+                      <CloudUpload className="w-12 h-12 mx-auto text-slate-300 mb-3" />
                       <p className="font-bold text-base text-[#1E293B]">
-                        No Archived Records Found
+                        {b2Status && !b2Status.connected
+                          ? 'Backblaze B2 Vault Not Connected'
+                          : 'No Backblaze B2 Files Found'}
                       </p>
                       <p className="text-xs text-[#757680] mt-1 max-w-sm mx-auto">
-                        {searchQuery || selectedDate !== null
-                          ? 'No files matched your search or date filter. Try adjusting your query or resetting the date picker.'
-                          : activeTab === 'log'
-                          ? 'Shift handover records will automatically appear here when an officer logs the end of shift.'
-                          : 'Roll call session reports will automatically appear here once an operator finalizes a roll call.'}
+                        {b2Status && !b2Status.connected
+                          ? b2Status.errorMessage ||
+                            'Verify B2 credentials in your environment configuration.'
+                          : searchQuery || selectedDate !== null
+                          ? 'No Backblaze B2 files matched your search or date filter.'
+                          : 'Transfer archives from the Transfer Hub to see them stored inside Backblaze B2.'}
                       </p>
                     </td>
                   </tr>
                 ) : (
-                  paginatedFiles.map((file) => (
-                    <ArchiveRow
-                      key={file.id}
-                      file={file}
-                      isMenuOpen={activeMenuId === file.id}
-                      onPreview={handleSelectFileForPreview}
-                      onDownload={handleDownloadFile}
-                      onCopyHash={handleCopyHash}
-                      onToggleMenu={handleToggleMenu}
-                    />
-                  ))
+                  paginatedB2Files.map((bf) => {
+                    const baseName = bf.fileName.split('/').pop() || bf.fileName;
+                    const linked = archiveByFilenameMap.get(baseName.trim().toLowerCase());
+                    const isRc = bf.fileName.toLowerCase().startsWith('rc/');
+                    const uploadedDate = new Date(bf.uploadTimestamp || Date.now());
+                    const dateStr = !isNaN(uploadedDate.getTime())
+                      ? format(uploadedDate, 'MMM dd, yyyy · hh:mm a')
+                      : 'Backed up in B2';
+
+                    return (
+                      <tr
+                        key={bf.fileId}
+                        className={`hover:bg-slate-50/80 transition-colors group ${
+                          linked ? 'cursor-pointer' : ''
+                        }`}
+                        onClick={() => {
+                          if (linked) void handleSelectFileForPreview(linked);
+                        }}
+                      >
+                        <td className="py-4 px-6">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center border shadow-2xs shrink-0 ${
+                                !isRc
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200/70'
+                                  : 'bg-sky-50 text-sky-700 border-sky-200/70'
+                              }`}
+                            >
+                              {!isRc ? (
+                                <FileText className="w-5 h-5" />
+                              ) : (
+                                <Radio className="w-5 h-5" />
+                              )}
+                            </div>
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-semibold text-[#1E293B] group-hover:text-emerald-700 transition-colors font-mono truncate">
+                                {baseName}
+                              </span>
+                              <span className="text-xs text-[#757680] font-mono truncate">
+                                {b2Status?.bucketName || 'pdrrmo-cebu-archives'}/{bf.fileName}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-6">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-[#1E293B] text-xs">
+                              {linked ? linked.leadOfficer : 'Backblaze B2 Private Vault'}
+                            </span>
+                            <span className="text-[11px] text-[#505F76] font-mono">
+                              {linked
+                                ? linked.shift
+                                : `sha1 · ${bf.contentSha1 ? bf.contentSha1.slice(0, 12) : 'verified'}`}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-6 text-xs text-[#505F76]">
+                          <div className="flex items-center gap-1.5 font-medium">
+                            <Clock className="w-3.5 h-3.5 text-[#94A3B8]" />
+                            <span>{dateStr}</span>
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-6">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-slate-100 text-[#505F76] text-xs font-mono font-medium border border-slate-200">
+                            {formatBytes(bf.contentLength)}
+                          </span>
+                        </td>
+
+                        <td
+                          className="py-4 px-6 text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex items-center justify-end gap-1.5">
+                            {linked && (
+                              <button
+                                type="button"
+                                onClick={() => void handleSelectFileForPreview(linked)}
+                                title="Preview Document Record"
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-[#505F76] hover:text-[#004AC6] hover:bg-[#F1F5F9] transition-all cursor-pointer"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                            )}
+                            <a
+                              href={`/api/archives/transfer?action=download&fileName=${encodeURIComponent(
+                                bf.fileName
+                              )}`}
+                              title="Download PDF from Backblaze B2"
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-[#505F76] hover:text-emerald-700 hover:bg-emerald-50 transition-all cursor-pointer"
+                            >
+                              <Download className="w-4 h-4" />
+                            </a>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
           </div>
 
           {/* Pagination Footer */}
-          <div className="p-4 sm:p-5 border-t border-[#E2E8F0] flex items-center justify-between bg-[#F8FAFC]">
+          <div className="p-4 sm:p-5 border-t border-[#E2E8F0] rounded-b-3xl flex items-center justify-between bg-[#F8FAFC]">
             <span className="text-xs text-[#757680] font-medium">
               Showing{' '}
               {totalCount > 0 ? (effectivePage - 1) * itemsPerPage + 1 : 0} to{' '}
